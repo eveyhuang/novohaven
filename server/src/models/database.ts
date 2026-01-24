@@ -79,14 +79,24 @@ export async function initializeDatabase(): Promise<void> {
       recipe_id INTEGER REFERENCES recipes(id) ON DELETE CASCADE,
       step_order INTEGER NOT NULL,
       step_name TEXT NOT NULL,
-      ai_model TEXT NOT NULL,
-      prompt_template TEXT NOT NULL,
+      step_type TEXT DEFAULT 'ai',
+      ai_model TEXT,
+      prompt_template TEXT,
       input_config TEXT,
       output_format TEXT DEFAULT 'text',
       model_config TEXT,
+      api_config TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Migration: Add step_type and api_config columns if they don't exist
+  try {
+    db.run('ALTER TABLE recipe_steps ADD COLUMN step_type TEXT DEFAULT "ai"');
+  } catch (e) { /* Column already exists */ }
+  try {
+    db.run('ALTER TABLE recipe_steps ADD COLUMN api_config TEXT');
+  } catch (e) { /* Column already exists */ }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS company_standards (
@@ -177,11 +187,13 @@ function upsertTemplateRecipe(
   steps: Array<{
     step_order: number;
     step_name: string;
-    ai_model: string;
-    prompt_template: string;
+    step_type?: string;
+    ai_model: string | null;
+    prompt_template: string | null;
     output_format: string;
-    model_config: string;
+    model_config: string | null;
     input_config: string | null;
+    api_config?: string | null;
   }>
 ): number {
   if (!db) throw new Error('Database not initialized');
@@ -194,8 +206,8 @@ function upsertTemplateRecipe(
     // Update existing template
     recipeId = existing.id;
     db.run(`
-      UPDATE recipes 
-      SET description = ?, updated_at = CURRENT_TIMESTAMP 
+      UPDATE recipes
+      SET description = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `, [description, recipeId]);
 
@@ -213,9 +225,20 @@ function upsertTemplateRecipe(
   // Insert/update steps
   steps.forEach(step => {
     db!.run(`
-      INSERT INTO recipe_steps (recipe_id, step_order, step_name, ai_model, prompt_template, output_format, model_config, input_config)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [recipeId, step.step_order, step.step_name, step.ai_model, step.prompt_template, step.output_format, step.model_config, step.input_config]);
+      INSERT INTO recipe_steps (recipe_id, step_order, step_name, step_type, ai_model, prompt_template, output_format, model_config, input_config, api_config)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      recipeId,
+      step.step_order,
+      step.step_name,
+      step.step_type || 'ai',
+      step.ai_model,
+      step.prompt_template,
+      step.output_format,
+      step.model_config,
+      step.input_config,
+      step.api_config || null
+    ]);
   });
 
   return recipeId;
@@ -381,7 +404,7 @@ Be specific and technical. Include real-world imperfections that give the image 
     {
       step_order: 1,
       step_name: 'Generate Product Images',
-      ai_model: 'gemini-2.5-flash-image',
+      ai_model: 'gemini-2.5-pro-image',
       prompt_template: `Generate a professional product photography image based on the following specifications.
 
 Product Reference: {{product_images}}
@@ -410,95 +433,49 @@ Generate the image according to the exact specifications provided in the require
     imageGenSteps
   );
 
-  // Template: Review Extractor
+  // Template: Review Extractor (uses BrightData scraping API, not AI)
 
   const reviewExtractorInputConfig = JSON.stringify({
     variables: {
       product_urls: {
         type: 'url_list',
         label: 'Product URLs',
-        description: 'Enter product page URLs from Amazon, Walmart, or Wayfair (one per line). Leave empty if uploading CSV.',
+        description: 'Enter product page URLs from Amazon, Walmart, or Wayfair (one per line)',
         placeholder: 'https://www.amazon.com/dp/...\nhttps://www.walmart.com/ip/...'
       },
       csv_file: {
         type: 'file',
         label: 'CSV Upload (Optional)',
-        description: 'Alternatively, upload a CSV file with review data. Must have columns for review text and rating.',
+        description: 'Alternatively, upload a CSV file with review data',
         acceptedFileTypes: ['.csv'],
         optional: true
       }
     }
   });
 
+  const reviewExtractorApiConfig = JSON.stringify({
+    service: 'brightdata',
+    endpoint: 'scrape_reviews',
+    description: 'Scrapes product reviews from e-commerce URLs using BrightData API'
+  });
+
   const reviewExtractorSteps = [
     {
       step_order: 1,
-      step_name: 'Extract & Normalize Reviews',
-      ai_model: 'gpt-4o',
-      prompt_template: `You are a data processing assistant. Your task is to extract, normalize, and structure product review data.
-
-INPUT DATA:
-{{product_urls}}
-{{csv_file}}
-
-INSTRUCTIONS:
-1. If URLs are provided, the system will have scraped reviews from those URLs. Process the scraped data.
-2. If CSV data is provided, parse and normalize it to a standard format.
-3. For each review, extract:
-   - Product name and URL
-   - Reviewer name (if available)
-   - Rating (normalize to 1-5 scale)
-   - Review title
-   - Full review text
-   - Review date
-   - Verified purchase status
-   - Helpful votes count
-
-OUTPUT FORMAT:
-Return a JSON object with this structure:
-{
-  "extraction_summary": {
-    "total_products": number,
-    "total_reviews": number,
-    "platforms": ["amazon", "walmart", "wayfair"],
-    "date_range": { "earliest": "YYYY-MM-DD", "latest": "YYYY-MM-DD" }
-  },
-  "products": [
-    {
-      "product_name": "string",
-      "product_url": "string",
-      "platform": "amazon|walmart|wayfair",
-      "average_rating": number,
-      "total_reviews": number,
-      "rating_distribution": { "5": n, "4": n, "3": n, "2": n, "1": n }
-    }
-  ],
-  "reviews": [
-    {
-      "id": "string",
-      "product_name": "string",
-      "platform": "string",
-      "rating": number,
-      "title": "string",
-      "text": "string",
-      "date": "YYYY-MM-DD",
-      "verified": boolean,
-      "helpful_votes": number,
-      "sentiment": "positive|neutral|negative"
-    }
-  ]
-}
-
-Ensure all text is properly escaped for JSON. Classify each review's sentiment based on rating (4-5 = positive, 3 = neutral, 1-2 = negative).`,
+      step_name: 'Scrape Reviews from URLs',
+      step_type: 'scraping',
+      ai_model: '',  // Empty string for non-AI steps (scraping uses api_config instead)
+      prompt_template: '',
       output_format: 'json',
-      model_config: JSON.stringify({ temperature: 0.1, maxTokens: 8000 }),
+      model_config: null,
+      api_config: reviewExtractorApiConfig,
       input_config: reviewExtractorInputConfig
     }
   ];
 
   upsertTemplateRecipe(
     'Review Extractor',
-    'Extract and normalize product reviews from e-commerce URLs (Amazon, Walmart, Wayfair) or uploaded CSV files',
+    'Extract product reviews from e-commerce URLs (Amazon, Walmart, Wayfair) using BrightData API',
     mockUserId,
     reviewExtractorSteps
   );
@@ -509,9 +486,9 @@ Ensure all text is properly escaped for JSON. Classify each review's sentiment b
     variables: {
       review_data: {
         type: 'file',
-        label: 'Review Data (JSON)',
-        description: 'Upload the JSON output from Review Extractor, or paste review data in the expected format',
-        acceptedFileTypes: ['.json']
+        label: 'Review Data (JSON or CSV)',
+        description: 'Upload the JSON or CSV file output of review data',
+        acceptedFileTypes: ['.json', '.csv']
       },
       analysis_focus: {
         type: 'textarea',
@@ -525,9 +502,9 @@ Ensure all text is properly escaped for JSON. Classify each review's sentiment b
   const reviewAnalyzerSteps = [
     {
       step_order: 1,
-      step_name: 'Categorize Reviews',
-      ai_model: 'claude-3-opus-20240229',
-      prompt_template: `You are a market research analyst specializing in consumer feedback analysis. Analyze the following product reviews and categorize them.
+      step_name: 'Analyze Reviews & Generate Summary',
+      ai_model: 'claude-opus-4-5-20251101',
+      prompt_template: `You are a market research analyst specializing in consumer feedback analysis. Perform a comprehensive analysis of the following product reviews.
 
 REVIEW DATA:
 {{review_data}}
@@ -536,200 +513,30 @@ ANALYSIS FOCUS:
 {{analysis_focus}}
 
 TASK:
-Categorize each review into themes and extract key insights. For EACH review, identify:
-1. Primary theme (e.g., "Quality", "Value", "Usability", "Design", "Customer Service", "Durability", "Performance")
-2. Secondary themes if applicable
-3. Specific features or aspects mentioned
-4. Emotional tone (frustrated, satisfied, delighted, disappointed, neutral)
+Perform a complete analysis in the following stages:
 
-OUTPUT FORMAT (JSON):
-{
-  "categorized_reviews": [
-    {
-      "review_id": "string",
-      "rating": number,
-      "primary_theme": "string",
-      "secondary_themes": ["string"],
-      "features_mentioned": ["string"],
-      "emotional_tone": "string",
-      "key_quote": "string (most representative sentence)",
-      "sentiment": "positive|neutral|negative"
-    }
-  ],
-  "theme_summary": {
-    "theme_name": {
-      "count": number,
-      "avg_rating": number,
-      "sentiment_breakdown": { "positive": n, "neutral": n, "negative": n }
-    }
-  }
-}`,
-      output_format: 'json',
-      model_config: JSON.stringify({ temperature: 0.2, maxTokens: 8000 }),
-      input_config: reviewAnalyzerInputConfig
-    },
-    {
-      step_order: 2,
-      step_name: 'Analyze Positive Reviews',
-      ai_model: 'claude-3-opus-20240229',
-      prompt_template: `You are a market research analyst. Based on the categorized review data, perform deep analysis on POSITIVE reviews (ratings 4-5).
+1. **Categorize Reviews**: For each review, identify:
+   - Primary theme (e.g., "Quality", "Value", "Usability", "Design", "Customer Service", "Durability", "Performance")
+   - Secondary themes if applicable
+   - Specific features or aspects mentioned
+   - Emotional tone (frustrated, satisfied, delighted, disappointed, neutral)
+   - Sentiment (positive/neutral/negative)
 
-CATEGORIZED DATA:
-{{step_1_output}}
+2. **Analyze Positive Reviews** (ratings 4-5): Identify:
+   - Top praised features with mention counts and representative quotes
+   - Unexpected delights that surprised customers
+   - Common use cases and satisfaction levels
+   - Competitive advantages when compared to alternatives
+   - Emotional triggers that create strong positive responses
 
-ANALYSIS FOCUS:
-{{analysis_focus}}
+3. **Analyze Negative Reviews** (ratings 1-2): Identify:
+   - Critical issues with severity levels and impact
+   - Unmet expectations and gaps
+   - Requested features with frequency and potential impact
+   - Quality concerns with typical timeframes
+   - Competitive disadvantages
 
-TASK:
-Analyze all positive reviews to understand what customers LOVE about this product. Identify:
-
-1. **Top Praised Features** - What specific features/aspects get the most positive mentions?
-2. **Unexpected Delights** - What positive aspects surprised customers?
-3. **Use Cases** - How are satisfied customers using the product?
-4. **Comparison Wins** - What makes this better than alternatives (when mentioned)?
-5. **Emotional Triggers** - What creates strong positive emotional responses?
-
-OUTPUT FORMAT (JSON):
-{
-  "positive_analysis": {
-    "total_positive_reviews": number,
-    "average_positive_rating": number,
-    "top_praised_features": [
-      {
-        "feature": "string",
-        "mention_count": number,
-        "percentage_of_positive": number,
-        "representative_quotes": ["string", "string"],
-        "why_customers_love_it": "string"
-      }
-    ],
-    "unexpected_delights": [
-      {
-        "aspect": "string",
-        "description": "string",
-        "quotes": ["string"]
-      }
-    ],
-    "common_use_cases": [
-      {
-        "use_case": "string",
-        "frequency": "common|occasional|rare",
-        "satisfaction_level": "high|medium"
-      }
-    ],
-    "competitive_advantages": [
-      {
-        "advantage": "string",
-        "compared_to": "string (if mentioned)",
-        "quotes": ["string"]
-      }
-    ],
-    "emotional_highlights": [
-      {
-        "emotion": "string",
-        "trigger": "string",
-        "example_quotes": ["string"]
-      }
-    ],
-    "key_takeaways": ["string", "string", "string"]
-  }
-}`,
-      output_format: 'json',
-      model_config: JSON.stringify({ temperature: 0.3, maxTokens: 6000 }),
-      input_config: null
-    },
-    {
-      step_order: 3,
-      step_name: 'Analyze Negative Reviews',
-      ai_model: 'claude-3-opus-20240229',
-      prompt_template: `You are a market research analyst. Based on the categorized review data, perform deep analysis on NEGATIVE reviews (ratings 1-2).
-
-CATEGORIZED DATA:
-{{step_1_output}}
-
-ANALYSIS FOCUS:
-{{analysis_focus}}
-
-TASK:
-Analyze all negative reviews to understand customer pain points and improvement opportunities. Identify:
-
-1. **Critical Issues** - What problems cause the most frustration?
-2. **Unmet Expectations** - Where did the product fail to meet customer expectations?
-3. **Feature Gaps** - What features do customers wish existed?
-4. **Quality Concerns** - Specific quality or durability issues
-5. **Comparison Losses** - What makes alternatives better (when mentioned)?
-
-OUTPUT FORMAT (JSON):
-{
-  "negative_analysis": {
-    "total_negative_reviews": number,
-    "average_negative_rating": number,
-    "critical_issues": [
-      {
-        "issue": "string",
-        "severity": "critical|major|minor",
-        "mention_count": number,
-        "percentage_of_negative": number,
-        "representative_quotes": ["string", "string"],
-        "impact_on_customer": "string"
-      }
-    ],
-    "unmet_expectations": [
-      {
-        "expectation": "string",
-        "reality": "string",
-        "gap_description": "string",
-        "quotes": ["string"]
-      }
-    ],
-    "requested_features": [
-      {
-        "feature": "string",
-        "request_frequency": "common|occasional|rare",
-        "potential_impact": "high|medium|low",
-        "quotes": ["string"]
-      }
-    ],
-    "quality_concerns": [
-      {
-        "concern": "string",
-        "frequency": number,
-        "typical_timeframe": "string (e.g., 'after 2 months')",
-        "quotes": ["string"]
-      }
-    ],
-    "competitive_disadvantages": [
-      {
-        "disadvantage": "string",
-        "compared_to": "string",
-        "quotes": ["string"]
-      }
-    ],
-    "key_improvement_areas": ["string", "string", "string"]
-  }
-}`,
-      output_format: 'json',
-      model_config: JSON.stringify({ temperature: 0.3, maxTokens: 6000 }),
-      input_config: null
-    },
-    {
-      step_order: 4,
-      step_name: 'Generate Executive Summary',
-      ai_model: 'claude-3-opus-20240229',
-      prompt_template: `You are a market research analyst preparing an executive summary. Synthesize all previous analysis into actionable insights.
-
-POSITIVE ANALYSIS:
-{{step_2_output}}
-
-NEGATIVE ANALYSIS:
-{{step_3_output}}
-
-TASK:
-Create a comprehensive executive summary that:
-1. Highlights the most important findings
-2. Provides actionable recommendations
-3. Prioritizes improvements by impact
-4. Identifies quick wins vs long-term investments
+4. **Generate Executive Summary**: Synthesize all findings into a comprehensive markdown report.
 
 OUTPUT FORMAT (Markdown):
 
@@ -740,27 +547,18 @@ OUTPUT FORMAT (Markdown):
 - Overall Sentiment: [positive/mixed/negative]
 - Average Rating: [X.X/5]
 
-## What Customers Love (Top 3)
+## What Customers Love (Top 10)
 1. **[Feature/Aspect]** - [Brief explanation with supporting data]
 2. **[Feature/Aspect]** - [Brief explanation with supporting data]
 3. **[Feature/Aspect]** - [Brief explanation with supporting data]
+...
 
-## Critical Pain Points (Top 3)
+## Critical Pain Points (Top 10)
 1. **[Issue]** - [Brief explanation with severity and frequency]
 2. **[Issue]** - [Brief explanation with severity and frequency]
 3. **[Issue]** - [Brief explanation with severity and frequency]
+...
 
-## Improvement Recommendations
-
-### Quick Wins (High Impact, Lower Effort)
-| Recommendation | Expected Impact | Evidence |
-|----------------|-----------------|----------|
-| ... | ... | ... |
-
-### Strategic Investments (High Impact, Higher Effort)
-| Recommendation | Expected Impact | Evidence |
-|----------------|-----------------|----------|
-| ... | ... | ... |
 
 ## Feature Wishlist (Customer Requests)
 1. [Feature] - Requested by X% of reviewers
@@ -777,15 +575,10 @@ OUTPUT FORMAT (Markdown):
 > "[Quote]" - [Rating] stars
 
 ### Negative
-> "[Quote]" - [Rating] stars
-
-## Next Steps
-1. [Actionable recommendation]
-2. [Actionable recommendation]
-3. [Actionable recommendation]`,
+> "[Quote]" - [Rating] stars`,
       output_format: 'markdown',
-      model_config: JSON.stringify({ temperature: 0.4, maxTokens: 4000 }),
-      input_config: null
+      model_config: JSON.stringify({ temperature: 0.3, maxTokens: 12000 }),
+      input_config: reviewAnalyzerInputConfig
     }
   ];
 
@@ -807,7 +600,7 @@ OUTPUT FORMAT (Markdown):
       guidelines: [
         'Use active voice',
         'Avoid jargon unless industry-specific',
-        'Focus on customer benefits over features',
+        'Focus on customer benefits, value, and outcomesover features',
         'Maintain consistency across all content'
       ],
       examples: [
@@ -906,11 +699,12 @@ export const queries = {
   getStepsByRecipeId: (recipeId: number) =>
     getAll('SELECT * FROM recipe_steps WHERE recipe_id = ? ORDER BY step_order', [recipeId]),
   getStepById: (id: number) => getOne('SELECT * FROM recipe_steps WHERE id = ?', [id]),
-  createStep: (recipeId: number, stepOrder: number, stepName: string, aiModel: string,
-    promptTemplate: string, inputConfig: string | null, outputFormat: string, modelConfig: string | null) =>
-    run(`INSERT INTO recipe_steps (recipe_id, step_order, step_name, ai_model, prompt_template, input_config, output_format, model_config)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [recipeId, stepOrder, stepName, aiModel, promptTemplate, inputConfig, outputFormat, modelConfig]),
+  createStep: (recipeId: number, stepOrder: number, stepName: string, aiModel: string | null,
+    promptTemplate: string | null, inputConfig: string | null, outputFormat: string, modelConfig: string | null,
+    stepType: string = 'ai', apiConfig: string | null = null) =>
+    run(`INSERT INTO recipe_steps (recipe_id, step_order, step_name, ai_model, prompt_template, input_config, output_format, model_config, step_type, api_config)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [recipeId, stepOrder, stepName, aiModel, promptTemplate, inputConfig, outputFormat, modelConfig, stepType, apiConfig]),
   updateStep: (stepName: string, aiModel: string, promptTemplate: string, inputConfig: string | null,
     outputFormat: string, modelConfig: string | null, id: number) =>
     run(`UPDATE recipe_steps SET step_name = ?, ai_model = ?, prompt_template = ?, input_config = ?, output_format = ?, model_config = ?

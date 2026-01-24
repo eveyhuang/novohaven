@@ -242,7 +242,12 @@ export async function scrapeReviewsMock(urls: string[]): Promise<ScrapingRespons
 }
 
 // Export function that uses mock when BrightData is not configured
-export async function scrapeReviewsWithFallback(urls: string[]): Promise<ScrapingResponse> {
+export async function scrapeReviewsWithFallback(
+  urls: string[],
+  platform?: 'amazon' | 'walmart' | 'wayfair'
+): Promise<ScrapingResponse> {
+  // Note: platform parameter is available for future use when BrightData
+  // supports platform-specific endpoints
   if (isBrightDataConfigured()) {
     return scrapeReviews(urls);
   }

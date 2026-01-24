@@ -28,16 +28,20 @@ export interface RecipeWithSteps extends Recipe {
   steps: RecipeStep[];
 }
 
+export type StepType = 'ai' | 'scraping';
+
 export interface RecipeStep {
   id: number;
   recipe_id: number;
   step_order: number;
   step_name: string;
+  step_type: StepType;
   ai_model: string;
   prompt_template: string;
   input_config?: string;
   output_format: 'text' | 'json' | 'markdown' | 'image';
   model_config?: string;
+  api_config?: string; // For non-AI steps: { service: 'brightdata', endpoint: 'scrape_reviews' }
   created_at: string;
 }
 
@@ -180,7 +184,7 @@ export const AI_MODELS: AIModelInfo[] = [
   { id: 'gpt-4', name: 'GPT-4', provider: 'openai', maxTokens: 8192 },
   { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', provider: 'openai', maxTokens: 16385 },
   // Anthropic
-  { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', provider: 'anthropic', maxTokens: 200000, supportsVision: true },
+  { id: 'claude-opus-4-5-20251101', name: 'Claude 3 Opus', provider: 'anthropic', maxTokens: 200000, supportsVision: true },
   { id: 'claude-3-sonnet-20240229', name: 'Claude 3 Sonnet', provider: 'anthropic', maxTokens: 200000, supportsVision: true },
   { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku', provider: 'anthropic', maxTokens: 200000, supportsVision: true },
   // Google

@@ -106,7 +106,7 @@ export function RecipeRunner() {
     }
   };
 
-  // Extract required inputs from current step prompts
+  // Extract required inputs from current step prompts and input configs
   const extractRequiredInputs = (): string[] => {
     const inputs = new Set<string>();
     const variableRegex = /\{\{([^}]+)\}\}/g;
@@ -117,8 +117,40 @@ export function RecipeRunner() {
     ];
 
     for (const step of localSteps) {
+      // For scraping steps, get inputs from input_config
+      if (step.step_type === 'scraping' && step.input_config) {
+        try {
+          const config = JSON.parse(step.input_config);
+          if (config.variables) {
+            // Handle both array format and object format
+            if (Array.isArray(config.variables)) {
+              // Array format: [{ name: 'product_urls', source: 'user_input', ... }]
+              for (const variable of config.variables) {
+                if (variable.source === 'user_input' && variable.required !== false) {
+                  inputs.add(variable.name);
+                }
+              }
+            } else {
+              // Object format: { product_urls: { type: 'url_list', ... } }
+              for (const [varName, varConfig] of Object.entries(config.variables)) {
+                const cfg = varConfig as any;
+                // Skip optional variables
+                if (cfg.optional !== true) {
+                  inputs.add(varName);
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore parse errors
+        }
+        continue;
+      }
+
+      // For AI steps, get inputs from prompt_template
       let match;
-      while ((match = variableRegex.exec(step.prompt_template)) !== null) {
+      const template = step.prompt_template || '';
+      while ((match = variableRegex.exec(template)) !== null) {
         const varName = match[1].trim();
         // Skip step outputs and company standards
         if (!varName.match(/^step_\d+_output$/) &&
@@ -229,10 +261,12 @@ export function RecipeRunner() {
       }
     }
 
-    // Check that all steps have prompts
-    const emptyPromptSteps = localSteps.filter(s => !s.prompt_template.trim());
+    // Check that all AI steps have prompts (scraping steps don't need prompts)
+    const emptyPromptSteps = localSteps.filter(s =>
+      s.step_type !== 'scraping' && (!s.prompt_template || !s.prompt_template.trim())
+    );
     if (emptyPromptSteps.length > 0) {
-      setError('All steps must have a prompt template');
+      setError('All AI steps must have a prompt template');
       return;
     }
 
@@ -373,15 +407,21 @@ export function RecipeRunner() {
                 onClick={() => toggleStepExpanded(index)}
               >
                 <div className="flex items-center space-x-4">
-                  <div className="flex-shrink-0 w-8 h-8 bg-primary-100 text-primary-700 rounded-full flex items-center justify-center font-semibold">
-                    {index + 1}
+                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center font-semibold ${
+                    step.step_type === 'scraping'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-primary-100 text-primary-700'
+                  }`}>
+                    {step.step_type === 'scraping' ? '🔍' : index + 1}
                   </div>
                   <div>
                     <h4 className="font-medium text-secondary-900">
                       <TranslatedText text={step.step_name} />
                     </h4>
                     <p className="text-sm text-secondary-500">
-                      {models.find(m => m.id === step.ai_model)?.name || step.ai_model}
+                      {step.step_type === 'scraping'
+                        ? 'BrightData Scraping'
+                        : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
                     </p>
                   </div>
                 </div>
@@ -423,75 +463,123 @@ export function RecipeRunner() {
                     placeholder={t('stepNamePlaceholder')}
                   />
 
-                  <Select
-                    label={t('aiModel')}
-                    value={step.ai_model}
-                    onChange={(e) => updateStep(index, { ai_model: e.target.value })}
-                    options={models.map(m => ({
-                      value: m.id,
-                      label: `${m.name}${m.available ? '' : ` (${t('notConfigured')})`}`,
-                    }))}
-                  />
-
-                  <div>
-                    <label className="block text-sm font-medium text-secondary-700 mb-1">
-                      {t('promptTemplate')}
-                    </label>
-                    <TextArea
-                      value={step.prompt_template}
-                      onChange={(e) => updateStep(index, { prompt_template: e.target.value })}
-                      placeholder={t('promptTemplatePlaceholder')}
-                      rows={8}
-                      className="font-mono text-sm"
-                    />
-                    <p className="mt-1 text-sm text-secondary-500">
-                      {t('promptTemplateHelp')}
-                    </p>
-                  </div>
-
-                  <Select
-                    label={t('outputFormat')}
-                    value={step.output_format}
-                    onChange={(e) => updateStep(index, { output_format: e.target.value as any })}
-                    options={[
-                      { value: 'text', label: t('plainText') },
-                      { value: 'markdown', label: t('markdown') },
-                      { value: 'json', label: t('json') },
-                    ]}
-                  />
-
-                  {/* Model Config */}
-                  <div className="border-t border-secondary-200 pt-4">
-                    <h3 className="text-sm font-medium text-secondary-700 mb-3">{t('modelSettings')}</h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      <Input
-                        label={t('temperature')}
-                        type="number"
-                        min="0"
-                        max="2"
-                        step="0.1"
-                        value={JSON.parse(step.model_config || '{}').temperature || 0.7}
-                        onChange={(e) => {
-                          const config = JSON.parse(step.model_config || '{}');
-                          config.temperature = parseFloat(e.target.value);
-                          updateStep(index, { model_config: JSON.stringify(config) });
-                        }}
-                      />
-                      <Input
-                        label={t('maxTokens')}
-                        type="number"
-                        min="100"
-                        max="100000"
-                        step="100"
-                        value={JSON.parse(step.model_config || '{}').maxTokens || 2000}
-                        onChange={(e) => {
-                          const config = JSON.parse(step.model_config || '{}');
-                          config.maxTokens = parseInt(e.target.value);
-                          updateStep(index, { model_config: JSON.stringify(config) });
-                        }}
-                      />
+                  {/* Scraping Step UI */}
+                  {step.step_type === 'scraping' ? (
+                    <div className="space-y-4">
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div className="flex items-center space-x-2 mb-2">
+                          <span className="text-2xl">🔍</span>
+                          <h4 className="font-medium text-blue-800">Scraping Step</h4>
+                        </div>
+                        <p className="text-sm text-blue-700">
+                          This step extracts product reviews from e-commerce URLs using the BrightData API.
+                          You can also upload CSV files with review data.
+                        </p>
+                        {step.api_config && (() => {
+                          try {
+                            const apiConfig = JSON.parse(step.api_config);
+                            return (
+                              <div className="mt-3 text-sm">
+                                <span className="text-blue-600 font-medium">Service:</span>
+                                <span className="ml-2 text-blue-800">{apiConfig.service}</span>
+                                <span className="ml-4 text-blue-600 font-medium">Endpoint:</span>
+                                <span className="ml-2 text-blue-800">{apiConfig.endpoint}</span>
+                              </div>
+                            );
+                          } catch {
+                            return null;
+                          }
+                        })()}
+                      </div>
+                      <div className="bg-secondary-50 rounded-lg p-4">
+                        <h5 className="text-sm font-medium text-secondary-700 mb-2">Supported Platforms</h5>
+                        <div className="flex space-x-2">
+                          <span className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded border border-orange-200">
+                            📦 Amazon
+                          </span>
+                          <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded border border-blue-200">
+                            🛒 Walmart
+                          </span>
+                          <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded border border-purple-200">
+                            🏠 Wayfair
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    /* AI Step UI */
+                    <>
+                      <Select
+                        label={t('aiModel')}
+                        value={step.ai_model}
+                        onChange={(e) => updateStep(index, { ai_model: e.target.value })}
+                        options={models.map(m => ({
+                          value: m.id,
+                          label: `${m.name}${m.available ? '' : ` (${t('notConfigured')})`}`,
+                        }))}
+                      />
+
+                      <div>
+                        <label className="block text-sm font-medium text-secondary-700 mb-1">
+                          {t('promptTemplate')}
+                        </label>
+                        <TextArea
+                          value={step.prompt_template}
+                          onChange={(e) => updateStep(index, { prompt_template: e.target.value })}
+                          placeholder={t('promptTemplatePlaceholder')}
+                          rows={8}
+                          className="font-mono text-sm"
+                        />
+                        <p className="mt-1 text-sm text-secondary-500">
+                          {t('promptTemplateHelp')}
+                        </p>
+                      </div>
+
+                      <Select
+                        label={t('outputFormat')}
+                        value={step.output_format}
+                        onChange={(e) => updateStep(index, { output_format: e.target.value as any })}
+                        options={[
+                          { value: 'text', label: t('plainText') },
+                          { value: 'markdown', label: t('markdown') },
+                          { value: 'json', label: t('json') },
+                        ]}
+                      />
+
+                      {/* Model Config */}
+                      <div className="border-t border-secondary-200 pt-4">
+                        <h3 className="text-sm font-medium text-secondary-700 mb-3">{t('modelSettings')}</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                          <Input
+                            label={t('temperature')}
+                            type="number"
+                            min="0"
+                            max="2"
+                            step="0.1"
+                            value={JSON.parse(step.model_config || '{}').temperature || 0.7}
+                            onChange={(e) => {
+                              const config = JSON.parse(step.model_config || '{}');
+                              config.temperature = parseFloat(e.target.value);
+                              updateStep(index, { model_config: JSON.stringify(config) });
+                            }}
+                          />
+                          <Input
+                            label={t('maxTokens')}
+                            type="number"
+                            min="100"
+                            max="100000"
+                            step="100"
+                            value={JSON.parse(step.model_config || '{}').maxTokens || 2000}
+                            onChange={(e) => {
+                              const config = JSON.parse(step.model_config || '{}');
+                              config.maxTokens = parseInt(e.target.value);
+                              updateStep(index, { model_config: JSON.stringify(config) });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </CardBody>
               )}
             </Card>

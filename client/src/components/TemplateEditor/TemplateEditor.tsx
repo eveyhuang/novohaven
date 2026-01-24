@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Recipe, RecipeStep, AIModel, InputType, InputTypeConfig, TemplateInputConfig, GeneratedImage } from '../../types';
+import { Recipe, RecipeStep, AIModel, InputType, InputTypeConfig, TemplateInputConfig, GeneratedImage, StepType } from '../../types';
 import api from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, DynamicInput } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
@@ -53,20 +53,24 @@ export function TemplateEditor() {
     name: string;
     description: string;
     step_name: string;
+    step_type: StepType;
     ai_model: string;
     prompt_template: string;
     output_format: 'text' | 'json' | 'markdown' | 'image';
     model_config: string;
     input_config: string;
+    api_config: string;
   }>({
     name: '',
     description: '',
     step_name: '',
+    step_type: 'ai',
     ai_model: 'mock',
     prompt_template: '',
     output_format: 'text',
     model_config: JSON.stringify({ temperature: 0.7, maxTokens: 2000 }),
     input_config: JSON.stringify({ variables: {} }),
+    api_config: '',
   });
 
   const [models, setModels] = useState<AIModel[]>([]);
@@ -110,15 +114,20 @@ export function TemplateEditor() {
     try {
       const data = await api.getRecipe(templateId);
       const step = data.steps?.[0];
+      console.log('DEBUG TemplateEditor - Full API response:', data);
+      console.log('DEBUG TemplateEditor - First step:', step);
+      console.log('DEBUG TemplateEditor - step_type value:', step?.step_type);
       setTemplate({
         name: data.name,
         description: data.description || '',
         step_name: step?.step_name || data.name,
+        step_type: (step?.step_type as StepType) || 'ai',
         ai_model: step?.ai_model || 'mock',
         prompt_template: step?.prompt_template || '',
         output_format: step?.output_format || 'text',
         model_config: step?.model_config || JSON.stringify({ temperature: 0.7, maxTokens: 2000 }),
         input_config: step?.input_config || JSON.stringify({ variables: {} }),
+        api_config: step?.api_config || '',
       });
     } catch (err: any) {
       setError(err.message);
@@ -293,8 +302,15 @@ export function TemplateEditor() {
       return;
     }
 
-    if (!template.prompt_template.trim()) {
+    // Only require prompt_template for AI templates
+    if (template.step_type !== 'scraping' && !template.prompt_template.trim()) {
       setTestError(t('promptTemplateRequired'));
+      return;
+    }
+
+    // Scraping templates can't be tested in the same way - they need actual API calls
+    if (template.step_type === 'scraping') {
+      setTestError('Scraping templates cannot be tested directly. Please run the template with actual URLs to test.');
       return;
     }
 
@@ -371,7 +387,8 @@ export function TemplateEditor() {
       setError(t('templateNameRequired'));
       return;
     }
-    if (!template.prompt_template) {
+    // Only require prompt_template for AI templates
+    if (template.step_type !== 'scraping' && !template.prompt_template) {
       setError(t('promptTemplateRequired'));
       return;
     }
@@ -379,15 +396,21 @@ export function TemplateEditor() {
     setIsSaving(true);
     setError(null);
     try {
-      const step = {
+      const step: any = {
         step_order: 1,
         step_name: template.step_name || template.name,
+        step_type: template.step_type,
         ai_model: template.ai_model,
         prompt_template: template.prompt_template,
         output_format: template.output_format,
         model_config: template.model_config,
         input_config: template.input_config,
       };
+
+      // Include api_config for scraping templates
+      if (template.step_type === 'scraping' && template.api_config) {
+        step.api_config = template.api_config;
+      }
 
       if (isNew) {
         await api.createRecipe({
@@ -461,10 +484,21 @@ export function TemplateEditor() {
               {t('delete')}
             </Button>
           )}
-          <Button variant="secondary" onClick={openTestPanel}>
-            <PlayIcon className="w-4 h-4 mr-2" />
-            {t('testTemplate')}
-          </Button>
+          {template.step_type === 'scraping' ? (
+            /* For scraping templates, show Run Workflow button */
+            !isNew && (
+              <Button variant="secondary" onClick={() => navigate(`/recipes/${id}/run`)}>
+                <PlayIcon className="w-4 h-4 mr-2" />
+                {t('run')}
+              </Button>
+            )
+          ) : (
+            /* For AI templates, show Test Template button */
+            <Button variant="secondary" onClick={openTestPanel}>
+              <PlayIcon className="w-4 h-4 mr-2" />
+              {t('testTemplate')}
+            </Button>
+          )}
           <Button onClick={handleSave} isLoading={isSaving}>
             {isNew ? t('createTemplate') : t('saveChanges')}
           </Button>
@@ -499,93 +533,171 @@ export function TemplateEditor() {
         </CardBody>
       </Card>
 
-      {/* AI Configuration */}
-      <Card>
-        <CardHeader>
-          <h2 className="font-semibold text-secondary-900">{t('aiConfiguration')}</h2>
-        </CardHeader>
-        <CardBody className="space-y-4">
-          <Select
-            label={t('aiModel')}
-            value={template.ai_model}
-            onChange={(e) => setTemplate({ ...template, ai_model: e.target.value })}
-            options={models.map(m => ({
-              value: m.id,
-              label: `${m.name}${m.available ? '' : ` (${t('notConfigured')})`}`,
-            }))}
-          />
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-sm font-medium text-secondary-700">
-                {t('promptTemplate')}
-              </label>
-              <button
-                onClick={() => setShowVariableHelp(true)}
-                className="text-sm text-primary-600 hover:text-primary-700"
-              >
-                {t('variableHelp')}
-              </button>
+      {/* Configuration - Different UI for scraping vs AI */}
+      {template.step_type === 'scraping' ? (
+        /* Scraping Configuration */
+        <Card>
+          <CardHeader>
+            <div className="flex items-center space-x-2">
+              <span className="text-2xl">🔍</span>
+              <h2 className="font-semibold text-secondary-900">Scraping Configuration</h2>
             </div>
-            <textarea
-              ref={promptTextAreaRef}
-              value={template.prompt_template}
-              onChange={(e) => setTemplate({ ...template, prompt_template: e.target.value })}
-              placeholder={t('promptTemplatePlaceholder')}
-              rows={12}
-              className="w-full px-3 py-2 border border-secondary-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm"
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <p className="text-sm text-blue-700">
+                This template extracts product reviews from e-commerce URLs using the BrightData API.
+                Users can also upload CSV files with review data.
+              </p>
+              {template.api_config && (() => {
+                try {
+                  const apiConfig = JSON.parse(template.api_config);
+                  return (
+                    <div className="mt-3 text-sm">
+                      <span className="text-blue-600 font-medium">Service:</span>
+                      <span className="ml-2 text-blue-800">{apiConfig.service}</span>
+                      <span className="ml-4 text-blue-600 font-medium">Endpoint:</span>
+                      <span className="ml-2 text-blue-800">{apiConfig.endpoint}</span>
+                    </div>
+                  );
+                } catch {
+                  return null;
+                }
+              })()}
+            </div>
+
+            <div className="bg-secondary-50 rounded-lg p-4">
+              <h5 className="text-sm font-medium text-secondary-700 mb-2">Supported Platforms</h5>
+              <div className="flex space-x-2">
+                <span className="px-3 py-1.5 bg-orange-100 text-orange-800 text-sm rounded border border-orange-200">
+                  📦 Amazon
+                </span>
+                <span className="px-3 py-1.5 bg-blue-100 text-blue-800 text-sm rounded border border-blue-200">
+                  🛒 Walmart
+                </span>
+                <span className="px-3 py-1.5 bg-purple-100 text-purple-800 text-sm rounded border border-purple-200">
+                  🏠 Wayfair
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <h5 className="text-sm font-medium text-yellow-800 mb-2">How It Works</h5>
+              <ul className="text-sm text-yellow-700 space-y-1">
+                <li>• Users enter product URLs (one per line) to scrape reviews</li>
+                <li>• The system extracts reviews, ratings, and product information</li>
+                <li>• Output is formatted as JSON for use in subsequent analysis steps</li>
+              </ul>
+            </div>
+
+            <Select
+              label={t('outputFormat')}
+              value={template.output_format}
+              onChange={(e) => setTemplate({ ...template, output_format: e.target.value as any })}
+              options={[
+                { value: 'json', label: t('json') },
+                { value: 'text', label: t('plainText') },
+              ]}
             />
-            <p className="mt-1 text-sm text-secondary-500">
-              {t('templatePromptHelp')}
-            </p>
-          </div>
 
-          <Select
-            label={t('outputFormat')}
-            value={template.output_format}
-            onChange={(e) => setTemplate({ ...template, output_format: e.target.value as any })}
-            options={[
-              { value: 'text', label: t('plainText') },
-              { value: 'markdown', label: t('markdown') },
-              { value: 'json', label: t('json') },
-              { value: 'image', label: t('generatedImages') },
-            ]}
-          />
-
-          {/* Model Settings */}
-          <div className="border-t border-secondary-200 pt-4">
-            <h3 className="text-sm font-medium text-secondary-700 mb-3">{t('modelSettings')}</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <Input
-                label={t('temperature')}
-                type="number"
-                min="0"
-                max="2"
-                step="0.1"
-                value={JSON.parse(template.model_config || '{}').temperature || 0.7}
-                onChange={(e) => {
-                  const config = JSON.parse(template.model_config || '{}');
-                  config.temperature = parseFloat(e.target.value);
-                  setTemplate({ ...template, model_config: JSON.stringify(config) });
-                }}
-              />
-              <Input
-                label={t('maxTokens')}
-                type="number"
-                min="100"
-                max="100000"
-                step="100"
-                value={JSON.parse(template.model_config || '{}').maxTokens || 2000}
-                onChange={(e) => {
-                  const config = JSON.parse(template.model_config || '{}');
-                  config.maxTokens = parseInt(e.target.value);
-                  setTemplate({ ...template, model_config: JSON.stringify(config) });
-                }}
-              />
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <h5 className="text-sm font-medium text-green-800 mb-2">Usage Tracking</h5>
+              <p className="text-sm text-green-700">
+                BrightData API usage is tracked per user for billing purposes. Each URL scraped
+                and each review fetched is counted towards usage.
+              </p>
             </div>
-          </div>
-        </CardBody>
-      </Card>
+          </CardBody>
+        </Card>
+      ) : (
+        /* AI Configuration */
+        <Card>
+          <CardHeader>
+            <h2 className="font-semibold text-secondary-900">{t('aiConfiguration')}</h2>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <Select
+              label={t('aiModel')}
+              value={template.ai_model}
+              onChange={(e) => setTemplate({ ...template, ai_model: e.target.value })}
+              options={models.map(m => ({
+                value: m.id,
+                label: `${m.name}${m.available ? '' : ` (${t('notConfigured')})`}`,
+              }))}
+            />
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-secondary-700">
+                  {t('promptTemplate')}
+                </label>
+                <button
+                  onClick={() => setShowVariableHelp(true)}
+                  className="text-sm text-primary-600 hover:text-primary-700"
+                >
+                  {t('variableHelp')}
+                </button>
+              </div>
+              <textarea
+                ref={promptTextAreaRef}
+                value={template.prompt_template}
+                onChange={(e) => setTemplate({ ...template, prompt_template: e.target.value })}
+                placeholder={t('promptTemplatePlaceholder')}
+                rows={12}
+                className="w-full px-3 py-2 border border-secondary-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm"
+              />
+              <p className="mt-1 text-sm text-secondary-500">
+                {t('templatePromptHelp')}
+              </p>
+            </div>
+
+            <Select
+              label={t('outputFormat')}
+              value={template.output_format}
+              onChange={(e) => setTemplate({ ...template, output_format: e.target.value as any })}
+              options={[
+                { value: 'text', label: t('plainText') },
+                { value: 'markdown', label: t('markdown') },
+                { value: 'json', label: t('json') },
+                { value: 'image', label: t('generatedImages') },
+              ]}
+            />
+
+            {/* Model Settings */}
+            <div className="border-t border-secondary-200 pt-4">
+              <h3 className="text-sm font-medium text-secondary-700 mb-3">{t('modelSettings')}</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <Input
+                  label={t('temperature')}
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={JSON.parse(template.model_config || '{}').temperature || 0.7}
+                  onChange={(e) => {
+                    const config = JSON.parse(template.model_config || '{}');
+                    config.temperature = parseFloat(e.target.value);
+                    setTemplate({ ...template, model_config: JSON.stringify(config) });
+                  }}
+                />
+                <Input
+                  label={t('maxTokens')}
+                  type="number"
+                  min="100"
+                  max="100000"
+                  step="100"
+                  value={JSON.parse(template.model_config || '{}').maxTokens || 2000}
+                  onChange={(e) => {
+                    const config = JSON.parse(template.model_config || '{}');
+                    config.maxTokens = parseInt(e.target.value);
+                    setTemplate({ ...template, model_config: JSON.stringify(config) });
+                  }}
+                />
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {/* Input Variables */}
       <Card>

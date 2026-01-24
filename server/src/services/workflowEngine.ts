@@ -1,6 +1,9 @@
 import { queries } from '../models/database';
 import { callAIByModel } from './aiService';
 import { compilePrompt, CompilePromptContext, validateInputs } from './promptParser';
+import { scrapeReviewsWithFallback } from './brightDataService';
+import { parseReviewCSV } from './csvParserService';
+import { logUsage } from './usageTrackingService';
 import {
   WorkflowExecution,
   StepExecution,
@@ -8,6 +11,7 @@ import {
   ExecutionStatus,
   StepExecutionStatus,
   ModelConfig,
+  ScrapingPlatform,
 } from '../types';
 
 export interface ExecutionResult {
@@ -113,6 +117,37 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
   ];
 
   for (const step of steps) {
+    // Handle scraping steps - get inputs from input_config
+    if (step.step_type === 'scraping' && step.input_config) {
+      try {
+        const inputConfig = JSON.parse(step.input_config);
+        if (inputConfig.variables) {
+          // Handle both array format (server types) and object format (templates)
+          if (Array.isArray(inputConfig.variables)) {
+            // Array format: [{ name: 'product_urls', source: 'user_input', ... }]
+            for (const variable of inputConfig.variables) {
+              if (variable.source === 'user_input' && variable.required !== false) {
+                inputs.add(variable.name);
+              }
+            }
+          } else {
+            // Object format: { product_urls: { type: 'url_list', ... } }
+            for (const [varName, varConfig] of Object.entries(inputConfig.variables)) {
+              const config = varConfig as any;
+              // Skip optional variables
+              if (config.optional !== true) {
+                inputs.add(varName);
+              }
+            }
+          }
+        }
+      } catch {
+        // Ignore parse errors
+      }
+      continue;
+    }
+
+    // Handle AI steps - get inputs from prompt_template
     let match;
     const template = step.prompt_template || '';
     while ((match = variableRegex.exec(template)) !== null) {
@@ -191,6 +226,21 @@ async function executeWorkflowWithSteps(
   );
   queries.updateExecutionStatus('running', step.step_order, executionId);
 
+  // Handle different step types
+  if (step.step_type === 'scraping') {
+    // Execute scraping step
+    return executeScrapingStep(
+      executionId,
+      userId,
+      userInputs,
+      step,
+      nextStepExecution,
+      steps,
+      stepExecutions
+    );
+  }
+
+  // Execute AI step (default behavior)
   // Compile the prompt
   const context: CompilePromptContext = {
     userId,
@@ -199,7 +249,7 @@ async function executeWorkflowWithSteps(
   };
 
   const { compiledPrompt, unresolvedVariables, images } = compilePrompt(
-    step.prompt_template,
+    step.prompt_template || '',
     context
   );
 
@@ -714,4 +764,232 @@ export function getExecutionStatus(executionId: number): ExecutionResult | null 
       };
     }),
   };
+}
+
+// Execute a scraping step
+async function executeScrapingStep(
+  executionId: number,
+  userId: number,
+  userInputs: Record<string, any>,
+  step: RecipeStep,
+  stepExecution: StepExecution,
+  steps: RecipeStep[],
+  stepExecutions: StepExecution[]
+): Promise<ExecutionResult> {
+  try {
+    // Parse API config to determine service
+    let apiConfig: { service: string; endpoint: string } = { service: 'brightdata', endpoint: 'scrape_reviews' };
+    if (step.api_config) {
+      try {
+        apiConfig = JSON.parse(step.api_config);
+      } catch {
+        // Use defaults
+      }
+    }
+
+    // Get input variables from input_config
+    let urls: string[] = [];
+    let csvData: string | undefined;
+    let platform: ScrapingPlatform | undefined;
+
+    // Check for URLs from user input
+    if (userInputs.product_urls) {
+      // Parse URLs - could be string with newlines or array
+      if (Array.isArray(userInputs.product_urls)) {
+        urls = userInputs.product_urls;
+      } else if (typeof userInputs.product_urls === 'string') {
+        urls = userInputs.product_urls
+          .split(/[\n,]/)
+          .map((url: string) => url.trim())
+          .filter((url: string) => url.length > 0);
+      }
+    }
+
+    // Check for CSV data (support both csv_data and csv_file variable names)
+    if (userInputs.csv_data) {
+      csvData = userInputs.csv_data;
+    } else if (userInputs.csv_file) {
+      // Handle file upload format - may be string content or object with content property
+      csvData = typeof userInputs.csv_file === 'string'
+        ? userInputs.csv_file
+        : userInputs.csv_file?.content || userInputs.csv_file;
+    }
+
+    // Check for platform specification
+    if (userInputs.platform) {
+      platform = userInputs.platform as ScrapingPlatform;
+    }
+
+    // Validate input - need either URLs or CSV data
+    if (urls.length === 0 && !csvData) {
+      const errorMsg = 'No product URLs or CSV data provided for scraping';
+      queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
+      queries.updateExecutionStatus('paused', step.step_order, executionId);
+      return {
+        success: false,
+        executionId,
+        status: 'paused',
+        currentStep: step.step_order,
+        stepResults: [{
+          stepId: step.id,
+          stepOrder: step.step_order,
+          stepName: step.step_name,
+          status: 'failed',
+          error: errorMsg,
+        }],
+        error: errorMsg,
+      };
+    }
+
+    let scrapedData: any[] = [];
+    let usageInfo: { requests_made: number; reviews_fetched: number } = { requests_made: 0, reviews_fetched: 0 };
+
+    // Process CSV data if provided
+    if (csvData) {
+      const parseResult = parseReviewCSV(csvData, platform);
+      if (parseResult.success && parseResult.data) {
+        scrapedData = parseResult.data;
+        usageInfo.reviews_fetched += parseResult.data.length;
+      } else if (!parseResult.success) {
+        // If CSV parse failed and we have no URLs, fail the step
+        if (urls.length === 0) {
+          const errorMsg = parseResult.error || 'Failed to parse CSV data';
+          queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
+          queries.updateExecutionStatus('paused', step.step_order, executionId);
+          return {
+            success: false,
+            executionId,
+            status: 'paused',
+            currentStep: step.step_order,
+            stepResults: [{
+              stepId: step.id,
+              stepOrder: step.step_order,
+              stepName: step.step_name,
+              status: 'failed',
+              error: errorMsg,
+            }],
+            error: errorMsg,
+          };
+        }
+      }
+    }
+
+    // Scrape URLs if provided
+    if (urls.length > 0) {
+      const scrapingResult = await scrapeReviewsWithFallback(urls, platform);
+
+      if (scrapingResult.success && scrapingResult.data) {
+        // Combine scraped data with any CSV data
+        for (const product of scrapingResult.data) {
+          scrapedData.push(...product.reviews.map(review => ({
+            ...review,
+            product_url: product.url,
+            product_name: product.product_name,
+            product_price: product.product_price,
+            product_features: product.product_features,
+          })));
+        }
+
+        if (scrapingResult.usage) {
+          usageInfo.requests_made += scrapingResult.usage.requests_made;
+          usageInfo.reviews_fetched += scrapingResult.usage.reviews_fetched;
+        }
+      } else if (!scrapingResult.success && scrapedData.length === 0) {
+        // If scraping failed and we have no CSV data, fail the step
+        const errorMsg = scrapingResult.error || 'Failed to scrape reviews from URLs';
+        queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
+        queries.updateExecutionStatus('paused', step.step_order, executionId);
+        return {
+          success: false,
+          executionId,
+          status: 'paused',
+          currentStep: step.step_order,
+          stepResults: [{
+            stepId: step.id,
+            stepOrder: step.step_order,
+            stepName: step.step_name,
+            status: 'failed',
+            error: errorMsg,
+          }],
+          error: errorMsg,
+        };
+      }
+    }
+
+    // Log usage for billing
+    logUsage(
+      userId,
+      apiConfig.service,
+      apiConfig.endpoint,
+      usageInfo.requests_made,
+      usageInfo.reviews_fetched
+    );
+
+    // Format output data
+    const outputContent = JSON.stringify({
+      reviews: scrapedData,
+      summary: {
+        total_reviews: scrapedData.length,
+        urls_processed: urls.length,
+        csv_rows_processed: csvData ? scrapedData.length - (urls.length > 0 ? scrapedData.length : 0) : 0,
+      }
+    }, null, 2);
+
+    const outputData = JSON.stringify({
+      content: outputContent,
+      service: apiConfig.service,
+      usage: usageInfo,
+      stepType: 'scraping',
+    });
+
+    queries.updateStepExecution(
+      'awaiting_review',
+      outputData,
+      `${apiConfig.service}:${apiConfig.endpoint}`,
+      `Scraped ${urls.length} URL(s), processed ${scrapedData.length} reviews`,
+      stepExecution.id
+    );
+
+    // Pause execution for review
+    queries.updateExecutionStatus('paused', step.step_order, executionId);
+
+    // Get updated step executions
+    const updatedStepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
+
+    return {
+      success: true,
+      executionId,
+      status: 'paused',
+      currentStep: step.step_order,
+      stepResults: updatedStepExecutions.map(se => {
+        const stepDef = steps.find(s => s.id === se.step_id || s.step_order === se.step_order);
+        return {
+          stepId: se.step_id,
+          stepOrder: se.step_order,
+          stepName: stepDef?.step_name || 'Unknown',
+          status: se.status,
+          output: se.output_data ? JSON.parse(se.output_data).content : undefined,
+          error: se.error_message || undefined,
+        };
+      }),
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Scraping step failed';
+    queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
+    queries.updateExecutionStatus('paused', step.step_order, executionId);
+    return {
+      success: false,
+      executionId,
+      status: 'paused',
+      currentStep: step.step_order,
+      stepResults: [{
+        stepId: step.id,
+        stepOrder: step.step_order,
+        stepName: step.step_name,
+        status: 'failed',
+        error: errorMsg,
+      }],
+      error: errorMsg,
+    };
+  }
 }

@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(ls:*)",
+      "Bash(node -e:*)",
+      "Bash(sqlite3:*)"
     ]
   }
 }

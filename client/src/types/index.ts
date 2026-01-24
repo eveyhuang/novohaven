@@ -19,16 +19,20 @@ export interface Recipe {
   required_inputs?: string[];
 }
 
+export type StepType = 'ai' | 'scraping';
+
 export interface RecipeStep {
   id?: number;
   recipe_id?: number;
   step_order: number;
   step_name: string;
+  step_type?: StepType;
   ai_model: string;
   prompt_template: string;
   input_config?: string;
   output_format: 'text' | 'json' | 'markdown' | 'image';
   model_config?: string;
+  api_config?: string; // For non-AI steps: { service: 'brightdata', endpoint: 'scrape_reviews' }
   created_at?: string;
 }
 

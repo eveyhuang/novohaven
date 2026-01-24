@@ -304,19 +304,24 @@ export function RecipeBuilder() {
                       key={index}
                       className={`p-4 cursor-pointer transition-colors ${
                         selectedStepIndex === index
-                          ? 'bg-primary-50'
+                          ? step.step_type === 'scraping' ? 'bg-blue-50' : 'bg-primary-50'
                           : 'hover:bg-secondary-50'
                       }`}
                       onClick={() => setSelectedStepIndex(index)}
                     >
                       <div className="flex items-center justify-between">
-                        <div>
-                          <span className="text-sm font-medium text-secondary-500">
-                            Step {index + 1}
-                          </span>
-                          <h4 className="font-medium text-secondary-900">
-                            {step.step_name}
-                          </h4>
+                        <div className="flex items-center space-x-2">
+                          {step.step_type === 'scraping' && (
+                            <span className="text-lg">🔍</span>
+                          )}
+                          <div>
+                            <span className="text-sm font-medium text-secondary-500">
+                              Step {index + 1}
+                            </span>
+                            <h4 className="font-medium text-secondary-900">
+                              {step.step_name}
+                            </h4>
+                          </div>
                         </div>
                         <div className="flex items-center space-x-1">
                           <button
@@ -342,7 +347,9 @@ export function RecipeBuilder() {
                         </div>
                       </div>
                       <p className="text-sm text-secondary-500 mt-1">
-                        {models.find(m => m.id === step.ai_model)?.name || step.ai_model}
+                        {step.step_type === 'scraping'
+                          ? 'BrightData Scraping'
+                          : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
                       </p>
                     </div>
                   ))}
@@ -369,84 +376,151 @@ export function RecipeBuilder() {
                   placeholder={t('stepNamePlaceholder')}
                 />
 
-                <Select
-                  label={t('aiModel')}
-                  value={selectedStep.ai_model}
-                  onChange={(e) => updateStep(selectedStepIndex!, { ai_model: e.target.value })}
-                  options={models.map(m => ({
-                    value: m.id,
-                    label: `${m.name}${m.available ? '' : ` (${t('notConfigured')})`}`,
-                  }))}
-                />
+                {/* Scraping Step UI */}
+                {selectedStep.step_type === 'scraping' ? (
+                  <div className="space-y-4">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <div className="flex items-center space-x-2 mb-2">
+                        <span className="text-2xl">🔍</span>
+                        <h4 className="font-medium text-blue-800">Scraping Step</h4>
+                      </div>
+                      <p className="text-sm text-blue-700">
+                        This step extracts product reviews from e-commerce URLs using the BrightData API.
+                        You can also upload CSV files with review data.
+                      </p>
+                      {selectedStep.api_config && (() => {
+                        try {
+                          const apiConfig = JSON.parse(selectedStep.api_config);
+                          return (
+                            <div className="mt-3 text-sm">
+                              <span className="text-blue-600 font-medium">Service:</span>
+                              <span className="ml-2 text-blue-800">{apiConfig.service}</span>
+                              <span className="ml-4 text-blue-600 font-medium">Endpoint:</span>
+                              <span className="ml-2 text-blue-800">{apiConfig.endpoint}</span>
+                            </div>
+                          );
+                        } catch {
+                          return null;
+                        }
+                      })()}
+                    </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-sm font-medium text-secondary-700">
-                      {t('promptTemplate')}
-                    </label>
-                    <button
-                      onClick={() => setShowVariableHelp(true)}
-                      className="text-sm text-primary-600 hover:text-primary-700"
-                    >
-                      {t('variableHelp')}
-                    </button>
-                  </div>
-                  <TextArea
-                    value={selectedStep.prompt_template}
-                    onChange={(e) => updateStep(selectedStepIndex!, { prompt_template: e.target.value })}
-                    placeholder={t('promptTemplatePlaceholder')}
-                    rows={12}
-                    className="font-mono text-sm"
-                  />
-                  <p className="mt-1 text-sm text-secondary-500">
-                    {t('promptTemplateHelp')}
-                  </p>
-                </div>
+                    <div className="bg-secondary-50 rounded-lg p-4">
+                      <h5 className="text-sm font-medium text-secondary-700 mb-2">Supported Platforms</h5>
+                      <div className="flex space-x-2">
+                        <span className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded border border-orange-200">
+                          📦 Amazon
+                        </span>
+                        <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded border border-blue-200">
+                          🛒 Walmart
+                        </span>
+                        <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded border border-purple-200">
+                          🏠 Wayfair
+                        </span>
+                      </div>
+                    </div>
 
-                <Select
-                  label={t('outputFormat')}
-                  value={selectedStep.output_format}
-                  onChange={(e) => updateStep(selectedStepIndex!, { output_format: e.target.value as any })}
-                  options={[
-                    { value: 'text', label: t('plainText') },
-                    { value: 'markdown', label: t('markdown') },
-                    { value: 'json', label: t('json') },
-                  ]}
-                />
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                      <h5 className="text-sm font-medium text-yellow-800 mb-2">Input Options</h5>
+                      <ul className="text-sm text-yellow-700 space-y-1">
+                        <li>• Enter product URLs (one per line) to scrape reviews</li>
+                        <li>• Upload CSV files with existing review data</li>
+                        <li>• Combine both methods for comprehensive data</li>
+                      </ul>
+                    </div>
 
-                {/* Model Config */}
-                <div className="border-t border-secondary-200 pt-4">
-                  <h3 className="text-sm font-medium text-secondary-700 mb-3">{t('modelSettings')}</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <Input
-                      label={t('temperature')}
-                      type="number"
-                      min="0"
-                      max="2"
-                      step="0.1"
-                      value={JSON.parse(selectedStep.model_config || '{}').temperature || 0.7}
-                      onChange={(e) => {
-                        const config = JSON.parse(selectedStep.model_config || '{}');
-                        config.temperature = parseFloat(e.target.value);
-                        updateStep(selectedStepIndex!, { model_config: JSON.stringify(config) });
-                      }}
-                    />
-                    <Input
-                      label={t('maxTokens')}
-                      type="number"
-                      min="100"
-                      max="100000"
-                      step="100"
-                      value={JSON.parse(selectedStep.model_config || '{}').maxTokens || 2000}
-                      onChange={(e) => {
-                        const config = JSON.parse(selectedStep.model_config || '{}');
-                        config.maxTokens = parseInt(e.target.value);
-                        updateStep(selectedStepIndex!, { model_config: JSON.stringify(config) });
-                      }}
+                    <Select
+                      label={t('outputFormat')}
+                      value={selectedStep.output_format}
+                      onChange={(e) => updateStep(selectedStepIndex!, { output_format: e.target.value as any })}
+                      options={[
+                        { value: 'json', label: t('json') },
+                        { value: 'text', label: t('plainText') },
+                      ]}
                     />
                   </div>
-                </div>
+                ) : (
+                  /* AI Step UI */
+                  <>
+                    <Select
+                      label={t('aiModel')}
+                      value={selectedStep.ai_model}
+                      onChange={(e) => updateStep(selectedStepIndex!, { ai_model: e.target.value })}
+                      options={models.map(m => ({
+                        value: m.id,
+                        label: `${m.name}${m.available ? '' : ` (${t('notConfigured')})`}`,
+                      }))}
+                    />
 
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-sm font-medium text-secondary-700">
+                          {t('promptTemplate')}
+                        </label>
+                        <button
+                          onClick={() => setShowVariableHelp(true)}
+                          className="text-sm text-primary-600 hover:text-primary-700"
+                        >
+                          {t('variableHelp')}
+                        </button>
+                      </div>
+                      <TextArea
+                        value={selectedStep.prompt_template}
+                        onChange={(e) => updateStep(selectedStepIndex!, { prompt_template: e.target.value })}
+                        placeholder={t('promptTemplatePlaceholder')}
+                        rows={12}
+                        className="font-mono text-sm"
+                      />
+                      <p className="mt-1 text-sm text-secondary-500">
+                        {t('promptTemplateHelp')}
+                      </p>
+                    </div>
+
+                    <Select
+                      label={t('outputFormat')}
+                      value={selectedStep.output_format}
+                      onChange={(e) => updateStep(selectedStepIndex!, { output_format: e.target.value as any })}
+                      options={[
+                        { value: 'text', label: t('plainText') },
+                        { value: 'markdown', label: t('markdown') },
+                        { value: 'json', label: t('json') },
+                      ]}
+                    />
+
+                    {/* Model Config */}
+                    <div className="border-t border-secondary-200 pt-4">
+                      <h3 className="text-sm font-medium text-secondary-700 mb-3">{t('modelSettings')}</h3>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Input
+                          label={t('temperature')}
+                          type="number"
+                          min="0"
+                          max="2"
+                          step="0.1"
+                          value={JSON.parse(selectedStep.model_config || '{}').temperature || 0.7}
+                          onChange={(e) => {
+                            const config = JSON.parse(selectedStep.model_config || '{}');
+                            config.temperature = parseFloat(e.target.value);
+                            updateStep(selectedStepIndex!, { model_config: JSON.stringify(config) });
+                          }}
+                        />
+                        <Input
+                          label={t('maxTokens')}
+                          type="number"
+                          min="100"
+                          max="100000"
+                          step="100"
+                          value={JSON.parse(selectedStep.model_config || '{}').maxTokens || 2000}
+                          onChange={(e) => {
+                            const config = JSON.parse(selectedStep.model_config || '{}');
+                            config.maxTokens = parseInt(e.target.value);
+                            updateStep(selectedStepIndex!, { model_config: JSON.stringify(config) });
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
               </CardBody>
             </Card>
           ) : (
@@ -521,17 +595,27 @@ export function RecipeBuilder() {
             templateRecipes.map((template) => {
               const step = template.steps?.[0];
               if (!step) return null;
+              const isScraping = step.step_type === 'scraping';
               return (
                 <div
                   key={template.id}
-                  className="border border-secondary-200 rounded-lg p-4 hover:bg-secondary-50 cursor-pointer flex items-center justify-between"
+                  className={`border rounded-lg p-4 hover:bg-secondary-50 cursor-pointer flex items-center justify-between ${
+                    isScraping ? 'border-blue-200 bg-blue-50/30' : 'border-secondary-200'
+                  }`}
                   onClick={() => addTemplateStep(step)}
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
+                      {isScraping && <span className="text-lg">🔍</span>}
                       <h3 className="font-semibold text-secondary-900">{template.name}</h3>
-                      <span className="text-xs px-2 py-0.5 bg-secondary-100 text-secondary-600 rounded">
-                        {models.find(m => m.id === step.ai_model)?.name || step.ai_model}
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        isScraping
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-secondary-100 text-secondary-600'
+                      }`}>
+                        {isScraping
+                          ? 'BrightData Scraping'
+                          : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
                       </span>
                     </div>
                     {template.description && (
