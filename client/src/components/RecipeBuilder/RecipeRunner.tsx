@@ -271,6 +271,47 @@ export function RecipeRunner() {
       return null;
     }
 
+    // Validate URLs for scraping steps - only Amazon is supported
+    const scrapingSteps = localSteps.filter(s => s.step_type === 'scraping');
+    if (scrapingSteps.length > 0) {
+      // Find all URL list inputs that might be used by scraping steps
+      for (const [key, value] of Object.entries(inputValues)) {
+        const config = inputConfigs[key];
+        if (config?.type === 'url_list' && Array.isArray(value)) {
+          const urls = value.filter((u: string) => u.trim());
+          const nonAmazonUrls = urls.filter((url: string) => {
+            const trimmed = url.trim();
+            return trimmed && !trimmed.toLowerCase().includes('amazon.');
+          });
+          
+          if (nonAmazonUrls.length > 0) {
+            const plural = nonAmazonUrls.length !== 1 ? 's' : '';
+            const errorMsg = t('nonAmazonUrlsDetected')
+              .replace('{count}', nonAmazonUrls.length.toString())
+              .replace('{plural}', plural);
+            setError(`${t('onlyAmazonSupported')} ${errorMsg}`);
+            return null;
+          }
+        } else if (config?.type === 'url_list' && typeof value === 'string') {
+          // Handle case where URL list is stored as a string (newline-separated)
+          const urls = value.split('\n').filter((u: string) => u.trim());
+          const nonAmazonUrls = urls.filter((url: string) => {
+            const trimmed = url.trim();
+            return trimmed && !trimmed.toLowerCase().includes('amazon.');
+          });
+          
+          if (nonAmazonUrls.length > 0) {
+            const plural = nonAmazonUrls.length !== 1 ? 's' : '';
+            const errorMsg = t('nonAmazonUrlsDetected')
+              .replace('{count}', nonAmazonUrls.length.toString())
+              .replace('{plural}', plural);
+            setError(`${t('onlyAmazonSupported')} ${errorMsg}`);
+            return null;
+          }
+        }
+      }
+    }
+
     return processedInputs;
   };
 
@@ -530,12 +571,6 @@ export function RecipeRunner() {
                         <div className="flex space-x-2">
                           <span className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded border border-orange-200">
                             📦 Amazon
-                          </span>
-                          <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded border border-blue-200">
-                            🛒 Walmart
-                          </span>
-                          <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded border border-purple-200">
-                            🏠 Wayfair
                           </span>
                         </div>
                       </div>

@@ -348,7 +348,7 @@ export function RecipeBuilder() {
                       </div>
                       <p className="text-sm text-secondary-500 mt-1">
                         {step.step_type === 'scraping'
-                          ? 'BrightData Scraping'
+                          ? t('brightDataScraping')
                           : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
                       </p>
                     </div>
@@ -382,20 +382,19 @@ export function RecipeBuilder() {
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                       <div className="flex items-center space-x-2 mb-2">
                         <span className="text-2xl">🔍</span>
-                        <h4 className="font-medium text-blue-800">Scraping Step</h4>
+                        <h4 className="font-medium text-blue-800">{t('scrapingStep')}</h4>
                       </div>
                       <p className="text-sm text-blue-700">
-                        This step extracts product reviews from e-commerce URLs using the BrightData API.
-                        You can also upload CSV files with review data.
+                        {t('scrapingStepDescription')}
                       </p>
                       {selectedStep.api_config && (() => {
                         try {
                           const apiConfig = JSON.parse(selectedStep.api_config);
                           return (
                             <div className="mt-3 text-sm">
-                              <span className="text-blue-600 font-medium">Service:</span>
+                              <span className="text-blue-600 font-medium">{t('service')}:</span>
                               <span className="ml-2 text-blue-800">{apiConfig.service}</span>
-                              <span className="ml-4 text-blue-600 font-medium">Endpoint:</span>
+                              <span className="ml-4 text-blue-600 font-medium">{t('endpoint')}:</span>
                               <span className="ml-2 text-blue-800">{apiConfig.endpoint}</span>
                             </div>
                           );
@@ -406,26 +405,20 @@ export function RecipeBuilder() {
                     </div>
 
                     <div className="bg-secondary-50 rounded-lg p-4">
-                      <h5 className="text-sm font-medium text-secondary-700 mb-2">Supported Platforms</h5>
+                      <h5 className="text-sm font-medium text-secondary-700 mb-2">{t('supportedPlatforms')}</h5>
                       <div className="flex space-x-2">
                         <span className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded border border-orange-200">
                           📦 Amazon
-                        </span>
-                        <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded border border-blue-200">
-                          🛒 Walmart
-                        </span>
-                        <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded border border-purple-200">
-                          🏠 Wayfair
                         </span>
                       </div>
                     </div>
 
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                      <h5 className="text-sm font-medium text-yellow-800 mb-2">Input Options</h5>
+                      <h5 className="text-sm font-medium text-yellow-800 mb-2">{t('howItWorks')}</h5>
                       <ul className="text-sm text-yellow-700 space-y-1">
-                        <li>• Enter product URLs (one per line) to scrape reviews</li>
-                        <li>• Upload CSV files with existing review data</li>
-                        <li>• Combine both methods for comprehensive data</li>
+                        <li>• {t('scrapingInputOption1')}</li>
+                        <li>• {t('scrapingInputOption2')}</li>
+                        <li>• {t('scrapingInputOption3')}</li>
                       </ul>
                     </div>
 
@@ -614,7 +607,7 @@ export function RecipeBuilder() {
                           : 'bg-secondary-100 text-secondary-600'
                       }`}>
                         {isScraping
-                          ? 'BrightData Scraping'
+                          ? t('brightDataScraping')
                           : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
                       </span>
                     </div>

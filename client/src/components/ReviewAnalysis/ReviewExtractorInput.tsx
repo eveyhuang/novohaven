@@ -13,10 +13,9 @@ interface ReviewExtractorInputProps {
 
 type InputMode = 'urls' | 'csv' | 'both';
 
-const platformInfo: Record<ScrapingPlatform, { name: string; icon: string; color: string }> = {
+// Only Amazon is supported for now
+const platformInfo: Record<'amazon', { name: string; icon: string; color: string }> = {
   amazon: { name: 'Amazon', icon: '📦', color: 'bg-orange-100 text-orange-800 border-orange-200' },
-  walmart: { name: 'Walmart', icon: '🛒', color: 'bg-blue-100 text-blue-800 border-blue-200' },
-  wayfair: { name: 'Wayfair', icon: '🏠', color: 'bg-purple-100 text-purple-800 border-purple-200' },
 };
 
 export const ReviewExtractorInput: React.FC<ReviewExtractorInputProps> = ({
@@ -46,9 +45,8 @@ export const ReviewExtractorInput: React.FC<ReviewExtractorInputProps> = ({
       const url = line.trim();
       let platform: ScrapingPlatform | null = null;
 
+      // Only Amazon is supported for now
       if (url.includes('amazon.')) platform = 'amazon';
-      else if (url.includes('walmart.')) platform = 'walmart';
-      else if (url.includes('wayfair.')) platform = 'wayfair';
 
       results.push({
         url,
@@ -215,7 +213,7 @@ export const ReviewExtractorInput: React.FC<ReviewExtractorInputProps> = ({
           <textarea
             value={urls}
             onChange={(e) => setUrls(e.target.value)}
-            placeholder="https://www.amazon.com/dp/B08N5WRWNW&#10;https://www.walmart.com/ip/123456789&#10;https://www.wayfair.com/furniture/..."
+            placeholder="https://www.amazon.com/dp/B08N5WRWNW&#10;https://www.amazon.com/dp/B094NC89P9&#10;https://www.amazon.com/dp/..."
             rows={5}
             className="w-full px-3 py-2 border border-secondary-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
           />
@@ -227,18 +225,24 @@ export const ReviewExtractorInput: React.FC<ReviewExtractorInputProps> = ({
                 <div className="text-sm text-green-600">
                   ✓ {validUrls.length} valid URL{validUrls.length !== 1 ? 's' : ''} detected
                   <span className="text-secondary-500 ml-2">
-                    ({validUrls.filter(u => u.platform === 'amazon').length} Amazon,
-                    {' '}{validUrls.filter(u => u.platform === 'walmart').length} Walmart,
-                    {' '}{validUrls.filter(u => u.platform === 'wayfair').length} Wayfair)
+                    ({validUrls.filter(u => u.platform === 'amazon').length} Amazon)
                   </span>
                 </div>
               )}
               {invalidUrls.length > 0 && (
-                <div className="text-sm text-red-600">
-                  ✗ {invalidUrls.length} invalid URL{invalidUrls.length !== 1 ? 's' : ''}
-                  <span className="text-secondary-500 ml-2">
-                    (unsupported platform or malformed)
-                  </span>
+                <div className="space-y-2">
+                  <div className="text-sm text-red-600">
+                    ✗ {invalidUrls.length} invalid URL{invalidUrls.length !== 1 ? 's' : ''}
+                    <span className="text-secondary-500 ml-2">
+                      (unsupported platform or malformed)
+                    </span>
+                  </div>
+                  {invalidUrls.some(u => !u.url.includes('amazon.')) && (
+                    <div className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                      <span className="font-medium">Note:</span> Only Amazon product reviews are available right now. 
+                      URLs from other platforms (Walmart, Wayfair, etc.) are not supported at this time.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -315,8 +319,6 @@ export const ReviewExtractorInput: React.FC<ReviewExtractorInputProps> = ({
                 className="px-3 py-2 border border-secondary-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500"
               >
                 <option value="amazon">Amazon</option>
-                <option value="walmart">Walmart</option>
-                <option value="wayfair">Wayfair</option>
               </select>
             </div>
           )}

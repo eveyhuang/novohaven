@@ -276,6 +276,7 @@ function TemplateCard({ template, onEdit, onDelete, t }: TemplateCardProps) {
   const { language } = useLanguage();
   const [translatedName, setTranslatedName] = useState(template.name);
   const [translatedDesc, setTranslatedDesc] = useState(template.description || '');
+  const [templateType, setTemplateType] = useState<'AI' | 'API'>('AI');
 
   useEffect(() => {
     if (language === 'en') {
@@ -289,13 +290,33 @@ function TemplateCard({ template, onEdit, onDelete, t }: TemplateCardProps) {
     }
   }, [template.name, template.description, language]);
 
+  // Determine template type: "API" if any step is scraping, otherwise "AI"
+  useEffect(() => {
+    if (template.steps && template.steps.length > 0) {
+      // Steps are available, check step types
+      const hasScrapingStep = template.steps.some(step => step.step_type === 'scraping');
+      setTemplateType(hasScrapingStep ? 'API' : 'AI');
+    } else {
+      // Steps not loaded, fetch full recipe to determine type
+      api.getRecipe(template.id).then(fullRecipe => {
+        if (fullRecipe.steps && fullRecipe.steps.length > 0) {
+          const hasScrapingStep = fullRecipe.steps.some(step => step.step_type === 'scraping');
+          setTemplateType(hasScrapingStep ? 'API' : 'AI');
+        }
+      }).catch(() => {
+        // If fetch fails, default to 'AI'
+        setTemplateType('AI');
+      });
+    }
+  }, [template.id, template.steps]);
+
   return (
     <Card hoverable className="flex flex-col" onClick={onEdit}>
       <CardBody className="flex-1">
         <div className="flex items-start justify-between">
           <h3 className="font-semibold text-secondary-900">{translatedName}</h3>
           <span className="inline-block px-2 py-0.5 text-xs font-medium bg-primary-100 text-primary-700 rounded">
-            {t('template')}
+            {templateType}
           </span>
         </div>
         <p className="text-sm text-secondary-600 mt-2 line-clamp-2">

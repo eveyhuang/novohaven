@@ -101,6 +101,28 @@ export const translations = {
     stepInputValues: 'Input Values',
     stepInputValuesDesc: 'Set default values for this step\'s input variables. These will be pre-filled when running the recipe.',
     enterDefaultValue: 'Enter default value...',
+    
+    // URL Validation
+    onlyAmazonSupported: 'Only Amazon product reviews are available right now.',
+    nonAmazonUrlsDetected: '{count} non-Amazon URL{plural} detected. Please use Amazon product URLs only.',
+    
+    // Scraping Step
+    scrapingConfiguration: 'Scraping Configuration',
+    scrapingStep: 'Scraping Step',
+    scrapingStepDescription: 'This template extracts product reviews from e-commerce URLs using the BrightData API. Users can also upload CSV files with review data.',
+    service: 'Service',
+    endpoint: 'Endpoint',
+    supportedPlatforms: 'Supported Platforms',
+    howItWorks: 'How It Works',
+    scrapingHowItWorks1: 'Users enter product URLs (one per line) to scrape reviews',
+    scrapingHowItWorks2: 'The system extracts reviews, ratings, and product information',
+    scrapingHowItWorks3: 'Output is formatted as JSON for use in subsequent analysis steps',
+    scrapingInputOption1: 'Enter product URLs (one per line) to scrape reviews',
+    scrapingInputOption2: 'Upload CSV files with existing review data',
+    scrapingInputOption3: 'Combine both methods for comprehensive data',
+    usageTracking: 'Usage Tracking',
+    usageTrackingDescription: 'BrightData API usage is tracked per user for billing purposes. Each URL scraped and each review fetched is counted towards usage.',
+    brightDataScraping: 'BrightData Scraping',
 
     // Template Editor
     editTemplate: 'Edit Template',
@@ -340,7 +362,7 @@ export const translations = {
     myRecipes: '我的工作流',
     recipesDescription: '将多个模板串联在一起的工作流',
     templates: '个模板',
-    noTemplatesYet: '暂无模板。创建您的第一个模板开始吧。',
+    noTemplatesYet: '暂无模板。创建您的第一个模板吧。',
     saveAsTemplate: '保存为模板',
     isTemplate: '模板',
     makeTemplate: '设为模板',
@@ -372,8 +394,8 @@ export const translations = {
     aiModel: 'AI模型',
     notConfigured: '未配置',
     promptTemplate: '提示词模板',
-    promptTemplatePlaceholder: '在此输入您的提示词模板。使用 {{variable_name}} 作为变量。',
-    promptTemplateHelp: '使用 {{variable_name}} 作为用户输入，{{step_N_output}} 引用前序步骤的输出',
+    promptTemplatePlaceholder: '在此输入您的提示词模板。使用 {{变量名字}} 作为变量。',
+    promptTemplateHelp: '使用 {{变量名字}} 作为用户输入，{{step_N_output}} 引用前序步骤的输出',
     outputFormat: '输出格式',
     plainText: '纯文本',
     markdown: 'Markdown',
@@ -401,6 +423,28 @@ export const translations = {
     stepInputValues: '输入值',
     stepInputValuesDesc: '设置此步骤输入变量的默认值。运行工作流时将自动填充这些值。',
     enterDefaultValue: '输入默认值...',
+    
+    // URL Validation
+    onlyAmazonSupported: '目前仅支持亚马逊产品评论。',
+    nonAmazonUrlsDetected: '检测到 {count} 个非亚马逊链接。请仅使用亚马逊产品链接。',
+    
+    // Scraping Step
+    scrapingConfiguration: '抓取配置',
+    scrapingStep: '抓取步骤',
+    scrapingStepDescription: '此模板使用 BrightData API 从电商 URL 提取产品评论。用户也可以上传包含评论数据的 CSV 文件。',
+    service: '服务',
+    endpoint: '端点',
+    supportedPlatforms: '支持的平台',
+    howItWorks: '工作原理',
+    scrapingHowItWorks1: '用户输入产品 URL（每行一个）以抓取评论',
+    scrapingHowItWorks2: '系统提取评论、评分和产品信息',
+    scrapingHowItWorks3: '输出格式化为 JSON，供后续分析步骤使用',
+    scrapingInputOption1: '输入产品 URL（每行一个）以抓取评论',
+    scrapingInputOption2: '上传包含现有评论数据的 CSV 文件',
+    scrapingInputOption3: '结合两种方法以获得全面的数据',
+    usageTracking: '使用量跟踪',
+    usageTrackingDescription: 'BrightData API 使用量按用户跟踪，用于计费。每个抓取的 URL 和每条获取的评论都会计入使用量。',
+    brightDataScraping: 'BrightData 抓取',
 
     // Template Editor
     editTemplate: '编辑模板',

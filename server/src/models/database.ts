@@ -465,7 +465,7 @@ Generate the image according to the exact specifications provided in the require
       product_urls: {
         type: 'url_list',
         label: 'Product URLs',
-        description: 'Enter product page URLs from Amazon, Walmart, or Wayfair (one per line)',
+        description: 'Enter product page URLs from Amazon (one per line)',
         placeholder: 'https://www.amazon.com/dp/...\nhttps://www.walmart.com/ip/...'
       }
     }
@@ -492,8 +492,8 @@ Generate the image according to the exact specifications provided in the require
   ];
 
   upsertTemplateRecipe(
-    'Product Review Extractor',
-    'Extract product reviews from e-commerce URLs (Amazon, Walmart, Wayfair) using BrightData API',
+    'Amazon Review Extractor',
+    'Extract product reviews from Amazon URLs using BrightData API',
     mockUserId,
     reviewExtractorSteps
   );
@@ -504,7 +504,7 @@ Generate the image according to the exact specifications provided in the require
     variables: {
       review_data: {
         type: 'file',
-        label: 'ProductReview Data (JSON or CSV)',
+        label: 'Product Review Data (JSON or CSV)',
         description: 'Upload the JSON or CSV file output of review data',
         acceptedFileTypes: ['.json', '.csv']
       },
@@ -520,15 +520,13 @@ Generate the image according to the exact specifications provided in the require
   const reviewAnalyzerSteps = [
     {
       step_order: 1,
-      step_name: 'Analyze ProductReviews & Generate Summary',
+      step_name: 'Analyze Product Reviews & Generate Summary',
       ai_model: 'gpt-4o',
       prompt_template: `You are a market research analyst specializing in consumer feedback analysis. Perform a comprehensive analysis of the following product reviews.
 
 REVIEW DATA:
 {{review_data}}
 
-ANALYSIS FOCUS:
-{{analysis_focus}}
 
 TASK:
 Perform a complete analysis in the following stages:
@@ -565,20 +563,20 @@ OUTPUT FORMAT (Markdown):
 - Overall Sentiment: [positive/mixed/negative]
 - Average Rating: [X.X/5]
 
-## What Customers Love (Top 10)
+## What Customers Love (Top 5)
 1. **[Feature/Aspect]** - [Brief explanation with supporting data]
 2. **[Feature/Aspect]** - [Brief explanation with supporting data]
 3. **[Feature/Aspect]** - [Brief explanation with supporting data]
 ...
 
-## Critical Pain Points (Top 10)
+## Critical Pain Points (Top 5)
 1. **[Issue]** - [Brief explanation with severity and frequency]
 2. **[Issue]** - [Brief explanation with severity and frequency]
 3. **[Issue]** - [Brief explanation with severity and frequency]
 ...
 
 
-## Feature Wishlist (Customer Requests)
+## Feature Wishlist (Top 3-5 Customer Requests)
 1. [Feature] - Requested by X% of reviewers
 2. [Feature] - Requested by X% of reviewers
 3. [Feature] - Requested by X% of reviewers
@@ -595,13 +593,13 @@ OUTPUT FORMAT (Markdown):
 ### Negative
 > "[Quote]" - [Rating] stars`,
       output_format: 'markdown',
-      model_config: JSON.stringify({ temperature: 0.3, maxTokens: 12000 }),
+      model_config: JSON.stringify({ temperature: 0.0, maxTokens: 12000 }),
       input_config: reviewAnalyzerInputConfig
     }
   ];
 
   upsertTemplateRecipe(
-    'ProductReview Analyzer',
+    'Product Review Analyzer',
     'Perform qualitative analysis on product reviews to understand customer sentiment, pain points, and feature preferences',
     mockUserId,
     reviewAnalyzerSteps
@@ -630,7 +628,7 @@ OUTPUT FORMAT (Markdown):
   upsertCompanyStandard(
     mockUserId,
     'platform',
-    'Amazon Requirements',
+    'Amazon Platform Requirements',
     JSON.stringify({
       platform: 'Amazon',
       requirements: [

@@ -540,23 +540,22 @@ export function TemplateEditor() {
           <CardHeader>
             <div className="flex items-center space-x-2">
               <span className="text-2xl">🔍</span>
-              <h2 className="font-semibold text-secondary-900">Scraping Configuration</h2>
+              <h2 className="font-semibold text-secondary-900">{t('scrapingConfiguration')}</h2>
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <p className="text-sm text-blue-700">
-                This template extracts product reviews from e-commerce URLs using the BrightData API.
-                Users can also upload CSV files with review data.
+                {t('scrapingStepDescription')}
               </p>
               {template.api_config && (() => {
                 try {
                   const apiConfig = JSON.parse(template.api_config);
                   return (
                     <div className="mt-3 text-sm">
-                      <span className="text-blue-600 font-medium">Service:</span>
+                      <span className="text-blue-600 font-medium">{t('service')}:</span>
                       <span className="ml-2 text-blue-800">{apiConfig.service}</span>
-                      <span className="ml-4 text-blue-600 font-medium">Endpoint:</span>
+                      <span className="ml-4 text-blue-600 font-medium">{t('endpoint')}:</span>
                       <span className="ml-2 text-blue-800">{apiConfig.endpoint}</span>
                     </div>
                   );
@@ -567,26 +566,20 @@ export function TemplateEditor() {
             </div>
 
             <div className="bg-secondary-50 rounded-lg p-4">
-              <h5 className="text-sm font-medium text-secondary-700 mb-2">Supported Platforms</h5>
+              <h5 className="text-sm font-medium text-secondary-700 mb-2">{t('supportedPlatforms')}</h5>
               <div className="flex space-x-2">
                 <span className="px-3 py-1.5 bg-orange-100 text-orange-800 text-sm rounded border border-orange-200">
                   📦 Amazon
-                </span>
-                <span className="px-3 py-1.5 bg-blue-100 text-blue-800 text-sm rounded border border-blue-200">
-                  🛒 Walmart
-                </span>
-                <span className="px-3 py-1.5 bg-purple-100 text-purple-800 text-sm rounded border border-purple-200">
-                  🏠 Wayfair
                 </span>
               </div>
             </div>
 
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-              <h5 className="text-sm font-medium text-yellow-800 mb-2">How It Works</h5>
+              <h5 className="text-sm font-medium text-yellow-800 mb-2">{t('howItWorks')}</h5>
               <ul className="text-sm text-yellow-700 space-y-1">
-                <li>• Users enter product URLs (one per line) to scrape reviews</li>
-                <li>• The system extracts reviews, ratings, and product information</li>
-                <li>• Output is formatted as JSON for use in subsequent analysis steps</li>
+                <li>• {t('scrapingHowItWorks1')}</li>
+                <li>• {t('scrapingHowItWorks2')}</li>
+                <li>• {t('scrapingHowItWorks3')}</li>
               </ul>
             </div>
 
@@ -601,10 +594,9 @@ export function TemplateEditor() {
             />
 
             <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-              <h5 className="text-sm font-medium text-green-800 mb-2">Usage Tracking</h5>
+              <h5 className="text-sm font-medium text-green-800 mb-2">{t('usageTracking')}</h5>
               <p className="text-sm text-green-700">
-                BrightData API usage is tracked per user for billing purposes. Each URL scraped
-                and each review fetched is counted towards usage.
+                {t('usageTrackingDescription')}
               </p>
             </div>
           </CardBody>
