@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
 import { initializeDatabase } from './models/database';
 
 // Import routes
@@ -13,8 +14,9 @@ import outputsRouter from './routes/outputs';
 import scrapingRouter from './routes/scraping';
 import usageRouter from './routes/usage';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables from server directory
+// This ensures .env is loaded whether running from project root or server directory
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 // Initialize Express app
 const app = express();

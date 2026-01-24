@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { WorkflowExecution, StepExecution, GeneratedImage } from '../../types';
@@ -19,12 +19,65 @@ export function ExecutionView() {
   const [selectedStep, setSelectedStep] = useState<StepExecution | null>(null);
   const [showPromptModal, setShowPromptModal] = useState(false);
   const [editedPrompt, setEditedPrompt] = useState('');
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (id) {
       loadExecution(parseInt(id));
     }
   }, [id]);
+
+  // Auto-refresh polling for in-progress executions
+  useEffect(() => {
+    if (!execution || !autoRefresh) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      return;
+    }
+
+    // Only poll if execution is running or pending
+    const shouldPoll = ['running', 'pending'].includes(execution.status);
+
+    if (!shouldPoll) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      return;
+    }
+
+    // Set up polling every 3 seconds
+    pollingRef.current = setInterval(async () => {
+      try {
+        const data = await api.getExecution(parseInt(id!));
+        setExecution(data);
+
+        // Update selected step if needed
+        const currentStep = data.step_executions?.find(
+          (se) => se.status === 'awaiting_review'
+        );
+        if (currentStep && (!selectedStep || selectedStep.id !== currentStep.id)) {
+          setSelectedStep(currentStep);
+        } else if (data.step_executions?.length && !currentStep) {
+          const lastStep = data.step_executions[data.step_executions.length - 1];
+          if (!selectedStep || selectedStep.id !== lastStep.id || selectedStep.status !== lastStep.status) {
+            setSelectedStep(lastStep);
+          }
+        }
+      } catch (err) {
+        console.error('Error polling execution:', err);
+      }
+    }, 3000);
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, [execution?.status, autoRefresh, id]);
 
   const loadExecution = async (executionId: number) => {
     setIsLoading(true);
@@ -141,6 +194,17 @@ export function ExecutionView() {
             <span className="text-secondary-500">
               Step {execution.current_step} of {execution.total_steps}
             </span>
+            {['running', 'pending'].includes(execution.status) && (
+              <label className="flex items-center space-x-2 text-sm text-secondary-600">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  className="rounded border-secondary-300 text-primary-600 focus:ring-primary-500"
+                />
+                <span>Auto-refresh</span>
+              </label>
+            )}
           </div>
         </div>
         <Button variant="ghost" onClick={() => navigate('/executions')}>

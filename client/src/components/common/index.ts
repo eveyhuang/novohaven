@@ -5,3 +5,4 @@ export { Modal } from './Modal';
 export { Layout } from './Layout';
 export { DynamicInput } from './DynamicInput';
 export { TranslatedText } from './TranslatedText';
+export { Notifications } from './Notifications';

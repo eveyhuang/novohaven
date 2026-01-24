@@ -4,6 +4,7 @@ import { Recipe, RecipeStep, AIModel, InputTypeConfig, TemplateInputConfig } fro
 import api from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, DynamicInput, TranslatedText } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
+import { useNotifications } from '../../context/NotificationContext';
 
 const DEFAULT_STEP: Omit<RecipeStep, 'id' | 'recipe_id' | 'created_at'> = {
   step_order: 1,
@@ -18,6 +19,7 @@ export function RecipeRunner() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const { trackExecution, addNotification } = useNotifications();
 
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [localSteps, setLocalSteps] = useState<RecipeStep[]>([]);
@@ -29,6 +31,7 @@ export function RecipeRunner() {
   const [error, setError] = useState<string | null>(null);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set([0]));
   const [showVariableHelp, setShowVariableHelp] = useState(false);
+  const [showRunOptions, setShowRunOptions] = useState(false);
 
   useEffect(() => {
     loadModels();
@@ -216,9 +219,7 @@ export function RecipeRunner() {
     setExpandedSteps(newExpanded);
   };
 
-  const handleStartExecution = async () => {
-    if (!recipe) return;
-
+  const validateAndPrepareInputs = (): Record<string, string> | null => {
     // Check for missing required inputs based on their type
     const missingInputs = requiredInputs.filter((input) => {
       const value = inputValues[input];
@@ -236,7 +237,7 @@ export function RecipeRunner() {
 
     if (missingInputs.length > 0) {
       setError(`${t('fillRequiredFields')}: ${missingInputs.map(i => inputConfigs[i]?.label || formatLabel(i)).join(', ')}`);
-      return;
+      return null;
     }
 
     // Prepare input data - convert complex types to strings for prompt injection
@@ -267,18 +268,51 @@ export function RecipeRunner() {
     );
     if (emptyPromptSteps.length > 0) {
       setError('All AI steps must have a prompt template');
-      return;
+      return null;
     }
+
+    return processedInputs;
+  };
+
+  const handleStartExecution = async (runInBackground: boolean = false) => {
+    if (!recipe) return;
+
+    const processedInputs = validateAndPrepareInputs();
+    if (!processedInputs) return;
 
     setIsStarting(true);
     setError(null);
+    setShowRunOptions(false);
+
     try {
       // Pass modified steps to the execution with processed inputs
       const result = await api.startExecution(recipe.id, processedInputs, localSteps);
-      navigate(`/executions/${result.executionId}`);
+
+      if (runInBackground) {
+        // Track the execution in background and navigate to dashboard
+        trackExecution(result.executionId, recipe.name);
+        addNotification({
+          type: 'info',
+          title: 'Workflow Started',
+          message: `"${recipe.name}" is now running in the background.`,
+          autoClose: true,
+          duration: 3000,
+        });
+        navigate('/');
+      } else {
+        // Navigate directly to the execution view
+        navigate(`/executions/${result.executionId}`);
+      }
     } catch (err: any) {
       setError(err.message);
       setIsStarting(false);
+    }
+  };
+
+  const handleShowRunOptions = () => {
+    const processedInputs = validateAndPrepareInputs();
+    if (processedInputs) {
+      setShowRunOptions(true);
     }
   };
 
@@ -326,7 +360,7 @@ export function RecipeRunner() {
           <Button variant="ghost" onClick={() => navigate('/')}>
             {t('cancel')}
           </Button>
-          <Button onClick={handleStartExecution} isLoading={isStarting}>
+          <Button onClick={handleShowRunOptions} isLoading={isStarting}>
             {t('startWorkflow')}
           </Button>
         </div>
@@ -592,7 +626,7 @@ export function RecipeRunner() {
         <Button variant="ghost" onClick={() => navigate('/')}>
           {t('cancel')}
         </Button>
-        <Button onClick={handleStartExecution} isLoading={isStarting} size="lg">
+        <Button onClick={handleShowRunOptions} isLoading={isStarting} size="lg">
           {t('startWorkflow')}
         </Button>
       </div>
@@ -636,6 +670,71 @@ export function RecipeRunner() {
               {'{{amazon_requirements}}'}<br/>
               {'{{image_style_guidelines}}'}
             </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Run Options Modal */}
+      <Modal
+        isOpen={showRunOptions}
+        onClose={() => setShowRunOptions(false)}
+        title="Start Workflow"
+        size="md"
+      >
+        <div className="space-y-4">
+          <p className="text-secondary-600">
+            Choose how you want to run this workflow:
+          </p>
+
+          <div className="space-y-3">
+            {/* Run and Watch Option */}
+            <button
+              onClick={() => handleStartExecution(false)}
+              disabled={isStarting}
+              className="w-full p-4 border-2 border-secondary-200 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left group"
+            >
+              <div className="flex items-start space-x-3">
+                <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center flex-shrink-0 group-hover:bg-primary-200">
+                  <svg className="w-5 h-5 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-medium text-secondary-900">Run and Watch</h4>
+                  <p className="text-sm text-secondary-500 mt-1">
+                    Stay on the execution page to monitor progress and approve steps in real-time.
+                  </p>
+                </div>
+              </div>
+            </button>
+
+            {/* Run in Background Option */}
+            <button
+              onClick={() => handleStartExecution(true)}
+              disabled={isStarting}
+              className="w-full p-4 border-2 border-secondary-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors text-left group"
+            >
+              <div className="flex items-start space-x-3">
+                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-200">
+                  <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-medium text-secondary-900">Run in Background</h4>
+                  <p className="text-sm text-secondary-500 mt-1">
+                    Start the workflow and continue working. You'll be notified when it needs attention or completes.
+                  </p>
+                </div>
+              </div>
+            </button>
+          </div>
+
+          <div className="pt-3 border-t border-secondary-200">
+            <Button variant="ghost" onClick={() => setShowRunOptions(false)} className="w-full">
+              Cancel
+            </Button>
           </div>
         </div>
       </Modal>

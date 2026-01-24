@@ -166,14 +166,35 @@ export async function initializeDatabase(): Promise<void> {
   db.run('CREATE INDEX IF NOT EXISTS idx_api_usage_service ON api_usage(service)');
   db.run('CREATE INDEX IF NOT EXISTS idx_api_usage_created_at ON api_usage(created_at)');
 
-  // Insert mock user for MVP
-  const mockUser = db.exec("SELECT id FROM users WHERE email = 'demo@novohaven.com'");
-  if (mockUser.length === 0 || mockUser[0].values.length === 0) {
+  // Insert mock user for MVP and get the user ID
+  let mockUserId: number;
+  const mockUser = getOne("SELECT id FROM users WHERE email = 'demo@novohaven.com'");
+  if (!mockUser) {
     db.run("INSERT INTO users (email, password_hash) VALUES ('demo@novohaven.com', 'mock_password_hash')");
+    // Save database to ensure user is persisted before using it
+    saveDatabase();
+    // Get the ID of the newly inserted user
+    const insertedUser = getOne("SELECT id FROM users WHERE email = 'demo@novohaven.com'");
+    if (!insertedUser || !insertedUser.id) {
+      throw new Error('Failed to create mock user');
+    }
+    mockUserId = insertedUser.id;
+  } else {
+    // Use existing user ID
+    if (!mockUser.id) {
+      throw new Error('Mock user exists but has no ID');
+    }
+    mockUserId = mockUser.id;
+  }
+
+  // Verify user exists before seeding
+  const verifyUser = getOne('SELECT id FROM users WHERE id = ?', [mockUserId]);
+  if (!verifyUser) {
+    throw new Error(`User with ID ${mockUserId} does not exist`);
   }
 
   // Seed template recipes
-  seedTemplateRecipes();
+  seedTemplateRecipes(mockUserId);
 
   // Save to file
   saveDatabase();
@@ -211,7 +232,13 @@ function upsertTemplateRecipe(
       WHERE id = ?
     `, [description, recipeId]);
 
-    // Delete existing steps
+    // Delete existing steps (only if not referenced by step_executions)
+    // First, delete any step_executions that reference these steps
+    db.run(`
+      DELETE FROM step_executions 
+      WHERE step_id IN (SELECT id FROM recipe_steps WHERE recipe_id = ?)
+    `, [recipeId]);
+    // Now delete the steps
     db.run('DELETE FROM recipe_steps WHERE recipe_id = ?', [recipeId]);
   } else {
     // Insert new template
@@ -274,10 +301,8 @@ function upsertCompanyStandard(
   }
 }
 
-function seedTemplateRecipes(): void {
+function seedTemplateRecipes(mockUserId: number): void {
   if (!db) return;
-
-  const mockUserId = 1;
 
   // Template: Image Style Analyzer
   const imageStyleAnalyzerInputConfig = JSON.stringify({
@@ -295,7 +320,7 @@ function seedTemplateRecipes(): void {
     {
       step_order: 1,
       step_name: 'Image Style Analysis',
-      ai_model: 'gpt-4o',
+      ai_model: 'gemini-3-pro-image-preview',
       prompt_template: `Analyze this reference image in comprehensive detail for photography reproduction and AI image generation purposes.
 
 {{reference_image}}
@@ -404,7 +429,7 @@ Be specific and technical. Include real-world imperfections that give the image 
     {
       step_order: 1,
       step_name: 'Generate Product Images',
-      ai_model: 'gemini-2.5-pro-image',
+      ai_model: 'gemini-3-pro-image-preview',
       prompt_template: `Generate a professional product photography image based on the following specifications.
 
 Product Reference: {{product_images}}
@@ -467,7 +492,7 @@ Generate the image according to the exact specifications provided in the require
   ];
 
   upsertTemplateRecipe(
-    'Review Extractor',
+    'Product Review Extractor',
     'Extract product reviews from e-commerce URLs (Amazon, Walmart, Wayfair) using BrightData API',
     mockUserId,
     reviewExtractorSteps
@@ -479,7 +504,7 @@ Generate the image according to the exact specifications provided in the require
     variables: {
       review_data: {
         type: 'file',
-        label: 'Review Data (JSON or CSV)',
+        label: 'ProductReview Data (JSON or CSV)',
         description: 'Upload the JSON or CSV file output of review data',
         acceptedFileTypes: ['.json', '.csv']
       },
@@ -495,8 +520,8 @@ Generate the image according to the exact specifications provided in the require
   const reviewAnalyzerSteps = [
     {
       step_order: 1,
-      step_name: 'Analyze Reviews & Generate Summary',
-      ai_model: 'claude-opus-4-5-20251101',
+      step_name: 'Analyze ProductReviews & Generate Summary',
+      ai_model: 'gpt-4o',
       prompt_template: `You are a market research analyst specializing in consumer feedback analysis. Perform a comprehensive analysis of the following product reviews.
 
 REVIEW DATA:
@@ -576,7 +601,7 @@ OUTPUT FORMAT (Markdown):
   ];
 
   upsertTemplateRecipe(
-    'Review Analyzer',
+    'ProductReview Analyzer',
     'Perform qualitative analysis on product reviews to understand customer sentiment, pain points, and feature preferences',
     mockUserId,
     reviewAnalyzerSteps

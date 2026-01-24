@@ -2,7 +2,8 @@ import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { LanguageProvider } from './context/LanguageContext';
-import { Layout } from './components/common';
+import { NotificationProvider } from './context/NotificationContext';
+import { Layout, Notifications } from './components/common';
 import { Dashboard } from './components/Dashboard';
 import { RecipeBuilder, RecipeRunner } from './components/RecipeBuilder';
 import { TemplateEditor } from './components/TemplateEditor';
@@ -16,6 +17,8 @@ function App() {
     <LanguageProvider>
       <AuthProvider>
         <BrowserRouter>
+        <NotificationProvider>
+        <Notifications />
         <Layout>
           <Routes>
             {/* Dashboard */}
@@ -57,6 +60,7 @@ function App() {
             />
           </Routes>
         </Layout>
+        </NotificationProvider>
       </BrowserRouter>
       </AuthProvider>
     </LanguageProvider>

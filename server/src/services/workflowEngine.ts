@@ -1,7 +1,7 @@
 import { queries } from '../models/database';
 import { callAIByModel } from './aiService';
 import { compilePrompt, CompilePromptContext, validateInputs } from './promptParser';
-import { scrapeReviewsWithFallback } from './brightDataService';
+import { scrapeReviews, isBrightDataConfigured } from './brightDataService';
 import { parseReviewCSV } from './csvParserService';
 import { logUsage } from './usageTrackingService';
 import {
@@ -876,7 +876,29 @@ async function executeScrapingStep(
 
     // Scrape URLs if provided
     if (urls.length > 0) {
-      const scrapingResult = await scrapeReviewsWithFallback(urls, platform);
+      // Check if BrightData is configured - fail if not (don't use mock data)
+      if (!isBrightDataConfigured()) {
+        const errorMsg = 'BrightData is not configured. Please set BRIGHTDATA_API_KEY environment variable.';
+        queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
+        queries.updateExecutionStatus('paused', step.step_order, executionId);
+        return {
+          success: false,
+          executionId,
+          status: 'paused',
+          currentStep: step.step_order,
+          stepResults: [{
+            stepId: step.id,
+            stepOrder: step.step_order,
+            stepName: step.step_name,
+            status: 'failed',
+            error: errorMsg,
+          }],
+          error: errorMsg,
+        };
+      }
+
+      // Use actual BrightData scraping (no mock fallback)
+      const scrapingResult = await scrapeReviews(urls);
 
       if (scrapingResult.success && scrapingResult.data) {
         // Combine scraped data with any CSV data

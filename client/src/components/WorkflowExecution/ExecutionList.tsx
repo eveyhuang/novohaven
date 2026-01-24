@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { WorkflowExecution } from '../../types';
 import api from '../../services/api';
@@ -14,10 +14,40 @@ export function ExecutionList() {
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<WorkflowExecution | null>(null);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadExecutions();
   }, []);
+
+  // Auto-refresh if there are running executions
+  useEffect(() => {
+    const hasRunning = executions.some(e => ['running', 'pending'].includes(e.status));
+
+    if (!hasRunning) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      return;
+    }
+
+    // Poll every 5 seconds when there are running executions
+    pollingRef.current = setInterval(async () => {
+      try {
+        const data = await api.getExecutions();
+        setExecutions(data);
+      } catch (err) {
+        console.error('Error polling executions:', err);
+      }
+    }, 5000);
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, [executions]);
 
   const loadExecutions = async () => {
     setIsLoading(true);

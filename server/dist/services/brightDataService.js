@@ -138,7 +138,7 @@ async function scrapeReviews(urls) {
     if (!isBrightDataConfigured()) {
         return {
             success: false,
-            error: 'BrightData is not configured. Please set BRIGHTDATA_API_KEY environment variable.',
+            error: 'bdts.js: BrightData is not configured. Please set BRIGHTDATA_API_KEY environment variable.',
         };
     }
     const results = [];
