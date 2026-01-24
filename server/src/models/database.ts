@@ -442,13 +442,6 @@ Generate the image according to the exact specifications provided in the require
         label: 'Product URLs',
         description: 'Enter product page URLs from Amazon, Walmart, or Wayfair (one per line)',
         placeholder: 'https://www.amazon.com/dp/...\nhttps://www.walmart.com/ip/...'
-      },
-      csv_file: {
-        type: 'file',
-        label: 'CSV Upload (Optional)',
-        description: 'Alternatively, upload a CSV file with review data',
-        acceptedFileTypes: ['.csv'],
-        optional: true
       }
     }
   });
