@@ -5,7 +5,33 @@
       "Bash(npm run build:*)",
       "Bash(ls:*)",
       "Bash(node -e:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(npx --version:*)",
+      "Bash(npx -y @anthropic/mcp-server-sqlite --db-path ./server/data/novohaven.db)",
+      "Bash(npx:*)",
+      "Bash(npm search:*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(npm view:*)",
+      "Bash(gh api:*)",
+      "mcp__chrome-devtools__list_pages",
+      "mcp__chrome-devtools__navigate_page",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__click",
+      "mcp__chrome-devtools__evaluate_script",
+      "mcp__chrome-devtools__wait_for",
+      "mcp__larkmcp__bitable_v1_app_create",
+      "mcp__larkmcp__bitable_v1_appTable_create",
+      "mcp__larkmcp__bitable_v1_appTableRecord_create",
+      "mcp__larkmcp__im_v1_message_create",
+      "mcp__chrome-devtools__new_page",
+      "Bash(node scrape_wayfair_reviews.js:*)",
+      "Bash(npm install:*)",
+      "mcp__larkmcp__im_v1_chat_list",
+      "mcp__larkmcp__im_v1_chat_create"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "github"
+  ]
 }
