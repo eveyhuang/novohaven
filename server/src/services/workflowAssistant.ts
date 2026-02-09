@@ -119,10 +119,11 @@ Workflows support variables for data flow between steps:
    - Use "script" for custom data processing or calculations
    - Use "transform" for format conversion (CSV/JSON), field mapping, filtering
 
-5. **For AI steps**, write complete, detailed prompt templates. Include:
+5. **For AI steps**, write focused prompt templates. Include:
    - Clear instructions for the AI
    - Variable placeholders where needed (\`{{variable}}\` or \`{{step_N_output}}\`)
    - Output format instructions if specific formatting is needed
+   - Keep prompts concise — avoid lengthy examples or verbose formatting guidelines that inflate the JSON size
 
 6. **For non-AI steps**, provide complete executor_config with all required fields.
 
@@ -152,18 +153,31 @@ Workflows support variables for data flow between steps:
 
 Input types for requiredInputs: "text", "textarea", "url_list", "image", "file"
 
-Always ensure step outputs chain correctly — if step 2 needs step 1's output, use \`{{step_1_output}}\` in step 2's prompt.`;
+Always ensure step outputs chain correctly — if step 2 needs step 1's output, use \`{{step_1_output}}\` in step 2's prompt.
+
+CRITICAL: When you generate a workflow, you MUST include a \`\`\`workflow-json code block with the complete JSON. Without this block, the workflow cannot be displayed to the user. NEVER skip the JSON block when generating a workflow.`;
 }
 
-function buildConversationPrompt(messages: ConversationMessage[]): string {
-  const systemPrompt = buildSystemPrompt();
 
-  const conversationParts = messages.map(msg => {
-    const role = msg.role === 'user' ? 'User' : 'Assistant';
-    return `${role}: ${msg.content}`;
-  });
-
-  return `${systemPrompt}\n\n## Conversation\n\n${conversationParts.join('\n\n')}\n\nAssistant:`;
+function tryParseWorkflow(jsonStr: string): GeneratedWorkflow | null {
+  try {
+    const workflow = JSON.parse(jsonStr) as GeneratedWorkflow;
+    if (workflow.name && workflow.steps && Array.isArray(workflow.steps)) {
+      workflow.steps = workflow.steps.map((step, i) => ({
+        step_name: step.step_name || `Step ${i + 1}`,
+        step_type: step.step_type || 'ai',
+        ai_model: step.ai_model || '',
+        prompt_template: step.prompt_template || '',
+        output_format: step.output_format || 'text',
+        executor_config: step.executor_config,
+      }));
+      workflow.requiredInputs = workflow.requiredInputs || [];
+      return workflow;
+    }
+  } catch (e) {
+    // JSON parse failed
+  }
+  return null;
 }
 
 function parseAssistantResponse(content: string): AssistantResponse {
@@ -171,40 +185,45 @@ function parseAssistantResponse(content: string): AssistantResponse {
     message: content,
   };
 
-  // Extract workflow JSON from the response
-  const workflowMatch = content.match(/```workflow-json\s*\n([\s\S]*?)\n\s*```/);
-  if (workflowMatch) {
-    try {
-      const workflow = JSON.parse(workflowMatch[1]) as GeneratedWorkflow;
-
-      // Validate the workflow structure
-      if (workflow.name && workflow.steps && Array.isArray(workflow.steps)) {
-        // Ensure all steps have required fields with defaults
-        workflow.steps = workflow.steps.map((step, i) => ({
-          step_name: step.step_name || `Step ${i + 1}`,
-          step_type: step.step_type || 'ai',
-          ai_model: step.ai_model || '',
-          prompt_template: step.prompt_template || '',
-          output_format: step.output_format || 'text',
-          executor_config: step.executor_config,
-        }));
-
-        workflow.requiredInputs = workflow.requiredInputs || [];
-        result.workflow = workflow;
-      }
-    } catch (e) {
-      // JSON parse failed — workflow stays undefined, message stays as-is
+  // Strategy 1: Look for ```workflow-json fences (preferred)
+  let match = content.match(/```workflow-json\s*\n?([\s\S]*?)\n?\s*```/);
+  if (match) {
+    const workflow = tryParseWorkflow(match[1]);
+    if (workflow) {
+      result.workflow = workflow;
+      result.message = content.replace(/```workflow-json\s*\n?[\s\S]*?\n?\s*```/, '').trim();
     }
+  }
 
-    // Remove the JSON block from the message for cleaner display
-    result.message = content.replace(/```workflow-json\s*\n[\s\S]*?\n\s*```/, '').trim();
+  // Strategy 2: Fall back to ```json fences
+  if (!result.workflow) {
+    match = content.match(/```json\s*\n?([\s\S]*?)\n?\s*```/);
+    if (match) {
+      const workflow = tryParseWorkflow(match[1]);
+      if (workflow) {
+        result.workflow = workflow;
+        result.message = content.replace(/```json\s*\n?[\s\S]*?\n?\s*```/, '').trim();
+      }
+    }
+  }
+
+  // Strategy 3: Fall back to raw JSON with "name" + "steps" keys
+  if (!result.workflow) {
+    const rawMatch = content.match(/(\{[\s\S]*"name"\s*:[\s\S]*"steps"\s*:\s*\[[\s\S]*\][\s\S]*\})/);
+    if (rawMatch) {
+      const workflow = tryParseWorkflow(rawMatch[1]);
+      if (workflow) {
+        result.workflow = workflow;
+        // Don't strip raw JSON from message — it might remove meaningful content
+      }
+    }
   }
 
   // Extract suggestions if present (look for numbered lists at the end)
-  const suggestionsMatch = result.message.match(/(?:suggestions?|refinements?|ideas?)[:\s]*\n((?:\s*[-\d.]+\s*.+\n?)+)/i);
+  const suggestionsMatch = result.message.match(/(?:suggestions?|refinements?|ideas?|建议|优化)[:\s：]*\n((?:\s*[-\d.]+[.、)）]\s*.+\n?)+)/i);
   if (suggestionsMatch) {
     const lines = suggestionsMatch[1].split('\n')
-      .map(line => line.replace(/^\s*[-\d.]+\s*/, '').trim())
+      .map(line => line.replace(/^\s*[-\d.]+[.、)）]\s*/, '').trim())
       .filter(line => line.length > 0);
     if (lines.length > 0) {
       result.suggestions = lines;
@@ -229,18 +248,40 @@ export async function generateWorkflow(
   }
 
   const modelId = selectAssistantModel();
-  const prompt = buildConversationPrompt(messages);
+  const systemPrompt = buildSystemPrompt();
 
-  const response = await callAIByModel(modelId, prompt, {
+  // Build multi-turn messages, with a format reminder on the last user message
+  const apiMessages = messages.map((msg, i) => {
+    if (i === messages.length - 1 && msg.role === 'user') {
+      return {
+        role: msg.role,
+        content: msg.content +
+          '\n\n[IMPORTANT: If you generate a workflow, you MUST include a ```workflow-json code block with the complete JSON structure. Do not omit it.]',
+      };
+    }
+    return { role: msg.role, content: msg.content };
+  });
+
+  const response = await callAIByModel(modelId, '', {
     temperature: 0.7,
-    maxTokens: 4000,
+    maxTokens: 16000,
+    systemMessage: systemPrompt,
+    messages: apiMessages,
   });
 
   if (!response.success) {
     throw new Error(response.error || 'AI generation failed');
   }
 
-  return parseAssistantResponse(response.content);
+  const parsed = parseAssistantResponse(response.content);
+
+  if (!parsed.workflow) {
+    console.warn('[WorkflowAssistant] No workflow JSON extracted from AI response. Response length:', response.content.length,
+      '| Has workflow-json fence:', /```workflow-json/.test(response.content),
+      '| Has json fence:', /```json/.test(response.content));
+  }
+
+  return parsed;
 }
 
 export async function saveWorkflowAsRecipe(

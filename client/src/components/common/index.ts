@@ -6,3 +6,4 @@ export { Layout } from './Layout';
 export { DynamicInput } from './DynamicInput';
 export { TranslatedText } from './TranslatedText';
 export { Notifications } from './Notifications';
+export { ExecutorConfigFields } from './ExecutorConfigFields';

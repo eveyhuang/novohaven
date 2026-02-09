@@ -140,6 +140,11 @@ export interface ImageData {
   mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface AIServiceConfig {
   temperature?: number;
   maxTokens?: number;
@@ -149,6 +154,9 @@ export interface AIServiceConfig {
   numberOfImages?: number;
   aspectRatio?: '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
   negativePrompt?: string;
+  // Multi-turn conversation support
+  systemMessage?: string;
+  messages?: ChatMessage[];
 }
 
 export interface GeneratedImage {

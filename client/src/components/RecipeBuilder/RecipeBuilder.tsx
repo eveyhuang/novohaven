@@ -2,11 +2,12 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Recipe, RecipeStep, AIModel } from '../../types';
 import api, { ExecutorInfo } from '../../services/api';
-import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal } from '../common';
+import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, ExecutorConfigFields } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
 
 // Extract user input variables from a single prompt template (excludes step outputs and company standards)
-function extractInputsFromPrompt(promptTemplate: string): string[] {
+function extractInputsFromPrompt(promptTemplate: string | null | undefined): string[] {
+  if (!promptTemplate) return [];
   const variables: string[] = [];
   const matches = promptTemplate.match(/\{\{([^}]+)\}\}/g) || [];
   matches.forEach((match) => {
@@ -389,7 +390,7 @@ export function RecipeBuilder() {
                   placeholder={t('stepNamePlaceholder')}
                 />
 
-                {/* Scraping Step UI */}
+                {/* Step type-specific configuration */}
                 {selectedStep.step_type === 'scraping' ? (
                   <div className="space-y-4">
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -445,7 +446,7 @@ export function RecipeBuilder() {
                       ]}
                     />
                   </div>
-                ) : (
+                ) : selectedStep.step_type === 'ai' || !selectedStep.step_type ? (
                   /* AI Step UI */
                   <>
                     <Select
@@ -526,6 +527,14 @@ export function RecipeBuilder() {
                       </div>
                     </div>
                   </>
+                ) : (
+                  /* Dynamic executor config (script, http, transform, etc.) */
+                  <ExecutorConfigFields
+                    stepType={selectedStep.step_type!}
+                    executors={executors}
+                    executorConfig={selectedStep.executor_config || '{}'}
+                    onConfigChange={(config) => updateStep(selectedStepIndex!, { executor_config: config })}
+                  />
                 )}
               </CardBody>
             </Card>

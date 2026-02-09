@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Recipe, RecipeStep, AIModel, InputTypeConfig, TemplateInputConfig } from '../../types';
-import api from '../../services/api';
-import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, DynamicInput, TranslatedText } from '../common';
+import api, { ExecutorInfo } from '../../services/api';
+import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, DynamicInput, TranslatedText, ExecutorConfigFields } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
 import { useNotifications } from '../../context/NotificationContext';
 
@@ -26,6 +26,7 @@ export function RecipeRunner() {
   const [inputValues, setInputValues] = useState<Record<string, any>>({});
   const [inputConfigs, setInputConfigs] = useState<Record<string, InputTypeConfig>>({});
   const [models, setModels] = useState<AIModel[]>([]);
+  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +36,7 @@ export function RecipeRunner() {
 
   useEffect(() => {
     loadModels();
+    loadExecutors();
     if (id) {
       loadRecipe(parseInt(id));
     }
@@ -46,6 +48,15 @@ export function RecipeRunner() {
       setModels(all);
     } catch (err: any) {
       console.error('Failed to load models:', err);
+    }
+  };
+
+  const loadExecutors = async () => {
+    try {
+      const data = await api.getExecutors();
+      setExecutors(data);
+    } catch (err: any) {
+      console.error('Failed to load executors:', err);
     }
   };
 
@@ -575,7 +586,7 @@ export function RecipeRunner() {
                         </div>
                       </div>
                     </div>
-                  ) : (
+                  ) : step.step_type === 'ai' || !step.step_type ? (
                     /* AI Step UI */
                     <>
                       <Select
@@ -648,6 +659,14 @@ export function RecipeRunner() {
                         </div>
                       </div>
                     </>
+                  ) : (
+                    /* Dynamic executor config (script, http, transform, etc.) */
+                    <ExecutorConfigFields
+                      stepType={step.step_type!}
+                      executors={executors}
+                      executorConfig={step.executor_config || '{}'}
+                      onConfigChange={(config) => updateStep(index, { executor_config: config })}
+                    />
                   )}
                 </CardBody>
               )}

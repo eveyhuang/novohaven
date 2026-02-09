@@ -59,29 +59,42 @@ async function callOpenAI(
   try {
     const client = getOpenAIClient();
 
-    // Build message content - handle vision if images are provided
-    let messageContent: OpenAI.Chat.ChatCompletionContentPart[] | string;
+    // Build messages array
+    let messages: OpenAI.Chat.ChatCompletionMessageParam[];
 
-    if (config.images && config.images.length > 0) {
-      // Vision request with images
-      messageContent = [
-        { type: 'text', text: prompt },
-        ...config.images.map((img) => ({
-          type: 'image_url' as const,
-          image_url: {
-            url: img.base64.startsWith('data:')
-              ? img.base64
-              : `data:${img.mediaType};base64,${img.base64}`,
-          },
-        })),
-      ];
+    if (config.messages && config.messages.length > 0) {
+      // Multi-turn mode with optional system message
+      messages = [];
+      if (config.systemMessage) {
+        messages.push({ role: 'system', content: config.systemMessage });
+      }
+      for (const msg of config.messages) {
+        messages.push({ role: msg.role, content: msg.content });
+      }
     } else {
-      messageContent = prompt;
+      // Legacy single-prompt mode
+      let messageContent: OpenAI.Chat.ChatCompletionContentPart[] | string;
+      if (config.images && config.images.length > 0) {
+        messageContent = [
+          { type: 'text', text: prompt },
+          ...config.images.map((img) => ({
+            type: 'image_url' as const,
+            image_url: {
+              url: img.base64.startsWith('data:')
+                ? img.base64
+                : `data:${img.mediaType};base64,${img.base64}`,
+            },
+          })),
+        ];
+      } else {
+        messageContent = prompt;
+      }
+      messages = [{ role: 'user', content: messageContent }];
     }
 
     const response = await client.chat.completions.create({
       model,
-      messages: [{ role: 'user', content: messageContent }],
+      messages,
       temperature: config.temperature ?? 0.7,
       max_tokens: config.maxTokens ?? 2000,
       top_p: config.topP ?? 1,
@@ -116,32 +129,43 @@ async function callAnthropic(
   try {
     const client = getAnthropicClient();
 
-    // Build message content - handle vision if images are provided
-    let messageContent: Anthropic.MessageParam['content'];
+    // Build messages array
+    let apiMessages: Anthropic.MessageParam[];
 
-    if (config.images && config.images.length > 0) {
-      // Vision request with images
-      messageContent = [
-        ...config.images.map((img) => ({
-          type: 'image' as const,
-          source: {
-            type: 'base64' as const,
-            media_type: img.mediaType,
-            data: img.base64.startsWith('data:')
-              ? img.base64.split(',')[1] // Extract base64 part after data:mime;base64,
-              : img.base64,
-          },
-        })),
-        { type: 'text' as const, text: prompt },
-      ];
+    if (config.messages && config.messages.length > 0) {
+      // Multi-turn mode
+      apiMessages = config.messages.map(msg => ({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+      }));
     } else {
-      messageContent = prompt;
+      // Legacy single-prompt mode
+      let messageContent: Anthropic.MessageParam['content'];
+      if (config.images && config.images.length > 0) {
+        messageContent = [
+          ...config.images.map((img) => ({
+            type: 'image' as const,
+            source: {
+              type: 'base64' as const,
+              media_type: img.mediaType,
+              data: img.base64.startsWith('data:')
+                ? img.base64.split(',')[1]
+                : img.base64,
+            },
+          })),
+          { type: 'text' as const, text: prompt },
+        ];
+      } else {
+        messageContent = prompt;
+      }
+      apiMessages = [{ role: 'user', content: messageContent }];
     }
 
     const response = await client.messages.create({
       model,
       max_tokens: config.maxTokens ?? 2000,
-      messages: [{ role: 'user', content: messageContent }],
+      ...(config.systemMessage ? { system: config.systemMessage } : {}),
+      messages: apiMessages,
     });
 
     const content = response.content[0]?.type === 'text'
@@ -175,38 +199,52 @@ async function callGoogle(
 ): Promise<AIResponse> {
   try {
     const client = getGoogleClient();
-    const generativeModel = client.getGenerativeModel({
+    const modelOptions: any = {
       model,
       generationConfig: {
         temperature: config.temperature ?? 0.7,
         maxOutputTokens: config.maxTokens ?? 2000,
         topP: config.topP ?? 1,
       },
-    });
-
-    // Build content parts - handle vision if images are provided
-    let contentParts: any[];
-
-    if (config.images && config.images.length > 0) {
-      // Vision request with images
-      contentParts = [
-        ...config.images.map((img) => ({
-          inlineData: {
-            mimeType: img.mediaType,
-            data: img.base64.startsWith('data:')
-              ? img.base64.split(',')[1] // Extract base64 part after data:mime;base64,
-              : img.base64,
-          },
-        })),
-        { text: prompt },
-      ];
-    } else {
-      contentParts = [{ text: prompt }];
+    };
+    if (config.systemMessage) {
+      modelOptions.systemInstruction = { parts: [{ text: config.systemMessage }] };
     }
+    const generativeModel = client.getGenerativeModel(modelOptions);
 
-    const result = await generativeModel.generateContent(contentParts);
-    const response = result.response;
-    const content = response.text();
+    let content: string;
+
+    if (config.messages && config.messages.length > 0) {
+      // Multi-turn mode using chat
+      const history = config.messages.slice(0, -1).map(msg => ({
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }],
+      }));
+      const lastMessage = config.messages[config.messages.length - 1];
+      const chat = generativeModel.startChat({ history });
+      const result = await chat.sendMessage(lastMessage.content);
+      content = result.response.text();
+    } else {
+      // Legacy single-prompt mode
+      let contentParts: any[];
+      if (config.images && config.images.length > 0) {
+        contentParts = [
+          ...config.images.map((img) => ({
+            inlineData: {
+              mimeType: img.mediaType,
+              data: img.base64.startsWith('data:')
+                ? img.base64.split(',')[1]
+                : img.base64,
+            },
+          })),
+          { text: prompt },
+        ];
+      } else {
+        contentParts = [{ text: prompt }];
+      }
+      const result = await generativeModel.generateContent(contentParts);
+      content = result.response.text();
+    }
 
     return {
       success: true,

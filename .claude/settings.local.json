@@ -33,5 +33,6 @@
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "github"
-  ]
+  ],
+  "plansDir": ".claude/plans"
 }
