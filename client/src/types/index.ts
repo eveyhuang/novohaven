@@ -19,7 +19,7 @@ export interface Recipe {
   required_inputs?: string[];
 }
 
-export type StepType = 'ai' | 'scraping';
+export type StepType = 'ai' | 'scraping' | 'script' | 'browser' | 'http' | 'transform' | string;
 
 export interface RecipeStep {
   id?: number;
@@ -33,6 +33,7 @@ export interface RecipeStep {
   output_format: 'text' | 'json' | 'markdown' | 'image';
   model_config?: string;
   api_config?: string; // For non-AI steps: { service: 'brightdata', endpoint: 'scrape_reviews' }
+  executor_config?: string; // JSON: executor-specific configuration
   created_at?: string;
 }
 

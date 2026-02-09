@@ -90,7 +90,8 @@ router.post('/', (req: Request, res: Response) => {
           step.output_format || 'text',
           step.model_config || null,
           step.step_type || 'ai',
-          step.api_config || null
+          step.api_config || null,
+          step.executor_config || null
         );
       });
     }
@@ -145,7 +146,8 @@ router.put('/:id', (req: Request, res: Response) => {
           step.output_format || 'text',
           step.model_config || null,
           step.step_type || 'ai',
-          step.api_config || null
+          step.api_config || null,
+          step.executor_config || null
         );
       });
     }
@@ -220,7 +222,8 @@ router.post('/:id/clone', (req: Request, res: Response) => {
         step.output_format,
         step.model_config || null,
         step.step_type || 'ai',
-        step.api_config || null
+        step.api_config || null,
+        step.executor_config || null
       );
     });
 

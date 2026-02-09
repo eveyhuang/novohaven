@@ -1,17 +1,12 @@
 import { queries } from '../models/database';
-import { callAIByModel } from './aiService';
-import { compilePrompt, CompilePromptContext, validateInputs } from './promptParser';
-import { scrapeReviews, isBrightDataConfigured } from './brightDataService';
-import { parseReviewCSV } from './csvParserService';
-import { logUsage } from './usageTrackingService';
+import { getExecutor } from '../executors/registry';
+import { StepExecutorContext } from '../executors/StepExecutor';
 import {
   WorkflowExecution,
   StepExecution,
   RecipeStep,
   ExecutionStatus,
   StepExecutionStatus,
-  ModelConfig,
-  ScrapingPlatform,
 } from '../types';
 
 export interface ExecutionResult {
@@ -226,67 +221,79 @@ async function executeWorkflowWithSteps(
   );
   queries.updateExecutionStatus('running', step.step_order, executionId);
 
-  // Handle different step types
-  if (step.step_type === 'scraping') {
-    // Execute scraping step
-    return executeScrapingStep(
-      executionId,
-      userId,
-      userInputs,
-      step,
-      nextStepExecution,
-      steps,
-      stepExecutions
-    );
-  }
+  // Dispatch to the appropriate executor via the registry
+  const executor = getExecutor(step.step_type || 'ai') || getExecutor('ai')!;
 
-  // Execute AI step (default behavior)
-  // Compile the prompt
-  const context: CompilePromptContext = {
+  const executorContext: StepExecutorContext = {
     userId,
+    executionId,
+    stepExecution: nextStepExecution,
     userInputs,
-    stepExecutions: stepExecutions.filter(se => se.status === 'completed'),
+    completedStepExecutions: stepExecutions.filter(se => se.status === 'completed'),
   };
 
-  const { compiledPrompt, unresolvedVariables, images } = compilePrompt(
-    step.prompt_template || '',
-    context
-  );
+  try {
+    const result = await executor.execute(step, executorContext);
 
-  if (unresolvedVariables.length > 0) {
-    const errorMsg = `Unresolved variables: ${unresolvedVariables.join(', ')}`;
-    queries.setStepExecutionError('failed', errorMsg, nextStepExecution.id);
-    queries.completeExecution('failed', executionId);
-    return {
-      success: false,
-      executionId,
-      status: 'failed',
-      currentStep: step.step_order,
-      stepResults: [],
-      error: errorMsg,
-    };
-  }
-
-  // Parse model config
-  let modelConfig: ModelConfig = {};
-  if (step.model_config) {
-    try {
-      modelConfig = JSON.parse(step.model_config);
-    } catch {
-      // Use defaults if config is invalid
+    if (!result.success) {
+      queries.setStepExecutionError('failed', result.error || 'Step execution failed', nextStepExecution.id);
+      queries.updateExecutionStatus('paused', step.step_order, executionId);
+      return {
+        success: false,
+        executionId,
+        status: 'paused',
+        currentStep: step.step_order,
+        stepResults: [{
+          stepId: step.id,
+          stepOrder: step.step_order,
+          stepName: step.step_name,
+          status: 'failed',
+          error: result.error,
+        }],
+        error: result.error,
+      };
     }
-  }
 
-  // Add images to model config if present
-  if (images.length > 0) {
-    (modelConfig as any).images = images;
-  }
+    // Build output data from executor result
+    const outputData = JSON.stringify({
+      content: result.content,
+      ...result.metadata,
+    });
 
-  // Call AI
-  const aiResponse = await callAIByModel(step.ai_model, compiledPrompt, modelConfig);
+    queries.updateStepExecution(
+      'awaiting_review',
+      outputData,
+      result.modelUsed || executor.type,
+      result.promptUsed || '',
+      nextStepExecution.id
+    );
 
-  if (!aiResponse.success) {
-    queries.setStepExecutionError('failed', aiResponse.error || 'AI call failed', nextStepExecution.id);
+    // Pause execution for review
+    queries.updateExecutionStatus('paused', step.step_order, executionId);
+
+    // Get updated step executions
+    const updatedStepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
+
+    return {
+      success: true,
+      executionId,
+      status: 'paused',
+      currentStep: step.step_order,
+      stepResults: updatedStepExecutions.map(se => {
+        const stepDef = steps.find(s => s.id === se.step_id || s.step_order === se.step_order);
+        return {
+          stepId: se.step_id,
+          stepOrder: se.step_order,
+          stepName: stepDef?.step_name || 'Unknown',
+          status: se.status,
+          output: se.output_data ? JSON.parse(se.output_data).content : undefined,
+          error: se.error_message || undefined,
+        };
+      }),
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Step execution failed';
+    queries.setStepExecutionError('failed', errorMsg, nextStepExecution.id);
     queries.updateExecutionStatus('paused', step.step_order, executionId);
     return {
       success: false,
@@ -298,51 +305,11 @@ async function executeWorkflowWithSteps(
         stepOrder: step.step_order,
         stepName: step.step_name,
         status: 'failed',
-        error: aiResponse.error,
+        error: errorMsg,
       }],
-      error: aiResponse.error,
+      error: errorMsg,
     };
   }
-
-  // Update step execution with results (including generated images if present)
-  const outputData = JSON.stringify({
-    content: aiResponse.content,
-    model: aiResponse.model,
-    usage: aiResponse.usage,
-    generatedImages: aiResponse.generatedImages,
-  });
-
-  queries.updateStepExecution(
-    'awaiting_review',
-    outputData,
-    aiResponse.model,
-    compiledPrompt,
-    nextStepExecution.id
-  );
-
-  // Pause execution for review
-  queries.updateExecutionStatus('paused', step.step_order, executionId);
-
-  // Get updated step executions
-  const updatedStepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
-
-  return {
-    success: true,
-    executionId,
-    status: 'paused',
-    currentStep: step.step_order,
-    stepResults: updatedStepExecutions.map(se => {
-      const stepDef = steps.find(s => s.id === se.step_id || s.step_order === se.step_order);
-      return {
-        stepId: se.step_id,
-        stepOrder: se.step_order,
-        stepName: stepDef?.step_name || 'Unknown',
-        status: se.status,
-        output: se.output_data ? JSON.parse(se.output_data).content : undefined,
-        error: se.error_message || undefined,
-      };
-    }),
-  };
 }
 
 // Execute the workflow from current step (legacy - fetches steps from DB)
@@ -382,133 +349,8 @@ async function executeWorkflow(
     };
   }
 
-  // Execute the step
-  const step = steps.find(s => s.id === nextStepExecution.step_id);
-  if (!step) {
-    queries.setStepExecutionError('failed', 'Step definition not found', nextStepExecution.id);
-    queries.completeExecution('failed', executionId);
-    return {
-      success: false,
-      executionId,
-      status: 'failed',
-      currentStep: currentStepOrder,
-      stepResults: [],
-      error: 'Step definition not found',
-    };
-  }
-
-  // Update step status to running
-  queries.updateStepExecution(
-    'running',
-    null,
-    null,
-    null,
-    nextStepExecution.id
-  );
-  queries.updateExecutionStatus('running', step.step_order, executionId);
-
-  // Compile the prompt
-  const context: CompilePromptContext = {
-    userId,
-    userInputs,
-    stepExecutions: stepExecutions.filter(se => se.status === 'completed'),
-  };
-
-  const { compiledPrompt, unresolvedVariables, images } = compilePrompt(
-    step.prompt_template,
-    context
-  );
-
-  if (unresolvedVariables.length > 0) {
-    const errorMsg = `Unresolved variables: ${unresolvedVariables.join(', ')}`;
-    queries.setStepExecutionError('failed', errorMsg, nextStepExecution.id);
-    queries.completeExecution('failed', executionId);
-    return {
-      success: false,
-      executionId,
-      status: 'failed',
-      currentStep: step.step_order,
-      stepResults: [],
-      error: errorMsg,
-    };
-  }
-
-  // Parse model config
-  let modelConfig: ModelConfig = {};
-  if (step.model_config) {
-    try {
-      modelConfig = JSON.parse(step.model_config);
-    } catch {
-      // Use defaults if config is invalid
-    }
-  }
-
-  // Add images to model config if present
-  if (images.length > 0) {
-    (modelConfig as any).images = images;
-  }
-
-  // Call AI
-  const aiResponse = await callAIByModel(step.ai_model, compiledPrompt, modelConfig);
-
-  if (!aiResponse.success) {
-    queries.setStepExecutionError('failed', aiResponse.error || 'AI call failed', nextStepExecution.id);
-    queries.updateExecutionStatus('paused', step.step_order, executionId);
-    return {
-      success: false,
-      executionId,
-      status: 'paused',
-      currentStep: step.step_order,
-      stepResults: [{
-        stepId: step.id,
-        stepOrder: step.step_order,
-        stepName: step.step_name,
-        status: 'failed',
-        error: aiResponse.error,
-      }],
-      error: aiResponse.error,
-    };
-  }
-
-  // Update step execution with results (including generated images if present)
-  const outputData = JSON.stringify({
-    content: aiResponse.content,
-    model: aiResponse.model,
-    usage: aiResponse.usage,
-    generatedImages: aiResponse.generatedImages,
-  });
-
-  queries.updateStepExecution(
-    'awaiting_review',
-    outputData,
-    aiResponse.model,
-    compiledPrompt,
-    nextStepExecution.id
-  );
-
-  // Pause execution for review
-  queries.updateExecutionStatus('paused', step.step_order, executionId);
-
-  // Get updated step executions
-  const updatedStepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
-
-  return {
-    success: true,
-    executionId,
-    status: 'paused',
-    currentStep: step.step_order,
-    stepResults: updatedStepExecutions.map(se => {
-      const stepDef = steps.find(s => s.id === se.step_id);
-      return {
-        stepId: se.step_id,
-        stepOrder: se.step_order,
-        stepName: stepDef?.step_name || 'Unknown',
-        status: se.status,
-        output: se.output_data ? JSON.parse(se.output_data).content : undefined,
-        error: se.error_message || undefined,
-      };
-    }),
-  };
+  // Delegate to executeWorkflowWithSteps which uses the executor registry
+  return executeWorkflowWithSteps(executionId, userId, userInputs, steps);
 }
 
 // Approve a step and continue execution
@@ -644,35 +486,82 @@ export async function retryStep(
     stepExecutionId
   );
 
-  // Use modified prompt or compile from template
   const stepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
 
-  let promptToUse = modifiedPrompt;
-  if (!promptToUse) {
-    const context: CompilePromptContext = {
-      userId,
-      userInputs,
-      stepExecutions: stepExecutions.filter(se => se.status === 'completed'),
-    };
-    const { compiledPrompt } = compilePrompt(step.prompt_template, context);
-    promptToUse = compiledPrompt;
-  }
+  // If a modified prompt is provided, use it by overriding the step's prompt_template
+  const stepToExecute = modifiedPrompt
+    ? { ...step, prompt_template: modifiedPrompt }
+    : step;
 
-  // Parse model config
-  let modelConfig: ModelConfig = {};
-  if (step.model_config) {
-    try {
-      modelConfig = JSON.parse(step.model_config);
-    } catch {
-      // Use defaults
+  // Dispatch to the appropriate executor via the registry
+  const executor = getExecutor(step.step_type || 'ai') || getExecutor('ai')!;
+
+  const executorContext: StepExecutorContext = {
+    userId,
+    executionId,
+    stepExecution: stepExecution,
+    userInputs,
+    completedStepExecutions: stepExecutions.filter(se => se.status === 'completed'),
+  };
+
+  try {
+    const result = await executor.execute(stepToExecute, executorContext);
+
+    if (!result.success) {
+      queries.setStepExecutionError('failed', result.error || 'Step execution failed', stepExecutionId);
+      return {
+        success: false,
+        executionId,
+        status: 'paused',
+        currentStep: step.step_order,
+        stepResults: [{
+          stepId: step.id,
+          stepOrder: step.step_order,
+          stepName: step.step_name,
+          status: 'failed',
+          error: result.error,
+        }],
+        error: result.error,
+      };
     }
-  }
 
-  // Call AI
-  const aiResponse = await callAIByModel(step.ai_model, promptToUse, modelConfig);
+    const outputData = JSON.stringify({
+      content: result.content,
+      ...result.metadata,
+    });
 
-  if (!aiResponse.success) {
-    queries.setStepExecutionError('failed', aiResponse.error || 'AI call failed', stepExecutionId);
+    queries.updateStepExecution(
+      'awaiting_review',
+      outputData,
+      result.modelUsed || executor.type,
+      result.promptUsed || '',
+      stepExecutionId
+    );
+
+    // Get updated step executions
+    const updatedStepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
+    const steps = queries.getStepsByRecipeId(execution.recipe_id) as RecipeStep[];
+
+    return {
+      success: true,
+      executionId,
+      status: 'paused',
+      currentStep: step.step_order,
+      stepResults: updatedStepExecutions.map(se => {
+        const stepDef = steps.find(s => s.id === se.step_id);
+        return {
+          stepId: se.step_id,
+          stepOrder: se.step_order,
+          stepName: stepDef?.step_name || 'Unknown',
+          status: se.status,
+          output: se.output_data ? JSON.parse(se.output_data).content : undefined,
+          error: se.error_message || undefined,
+        };
+      }),
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Step retry failed';
+    queries.setStepExecutionError('failed', errorMsg, stepExecutionId);
     return {
       success: false,
       executionId,
@@ -683,49 +572,11 @@ export async function retryStep(
         stepOrder: step.step_order,
         stepName: step.step_name,
         status: 'failed',
-        error: aiResponse.error,
+        error: errorMsg,
       }],
-      error: aiResponse.error,
+      error: errorMsg,
     };
   }
-
-  // Update step execution with results (including generated images if present)
-  const outputData = JSON.stringify({
-    content: aiResponse.content,
-    model: aiResponse.model,
-    usage: aiResponse.usage,
-    generatedImages: aiResponse.generatedImages,
-  });
-
-  queries.updateStepExecution(
-    'awaiting_review',
-    outputData,
-    aiResponse.model,
-    promptToUse,
-    stepExecutionId
-  );
-
-  // Get updated step executions
-  const updatedStepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
-  const steps = queries.getStepsByRecipeId(execution.recipe_id) as RecipeStep[];
-
-  return {
-    success: true,
-    executionId,
-    status: 'paused',
-    currentStep: step.step_order,
-    stepResults: updatedStepExecutions.map(se => {
-      const stepDef = steps.find(s => s.id === se.step_id);
-      return {
-        stepId: se.step_id,
-        stepOrder: se.step_order,
-        stepName: stepDef?.step_name || 'Unknown',
-        status: se.status,
-        output: se.output_data ? JSON.parse(se.output_data).content : undefined,
-        error: se.error_message || undefined,
-      };
-    }),
-  };
 }
 
 // Get execution status with all details
@@ -766,252 +617,3 @@ export function getExecutionStatus(executionId: number): ExecutionResult | null 
   };
 }
 
-// Execute a scraping step
-async function executeScrapingStep(
-  executionId: number,
-  userId: number,
-  userInputs: Record<string, any>,
-  step: RecipeStep,
-  stepExecution: StepExecution,
-  steps: RecipeStep[],
-  stepExecutions: StepExecution[]
-): Promise<ExecutionResult> {
-  try {
-    // Parse API config to determine service
-    let apiConfig: { service: string; endpoint: string } = { service: 'brightdata', endpoint: 'scrape_reviews' };
-    if (step.api_config) {
-      try {
-        apiConfig = JSON.parse(step.api_config);
-      } catch {
-        // Use defaults
-      }
-    }
-
-    // Get input variables from input_config
-    let urls: string[] = [];
-    let csvData: string | undefined;
-    let platform: ScrapingPlatform | undefined;
-
-    // Check for URLs from user input
-    if (userInputs.product_urls) {
-      // Parse URLs - could be string with newlines or array
-      if (Array.isArray(userInputs.product_urls)) {
-        urls = userInputs.product_urls;
-      } else if (typeof userInputs.product_urls === 'string') {
-        urls = userInputs.product_urls
-          .split(/[\n,]/)
-          .map((url: string) => url.trim())
-          .filter((url: string) => url.length > 0);
-      }
-    }
-
-    // Check for CSV data (support both csv_data and csv_file variable names)
-    if (userInputs.csv_data) {
-      csvData = userInputs.csv_data;
-    } else if (userInputs.csv_file) {
-      // Handle file upload format - may be string content or object with content property
-      csvData = typeof userInputs.csv_file === 'string'
-        ? userInputs.csv_file
-        : userInputs.csv_file?.content || userInputs.csv_file;
-    }
-
-    // Check for platform specification
-    if (userInputs.platform) {
-      platform = userInputs.platform as ScrapingPlatform;
-    }
-
-    // Validate input - need either URLs or CSV data
-    if (urls.length === 0 && !csvData) {
-      const errorMsg = 'No product URLs or CSV data provided for scraping';
-      queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
-      queries.updateExecutionStatus('paused', step.step_order, executionId);
-      return {
-        success: false,
-        executionId,
-        status: 'paused',
-        currentStep: step.step_order,
-        stepResults: [{
-          stepId: step.id,
-          stepOrder: step.step_order,
-          stepName: step.step_name,
-          status: 'failed',
-          error: errorMsg,
-        }],
-        error: errorMsg,
-      };
-    }
-
-    let scrapedData: any[] = [];
-    let usageInfo: { requests_made: number; reviews_fetched: number } = { requests_made: 0, reviews_fetched: 0 };
-
-    // Process CSV data if provided
-    if (csvData) {
-      const parseResult = parseReviewCSV(csvData, platform);
-      if (parseResult.success && parseResult.data) {
-        scrapedData = parseResult.data;
-        usageInfo.reviews_fetched += parseResult.data.length;
-      } else if (!parseResult.success) {
-        // If CSV parse failed and we have no URLs, fail the step
-        if (urls.length === 0) {
-          const errorMsg = parseResult.error || 'Failed to parse CSV data';
-          queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
-          queries.updateExecutionStatus('paused', step.step_order, executionId);
-          return {
-            success: false,
-            executionId,
-            status: 'paused',
-            currentStep: step.step_order,
-            stepResults: [{
-              stepId: step.id,
-              stepOrder: step.step_order,
-              stepName: step.step_name,
-              status: 'failed',
-              error: errorMsg,
-            }],
-            error: errorMsg,
-          };
-        }
-      }
-    }
-
-    // Scrape URLs if provided
-    if (urls.length > 0) {
-      // Check if BrightData is configured - fail if not (don't use mock data)
-      if (!isBrightDataConfigured()) {
-        const errorMsg = 'BrightData is not configured. Please set BRIGHTDATA_API_KEY environment variable.';
-        queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
-        queries.updateExecutionStatus('paused', step.step_order, executionId);
-        return {
-          success: false,
-          executionId,
-          status: 'paused',
-          currentStep: step.step_order,
-          stepResults: [{
-            stepId: step.id,
-            stepOrder: step.step_order,
-            stepName: step.step_name,
-            status: 'failed',
-            error: errorMsg,
-          }],
-          error: errorMsg,
-        };
-      }
-
-      // Use actual BrightData scraping (no mock fallback)
-      const scrapingResult = await scrapeReviews(urls);
-
-      if (scrapingResult.success && scrapingResult.data) {
-        // Combine scraped data with any CSV data
-        for (const product of scrapingResult.data) {
-          scrapedData.push(...product.reviews.map(review => ({
-            ...review,
-            product_url: product.url,
-            product_name: product.product_name,
-            product_price: product.product_price,
-            product_features: product.product_features,
-          })));
-        }
-
-        if (scrapingResult.usage) {
-          usageInfo.requests_made += scrapingResult.usage.requests_made;
-          usageInfo.reviews_fetched += scrapingResult.usage.reviews_fetched;
-        }
-      } else if (!scrapingResult.success && scrapedData.length === 0) {
-        // If scraping failed and we have no CSV data, fail the step
-        const errorMsg = scrapingResult.error || 'Failed to scrape reviews from URLs';
-        queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
-        queries.updateExecutionStatus('paused', step.step_order, executionId);
-        return {
-          success: false,
-          executionId,
-          status: 'paused',
-          currentStep: step.step_order,
-          stepResults: [{
-            stepId: step.id,
-            stepOrder: step.step_order,
-            stepName: step.step_name,
-            status: 'failed',
-            error: errorMsg,
-          }],
-          error: errorMsg,
-        };
-      }
-    }
-
-    // Log usage for billing
-    logUsage(
-      userId,
-      apiConfig.service,
-      apiConfig.endpoint,
-      usageInfo.requests_made,
-      usageInfo.reviews_fetched
-    );
-
-    // Format output data
-    const outputContent = JSON.stringify({
-      reviews: scrapedData,
-      summary: {
-        total_reviews: scrapedData.length,
-        urls_processed: urls.length,
-        csv_rows_processed: csvData ? scrapedData.length - (urls.length > 0 ? scrapedData.length : 0) : 0,
-      }
-    }, null, 2);
-
-    const outputData = JSON.stringify({
-      content: outputContent,
-      service: apiConfig.service,
-      usage: usageInfo,
-      stepType: 'scraping',
-    });
-
-    queries.updateStepExecution(
-      'awaiting_review',
-      outputData,
-      `${apiConfig.service}:${apiConfig.endpoint}`,
-      `Scraped ${urls.length} URL(s), processed ${scrapedData.length} reviews`,
-      stepExecution.id
-    );
-
-    // Pause execution for review
-    queries.updateExecutionStatus('paused', step.step_order, executionId);
-
-    // Get updated step executions
-    const updatedStepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
-
-    return {
-      success: true,
-      executionId,
-      status: 'paused',
-      currentStep: step.step_order,
-      stepResults: updatedStepExecutions.map(se => {
-        const stepDef = steps.find(s => s.id === se.step_id || s.step_order === se.step_order);
-        return {
-          stepId: se.step_id,
-          stepOrder: se.step_order,
-          stepName: stepDef?.step_name || 'Unknown',
-          status: se.status,
-          output: se.output_data ? JSON.parse(se.output_data).content : undefined,
-          error: se.error_message || undefined,
-        };
-      }),
-    };
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Scraping step failed';
-    queries.setStepExecutionError('failed', errorMsg, stepExecution.id);
-    queries.updateExecutionStatus('paused', step.step_order, executionId);
-    return {
-      success: false,
-      executionId,
-      status: 'paused',
-      currentStep: step.step_order,
-      stepResults: [{
-        stepId: step.id,
-        stepOrder: step.step_order,
-        stepName: step.step_name,
-        status: 'failed',
-        error: errorMsg,
-      }],
-      error: errorMsg,
-    };
-  }
-}

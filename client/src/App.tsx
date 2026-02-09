@@ -11,6 +11,7 @@ import { ExecutionList, ExecutionView } from './components/WorkflowExecution';
 import { StandardsManager } from './components/CompanyStandards';
 import { OutputsGallery } from './components/OutputsGallery';
 import { UsageDashboard } from './components/ReviewAnalysis';
+import { AIWorkflowBuilder } from './components/WorkflowBuilder';
 
 function App() {
   return (
@@ -42,6 +43,9 @@ function App() {
 
             {/* Standards Routes */}
             <Route path="/standards" element={<StandardsManager />} />
+
+            {/* AI Workflow Builder */}
+            <Route path="/workflows/ai-builder" element={<AIWorkflowBuilder />} />
 
             {/* Usage Dashboard */}
             <Route path="/usage" element={<UsageDashboardPage />} />

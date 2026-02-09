@@ -268,6 +268,11 @@ class ApiClient {
     });
   }
 
+  // Executor endpoints
+  async getExecutors(): Promise<ExecutorInfo[]> {
+    return this.request<ExecutorInfo[]>('/executors');
+  }
+
   // Health check
   async healthCheck(): Promise<{ status: string; timestamp: string }> {
     return this.request<{ status: string; timestamp: string }>('/health');
@@ -366,6 +371,43 @@ class ApiClient {
   async getAdminUsage(): Promise<AdminUsageItem[]> {
     return this.request<AdminUsageItem[]>('/usage/admin');
   }
+
+  // Assistant endpoints
+  async assistantGenerate(messages: AssistantMessage[]): Promise<AssistantResponse> {
+    return this.request<AssistantResponse>('/assistant/generate', {
+      method: 'POST',
+      body: JSON.stringify({ messages }),
+    });
+  }
+
+  async assistantSave(
+    workflow: GeneratedWorkflow,
+    isTemplate?: boolean
+  ): Promise<{ success: boolean; recipeId: number; message: string }> {
+    return this.request('/assistant/save', {
+      method: 'POST',
+      body: JSON.stringify({ workflow, isTemplate }),
+    });
+  }
+}
+
+export interface ExecutorConfigField {
+  name: string;
+  label: string;
+  type: 'text' | 'textarea' | 'select' | 'number' | 'boolean' | 'json' | 'code';
+  required?: boolean;
+  defaultValue?: any;
+  options?: { value: string; label: string }[];
+  language?: string;
+  helpText?: string;
+}
+
+export interface ExecutorInfo {
+  type: string;
+  displayName: string;
+  icon: string;
+  description: string;
+  configSchema: { fields: ExecutorConfigField[] };
 }
 
 export interface OutputItem {
@@ -390,6 +432,33 @@ export interface OutputsResponse {
   markdown: OutputItem[];
   json: OutputItem[];
   images: OutputItem[];
+}
+
+export interface AssistantMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface GeneratedStep {
+  step_name: string;
+  step_type: string;
+  ai_model: string;
+  prompt_template: string;
+  output_format: 'text' | 'json' | 'markdown' | 'image';
+  executor_config?: Record<string, any>;
+}
+
+export interface GeneratedWorkflow {
+  name: string;
+  description: string;
+  steps: GeneratedStep[];
+  requiredInputs: { name: string; type: string; description: string }[];
+}
+
+export interface AssistantResponse {
+  message: string;
+  workflow?: GeneratedWorkflow;
+  suggestions?: string[];
 }
 
 export const api = new ApiClient();

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Recipe, RecipeStep, AIModel, InputType, InputTypeConfig, TemplateInputConfig, GeneratedImage, StepType } from '../../types';
-import api from '../../services/api';
+import api, { ExecutorInfo } from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, DynamicInput } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
 import { TranslationKey } from '../../i18n/translations';
@@ -60,6 +60,7 @@ export function TemplateEditor() {
     model_config: string;
     input_config: string;
     api_config: string;
+    executor_config: string;
   }>({
     name: '',
     description: '',
@@ -71,9 +72,11 @@ export function TemplateEditor() {
     model_config: JSON.stringify({ temperature: 0.7, maxTokens: 2000 }),
     input_config: JSON.stringify({ variables: {} }),
     api_config: '',
+    executor_config: '',
   });
 
   const [models, setModels] = useState<AIModel[]>([]);
+  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [isLoading, setIsLoading] = useState(!isNew);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +98,7 @@ export function TemplateEditor() {
 
   useEffect(() => {
     loadModels();
+    loadExecutors();
     if (!isNew && id) {
       loadTemplate(parseInt(id));
     }
@@ -106,6 +110,15 @@ export function TemplateEditor() {
       setModels(all);
     } catch (err: any) {
       console.error('Failed to load models:', err);
+    }
+  };
+
+  const loadExecutors = async () => {
+    try {
+      const data = await api.getExecutors();
+      setExecutors(data);
+    } catch (err: any) {
+      console.error('Failed to load executors:', err);
     }
   };
 
@@ -128,6 +141,7 @@ export function TemplateEditor() {
         model_config: step?.model_config || JSON.stringify({ temperature: 0.7, maxTokens: 2000 }),
         input_config: step?.input_config || JSON.stringify({ variables: {} }),
         api_config: step?.api_config || '',
+        executor_config: step?.executor_config || '',
       });
     } catch (err: any) {
       setError(err.message);
@@ -303,14 +317,14 @@ export function TemplateEditor() {
     }
 
     // Only require prompt_template for AI templates
-    if (template.step_type !== 'scraping' && !template.prompt_template.trim()) {
+    if (template.step_type === 'ai' && !template.prompt_template.trim()) {
       setTestError(t('promptTemplateRequired'));
       return;
     }
 
-    // Scraping templates can't be tested in the same way - they need actual API calls
-    if (template.step_type === 'scraping') {
-      setTestError('Scraping templates cannot be tested directly. Please run the template with actual URLs to test.');
+    // Non-AI templates can't be tested in the same way
+    if (template.step_type !== 'ai') {
+      setTestError('Only AI templates can be tested directly. Please run the template in a workflow to test.');
       return;
     }
 
@@ -388,7 +402,7 @@ export function TemplateEditor() {
       return;
     }
     // Only require prompt_template for AI templates
-    if (template.step_type !== 'scraping' && !template.prompt_template) {
+    if (template.step_type === 'ai' && !template.prompt_template) {
       setError(t('promptTemplateRequired'));
       return;
     }
@@ -410,6 +424,11 @@ export function TemplateEditor() {
       // Include api_config for scraping templates
       if (template.step_type === 'scraping' && template.api_config) {
         step.api_config = template.api_config;
+      }
+
+      // Include executor_config for non-AI/scraping types
+      if (template.executor_config) {
+        step.executor_config = template.executor_config;
       }
 
       if (isNew) {
@@ -484,20 +503,20 @@ export function TemplateEditor() {
               {t('delete')}
             </Button>
           )}
-          {template.step_type === 'scraping' ? (
-            /* For scraping templates, show Run Workflow button */
+          {template.step_type === 'ai' ? (
+            /* For AI templates, show Test Template button */
+            <Button variant="secondary" onClick={openTestPanel}>
+              <PlayIcon className="w-4 h-4 mr-2" />
+              {t('testTemplate')}
+            </Button>
+          ) : (
+            /* For non-AI templates, show Run Workflow button */
             !isNew && (
               <Button variant="secondary" onClick={() => navigate(`/recipes/${id}/run`)}>
                 <PlayIcon className="w-4 h-4 mr-2" />
                 {t('run')}
               </Button>
             )
-          ) : (
-            /* For AI templates, show Test Template button */
-            <Button variant="secondary" onClick={openTestPanel}>
-              <PlayIcon className="w-4 h-4 mr-2" />
-              {t('testTemplate')}
-            </Button>
           )}
           <Button onClick={handleSave} isLoading={isSaving}>
             {isNew ? t('createTemplate') : t('saveChanges')}
@@ -533,7 +552,35 @@ export function TemplateEditor() {
         </CardBody>
       </Card>
 
-      {/* Configuration - Different UI for scraping vs AI */}
+      {/* Step Type Selector */}
+      {executors.length > 0 && (
+        <Card>
+          <CardHeader>
+            <h2 className="font-semibold text-secondary-900">{t('stepType')}</h2>
+          </CardHeader>
+          <CardBody>
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+              {executors.map((exec) => (
+                <button
+                  key={exec.type}
+                  onClick={() => setTemplate({ ...template, step_type: exec.type as StepType })}
+                  className={`flex flex-col items-center p-4 rounded-lg border-2 transition-colors ${
+                    template.step_type === exec.type
+                      ? 'border-primary-500 bg-primary-50'
+                      : 'border-secondary-200 hover:border-secondary-300'
+                  }`}
+                >
+                  <span className="text-2xl mb-1">{exec.icon}</span>
+                  <span className="text-sm font-medium text-secondary-900">{exec.displayName}</span>
+                  <span className="text-xs text-secondary-500 mt-0.5 text-center">{exec.description.slice(0, 50)}</span>
+                </button>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Configuration - Dynamic based on step type */}
       {template.step_type === 'scraping' ? (
         /* Scraping Configuration */
         <Card>
@@ -601,7 +648,7 @@ export function TemplateEditor() {
             </div>
           </CardBody>
         </Card>
-      ) : (
+      ) : template.step_type === 'ai' ? (
         /* AI Configuration */
         <Card>
           <CardHeader>
@@ -689,6 +736,14 @@ export function TemplateEditor() {
             </div>
           </CardBody>
         </Card>
+      ) : (
+        /* Dynamic Executor Configuration (script, http, transform, etc.) */
+        <ExecutorConfigForm
+          stepType={template.step_type}
+          executors={executors}
+          executorConfig={template.executor_config}
+          onConfigChange={(config) => setTemplate({ ...template, executor_config: config })}
+        />
       )}
 
       {/* Input Variables */}
@@ -1191,6 +1246,171 @@ export function TemplateEditor() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+/**
+ * Dynamic config form for executor types (script, http, transform, etc.)
+ * Renders form fields based on the executor's config schema.
+ */
+function ExecutorConfigForm({
+  stepType,
+  executors,
+  executorConfig,
+  onConfigChange,
+}: {
+  stepType: string;
+  executors: ExecutorInfo[];
+  executorConfig: string;
+  onConfigChange: (config: string) => void;
+}) {
+  const executor = executors.find(e => e.type === stepType);
+  if (!executor) return null;
+
+  let config: Record<string, any> = {};
+  try {
+    config = executorConfig ? JSON.parse(executorConfig) : {};
+  } catch {
+    config = {};
+  }
+
+  const updateField = (name: string, value: any) => {
+    const updated = { ...config, [name]: value };
+    onConfigChange(JSON.stringify(updated));
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center space-x-2">
+          <span className="text-2xl">{executor.icon}</span>
+          <div>
+            <h2 className="font-semibold text-secondary-900">{executor.displayName} Configuration</h2>
+            <p className="text-sm text-secondary-500">{executor.description}</p>
+          </div>
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        {executor.configSchema.fields.map((field) => {
+          const value = config[field.name] ?? field.defaultValue ?? '';
+
+          switch (field.type) {
+            case 'select':
+              return (
+                <Select
+                  key={field.name}
+                  label={field.label}
+                  value={value}
+                  onChange={(e) => updateField(field.name, e.target.value)}
+                  options={field.options || []}
+                />
+              );
+
+            case 'textarea':
+              return (
+                <div key={field.name}>
+                  <TextArea
+                    label={field.label}
+                    value={value}
+                    onChange={(e) => updateField(field.name, e.target.value)}
+                    rows={6}
+                    className="font-mono text-sm"
+                  />
+                  {field.helpText && (
+                    <p className="mt-1 text-sm text-secondary-500">{field.helpText}</p>
+                  )}
+                </div>
+              );
+
+            case 'code':
+              return (
+                <div key={field.name}>
+                  <label className="block text-sm font-medium text-secondary-700 mb-1">
+                    {field.label}
+                    {field.required && <span className="text-red-500 ml-1">*</span>}
+                  </label>
+                  <textarea
+                    value={value}
+                    onChange={(e) => updateField(field.name, e.target.value)}
+                    rows={12}
+                    className="w-full px-3 py-2 border border-secondary-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm bg-secondary-50"
+                    placeholder={`Enter ${field.language || 'code'} here...`}
+                  />
+                  {field.helpText && (
+                    <p className="mt-1 text-sm text-secondary-500">{field.helpText}</p>
+                  )}
+                </div>
+              );
+
+            case 'number':
+              return (
+                <Input
+                  key={field.name}
+                  label={field.label}
+                  type="number"
+                  value={value}
+                  onChange={(e) => updateField(field.name, parseInt(e.target.value) || 0)}
+                />
+              );
+
+            case 'json':
+              return (
+                <div key={field.name}>
+                  <label className="block text-sm font-medium text-secondary-700 mb-1">
+                    {field.label}
+                  </label>
+                  <textarea
+                    value={typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
+                    onChange={(e) => {
+                      try {
+                        updateField(field.name, JSON.parse(e.target.value));
+                      } catch {
+                        // Allow invalid JSON while typing
+                        const updated = { ...config, [field.name]: e.target.value };
+                        onConfigChange(JSON.stringify(updated));
+                      }
+                    }}
+                    rows={4}
+                    className="w-full px-3 py-2 border border-secondary-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm"
+                    placeholder='{"key": "value"}'
+                  />
+                  {field.helpText && (
+                    <p className="mt-1 text-sm text-secondary-500">{field.helpText}</p>
+                  )}
+                </div>
+              );
+
+            case 'boolean':
+              return (
+                <div key={field.name} className="flex items-center space-x-3">
+                  <input
+                    type="checkbox"
+                    checked={!!value}
+                    onChange={(e) => updateField(field.name, e.target.checked)}
+                    className="rounded border-secondary-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <label className="text-sm font-medium text-secondary-700">{field.label}</label>
+                </div>
+              );
+
+            default: // 'text'
+              return (
+                <div key={field.name}>
+                  <Input
+                    label={field.label}
+                    value={value}
+                    onChange={(e) => updateField(field.name, e.target.value)}
+                    placeholder={field.helpText || ''}
+                  />
+                  {field.helpText && (
+                    <p className="mt-1 text-sm text-secondary-500">{field.helpText}</p>
+                  )}
+                </div>
+              );
+          }
+        })}
+      </CardBody>
+    </Card>
   );
 }
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Recipe, RecipeStep, AIModel } from '../../types';
-import api from '../../services/api';
+import api, { ExecutorInfo } from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
 
@@ -50,6 +50,7 @@ export function RecipeBuilder() {
     is_template: false,
   });
   const [models, setModels] = useState<AIModel[]>([]);
+  const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [templateRecipes, setTemplateRecipes] = useState<Recipe[]>([]);
   const [isLoading, setIsLoading] = useState(!isNew);
   const [isSaving, setIsSaving] = useState(false);
@@ -65,6 +66,7 @@ export function RecipeBuilder() {
 
   useEffect(() => {
     loadModels();
+    loadExecutors();
     loadTemplates();
     if (!isNew && id) {
       loadRecipe(parseInt(id));
@@ -78,6 +80,19 @@ export function RecipeBuilder() {
     } catch (err: any) {
       console.error('Failed to load models:', err);
     }
+  };
+
+  const loadExecutors = async () => {
+    try {
+      const data = await api.getExecutors();
+      setExecutors(data);
+    } catch (err: any) {
+      console.error('Failed to load executors:', err);
+    }
+  };
+
+  const getExecutorInfo = (stepType?: string) => {
+    return executors.find(e => e.type === (stepType || 'ai'));
   };
 
   const loadTemplates = async () => {
@@ -304,16 +319,14 @@ export function RecipeBuilder() {
                       key={index}
                       className={`p-4 cursor-pointer transition-colors ${
                         selectedStepIndex === index
-                          ? step.step_type === 'scraping' ? 'bg-blue-50' : 'bg-primary-50'
+                          ? 'bg-primary-50'
                           : 'hover:bg-secondary-50'
                       }`}
                       onClick={() => setSelectedStepIndex(index)}
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2">
-                          {step.step_type === 'scraping' && (
-                            <span className="text-lg">🔍</span>
-                          )}
+                          <span className="text-lg">{getExecutorInfo(step.step_type)?.icon || '🤖'}</span>
                           <div>
                             <span className="text-sm font-medium text-secondary-500">
                               Step {index + 1}
@@ -347,9 +360,9 @@ export function RecipeBuilder() {
                         </div>
                       </div>
                       <p className="text-sm text-secondary-500 mt-1">
-                        {step.step_type === 'scraping'
-                          ? t('brightDataScraping')
-                          : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
+                        {step.step_type === 'ai'
+                          ? models.find(m => m.id === step.ai_model)?.name || step.ai_model
+                          : getExecutorInfo(step.step_type)?.displayName || step.step_type}
                       </p>
                     </div>
                   ))}
@@ -588,27 +601,21 @@ export function RecipeBuilder() {
             templateRecipes.map((template) => {
               const step = template.steps?.[0];
               if (!step) return null;
-              const isScraping = step.step_type === 'scraping';
+              const execInfo = getExecutorInfo(step.step_type);
               return (
                 <div
                   key={template.id}
-                  className={`border rounded-lg p-4 hover:bg-secondary-50 cursor-pointer flex items-center justify-between ${
-                    isScraping ? 'border-blue-200 bg-blue-50/30' : 'border-secondary-200'
-                  }`}
+                  className="border border-secondary-200 rounded-lg p-4 hover:bg-secondary-50 cursor-pointer flex items-center justify-between"
                   onClick={() => addTemplateStep(step)}
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      {isScraping && <span className="text-lg">🔍</span>}
+                      <span className="text-lg">{execInfo?.icon || '🤖'}</span>
                       <h3 className="font-semibold text-secondary-900">{template.name}</h3>
-                      <span className={`text-xs px-2 py-0.5 rounded ${
-                        isScraping
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-secondary-100 text-secondary-600'
-                      }`}>
-                        {isScraping
-                          ? t('brightDataScraping')
-                          : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
+                      <span className="text-xs px-2 py-0.5 rounded bg-secondary-100 text-secondary-600">
+                        {step.step_type === 'ai'
+                          ? models.find(m => m.id === step.ai_model)?.name || step.ai_model
+                          : execInfo?.displayName || step.step_type}
                       </span>
                     </div>
                     {template.description && (

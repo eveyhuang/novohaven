@@ -245,7 +245,7 @@ export function ExecutionView() {
                             <TranslatedText text={step.step_name || ''} />
                           </h4>
                           <p className="text-sm text-secondary-500">
-                            {step.ai_model || step.ai_model_used}
+                            {step.ai_model_used || step.ai_model || 'AI'}
                           </p>
                         </div>
                       </div>

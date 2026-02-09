@@ -75,6 +75,20 @@ export function Dashboard() {
         </p>
       </div>
 
+      {/* Build with AI card */}
+      <Card hoverable onClick={() => navigate('/workflows/ai-builder')} className="bg-gradient-to-r from-primary-50 to-blue-50 border-primary-200">
+        <CardBody className="flex items-center gap-4 py-5">
+          <div className="text-3xl">{'\uD83E\uDD16'}</div>
+          <div className="flex-1">
+            <h2 className="text-lg font-semibold text-primary-900">{t('buildWithAI')}</h2>
+            <p className="text-sm text-primary-700">{t('buildWithAIDescription')}</p>
+          </div>
+          <Button size="sm" onClick={(e) => { e.stopPropagation(); navigate('/workflows/ai-builder'); }}>
+            {t('getStarted')}
+          </Button>
+        </CardBody>
+      </Card>
+
       {error && (
         <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
           {error}

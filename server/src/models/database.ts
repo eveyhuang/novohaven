@@ -90,12 +90,15 @@ export async function initializeDatabase(): Promise<void> {
     )
   `);
 
-  // Migration: Add step_type and api_config columns if they don't exist
+  // Migration: Add step_type, api_config, and executor_config columns if they don't exist
   try {
     db.run('ALTER TABLE recipe_steps ADD COLUMN step_type TEXT DEFAULT "ai"');
   } catch (e) { /* Column already exists */ }
   try {
     db.run('ALTER TABLE recipe_steps ADD COLUMN api_config TEXT');
+  } catch (e) { /* Column already exists */ }
+  try {
+    db.run('ALTER TABLE recipe_steps ADD COLUMN executor_config TEXT');
   } catch (e) { /* Column already exists */ }
 
   db.run(`
@@ -717,10 +720,10 @@ export const queries = {
   getStepById: (id: number) => getOne('SELECT * FROM recipe_steps WHERE id = ?', [id]),
   createStep: (recipeId: number, stepOrder: number, stepName: string, aiModel: string | null,
     promptTemplate: string | null, inputConfig: string | null, outputFormat: string, modelConfig: string | null,
-    stepType: string = 'ai', apiConfig: string | null = null) =>
-    run(`INSERT INTO recipe_steps (recipe_id, step_order, step_name, ai_model, prompt_template, input_config, output_format, model_config, step_type, api_config)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [recipeId, stepOrder, stepName, aiModel, promptTemplate, inputConfig, outputFormat, modelConfig, stepType, apiConfig]),
+    stepType: string = 'ai', apiConfig: string | null = null, executorConfig: string | null = null) =>
+    run(`INSERT INTO recipe_steps (recipe_id, step_order, step_name, ai_model, prompt_template, input_config, output_format, model_config, step_type, api_config, executor_config)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [recipeId, stepOrder, stepName, aiModel, promptTemplate, inputConfig, outputFormat, modelConfig, stepType, apiConfig, executorConfig]),
   updateStep: (stepName: string, aiModel: string, promptTemplate: string, inputConfig: string | null,
     outputFormat: string, modelConfig: string | null, id: number) =>
     run(`UPDATE recipe_steps SET step_name = ?, ai_model = ?, prompt_template = ?, input_config = ?, output_format = ?, model_config = ?

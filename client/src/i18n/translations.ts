@@ -124,6 +124,16 @@ export const translations = {
     usageTrackingDescription: 'BrightData API usage is tracked per user for billing purposes. Each URL scraped and each review fetched is counted towards usage.',
     brightDataScraping: 'BrightData Scraping',
 
+    // Step Types
+    stepType: 'Step Type',
+    stepTypeAI: 'AI Model',
+    stepTypeScraping: 'Web Scraping',
+    stepTypeScript: 'Script',
+    stepTypeHttp: 'HTTP Request',
+    stepTypeTransform: 'Data Transform',
+    stepTypeBrowser: 'Browser Automation',
+    executorConfig: 'Step Configuration',
+
     // Template Editor
     editTemplate: 'Edit Template',
     templateEditorSubtitle: 'Define a single-task template with its AI configuration',
@@ -317,6 +327,27 @@ export const translations = {
     downloadText: 'Download Text',
     viewExecution: 'View Execution',
 
+    // AI Workflow Builder
+    aiWorkflowBuilder: 'AI Workflow Builder',
+    aiWorkflowBuilderDescription: 'Describe your goal and let AI create a multi-step workflow for you',
+    buildWithAI: 'Build with AI',
+    buildWithAIDescription: 'Describe your goal in natural language and let AI create a complete workflow',
+    getStarted: 'Get Started',
+    backToDashboard: 'Back to Dashboard',
+    aiBuilderWelcome: 'What workflow do you want to create?',
+    aiBuilderWelcomeDescription: 'Describe your goal in plain language. I\'ll design a multi-step workflow with the right mix of AI, data processing, and API calls.',
+    aiBuilderExample1: 'Analyze product reviews and generate improvement suggestions',
+    aiBuilderExample2: 'Research competitors and create a comparison report',
+    aiBuilderExample3: 'Scrape reviews, clean data, and generate marketing copy',
+    aiBuilderPlaceholder: 'Describe the workflow you want to create...',
+    send: 'Send',
+    suggestions: 'Suggestions',
+    aiThinking: 'Thinking...',
+    workflowPreview: 'Workflow Preview',
+    noWorkflowYet: 'Your workflow will appear here once generated',
+    requiredInputs: 'Required Inputs',
+    saveAsRecipe: 'Save as Recipe',
+
     // Language
     language: 'Language',
     english: 'English',
@@ -445,6 +476,16 @@ export const translations = {
     usageTracking: '使用量跟踪',
     usageTrackingDescription: 'BrightData API 使用量按用户跟踪，用于计费。每个抓取的 URL 和每条获取的评论都会计入使用量。',
     brightDataScraping: 'BrightData 抓取',
+
+    // Step Types
+    stepType: '步骤类型',
+    stepTypeAI: 'AI 模型',
+    stepTypeScraping: '网页抓取',
+    stepTypeScript: '脚本',
+    stepTypeHttp: 'HTTP 请求',
+    stepTypeTransform: '数据转换',
+    stepTypeBrowser: '浏览器自动化',
+    executorConfig: '步骤配置',
 
     // Template Editor
     editTemplate: '编辑模板',
@@ -638,6 +679,27 @@ export const translations = {
     downloadMarkdown: '下载 Markdown',
     downloadText: '下载文本',
     viewExecution: '查看执行',
+
+    // AI Workflow Builder
+    aiWorkflowBuilder: 'AI 工作流构建器',
+    aiWorkflowBuilderDescription: '描述您的目标，让AI为您创建多步骤工作流',
+    buildWithAI: 'AI 智能构建',
+    buildWithAIDescription: '用自然语言描述您的目标，让AI创建完整的工作流',
+    getStarted: '开始使用',
+    backToDashboard: '返回仪表板',
+    aiBuilderWelcome: '您想创建什么工作流？',
+    aiBuilderWelcomeDescription: '用自然语言描述您的目标。我将设计一个包含AI、数据处理和API调用的多步骤工作流。',
+    aiBuilderExample1: '分析产品评论并生成改进建议',
+    aiBuilderExample2: '研究竞争对手并创建对比报告',
+    aiBuilderExample3: '抓取评论、清理数据并生成营销文案',
+    aiBuilderPlaceholder: '描述您想创建的工作流...',
+    send: '发送',
+    suggestions: '建议',
+    aiThinking: '思考中...',
+    workflowPreview: '工作流预览',
+    noWorkflowYet: '生成后工作流将显示在这里',
+    requiredInputs: '必需输入',
+    saveAsRecipe: '保存为工作流',
 
     // Language
     language: '语言',

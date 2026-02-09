@@ -13,6 +13,8 @@ import authRouter from './routes/auth';
 import outputsRouter from './routes/outputs';
 import scrapingRouter from './routes/scraping';
 import usageRouter from './routes/usage';
+import executorsRouter from './routes/executors';
+import assistantRouter from './routes/assistant';
 
 // Load environment variables from server directory
 // This ensures .env is loaded whether running from project root or server directory
@@ -58,6 +60,8 @@ app.use('/api/auth', authRouter);
 app.use('/api/outputs', outputsRouter);
 app.use('/api/scraping', scrapingRouter);
 app.use('/api/usage', usageRouter);
+app.use('/api/executors', executorsRouter);
+app.use('/api/assistant', assistantRouter);
 
 // 404 handler
 app.use((req, res) => {
