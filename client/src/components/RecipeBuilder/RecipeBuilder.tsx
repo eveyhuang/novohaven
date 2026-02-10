@@ -128,10 +128,10 @@ export function RecipeBuilder() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (): Promise<boolean> => {
     if (!recipe.name) {
       setError(t('recipeNameRequired'));
-      return;
+      return false;
     }
 
     setIsSaving(true);
@@ -155,13 +155,22 @@ export function RecipeBuilder() {
           name: recipe.name,
           description: recipe.description,
           steps,
-          is_template: false,
+          is_template: recipe.is_template || false,
         });
       }
+      return true;
     } catch (err: any) {
       setError(err.message);
+      return false;
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleSaveAndRun = async () => {
+    const saved = await handleSave();
+    if (saved && !isNew && id) {
+      navigate(`/recipes/${id}/run`);
     }
   };
 
@@ -237,7 +246,7 @@ export function RecipeBuilder() {
             {t('cancel')}
           </Button>
           {!isNew && (
-            <Button variant="secondary" onClick={() => navigate(`/recipes/${id}/run`)}>
+            <Button variant="secondary" onClick={handleSaveAndRun} isLoading={isSaving}>
               {t('run')}
             </Button>
           )}

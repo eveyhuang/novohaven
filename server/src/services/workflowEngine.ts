@@ -112,8 +112,8 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
   ];
 
   for (const step of steps) {
-    // Handle scraping steps - get inputs from input_config
-    if (step.step_type === 'scraping' && step.input_config) {
+    // Handle non-AI steps - get inputs from input_config
+    if (step.step_type && step.step_type !== 'ai' && step.input_config) {
       try {
         const inputConfig = JSON.parse(step.input_config);
         if (inputConfig.variables) {
@@ -142,7 +142,7 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
       continue;
     }
 
-    // Handle AI steps - get inputs from prompt_template
+    // Handle AI steps (and fallback) - get inputs from prompt_template
     let match;
     const template = step.prompt_template || '';
     while ((match = variableRegex.exec(template)) !== null) {

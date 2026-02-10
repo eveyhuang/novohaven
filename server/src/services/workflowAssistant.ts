@@ -306,10 +306,25 @@ export async function saveWorkflowAsRecipe(
   for (let i = 0; i < workflow.steps.length; i++) {
     const step = workflow.steps[i];
 
-    // Build input_config from requiredInputs that are referenced in this step's prompt
-    const stepVars = workflow.requiredInputs.filter(input =>
-      step.prompt_template.includes(`{{${input.name}}}`)
-    );
+    // Build input_config from requiredInputs that are referenced in this step
+    const stepVars = workflow.requiredInputs.filter(input => {
+      // Check prompt_template for variable references (AI steps)
+      if (step.prompt_template && step.prompt_template.includes(`{{${input.name}}}`)) {
+        return true;
+      }
+      // Check executor_config for variable references (script/http/transform steps)
+      if (step.executor_config) {
+        const configStr = JSON.stringify(step.executor_config);
+        if (configStr.includes(`{{${input.name}}}`)) {
+          return true;
+        }
+      }
+      // For scraping steps, associate url_list type inputs automatically
+      if (step.step_type === 'scraping' && input.type === 'url_list') {
+        return true;
+      }
+      return false;
+    });
 
     const inputConfig = stepVars.length > 0
       ? JSON.stringify({

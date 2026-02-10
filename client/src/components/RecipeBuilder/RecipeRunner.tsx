@@ -131,8 +131,8 @@ export function RecipeRunner() {
     ];
 
     for (const step of localSteps) {
-      // For scraping steps, get inputs from input_config
-      if (step.step_type === 'scraping' && step.input_config) {
+      // For non-AI steps, get inputs from input_config
+      if (step.step_type && step.step_type !== 'ai' && step.input_config) {
         try {
           const config = JSON.parse(step.input_config);
           if (config.variables) {
@@ -161,7 +161,7 @@ export function RecipeRunner() {
         continue;
       }
 
-      // For AI steps, get inputs from prompt_template
+      // For AI steps (and fallback), get inputs from prompt_template
       let match;
       const template = step.prompt_template || '';
       while ((match = variableRegex.exec(template)) !== null) {
@@ -273,9 +273,9 @@ export function RecipeRunner() {
       }
     }
 
-    // Check that all AI steps have prompts (scraping steps don't need prompts)
+    // Check that all AI steps have prompts (non-AI steps use executor_config instead)
     const emptyPromptSteps = localSteps.filter(s =>
-      s.step_type !== 'scraping' && (!s.prompt_template || !s.prompt_template.trim())
+      (s.step_type === 'ai' || !s.step_type) && (!s.prompt_template || !s.prompt_template.trim())
     );
     if (emptyPromptSteps.length > 0) {
       setError('All AI steps must have a prompt template');
