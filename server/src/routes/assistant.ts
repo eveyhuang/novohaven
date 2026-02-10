@@ -16,7 +16,8 @@ router.post('/generate', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'messages array is required' });
     }
 
-    const result = await generateWorkflow(messages);
+    const userId = req.user!.id;
+    const result = await generateWorkflow(messages, userId);
     res.json(result);
   } catch (error: any) {
     console.error('Assistant generate error:', error);

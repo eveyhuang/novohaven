@@ -27,7 +27,12 @@
       "Bash(node scrape_wayfair_reviews.js:*)",
       "Bash(npm install:*)",
       "mcp__larkmcp__im_v1_chat_list",
-      "mcp__larkmcp__im_v1_chat_create"
+      "mcp__larkmcp__im_v1_chat_create",
+      "Bash(lsof:*)",
+      "Bash(pkill:*)",
+      "mcp__chrome-devtools__take_screenshot",
+      "Bash(curl:*)",
+      "Bash(python3:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
