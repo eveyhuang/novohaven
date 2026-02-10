@@ -435,7 +435,7 @@ Generate the image according to the exact specifications provided in the require
         {
             step_order: 1,
             step_name: 'Analyze Reviews & Generate Summary',
-            ai_model: 'claude-opus-4-5-20251101',
+            ai_model: 'claude-opus-4-5',
             prompt_template: `You are a market research analyst specializing in consumer feedback analysis. Perform a comprehensive analysis of the following product reviews.
 
 REVIEW DATA:
