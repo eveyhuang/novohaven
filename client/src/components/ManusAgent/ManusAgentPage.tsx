@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ManusChat } from '../ManusChat/ManusChat';
-import { ManusFile, Recipe, RecipeStep, TemplateInputConfig, InputTypeConfig } from '../../types';
+import { useNavigate } from 'react-router-dom';
+import { Recipe, RecipeStep, TemplateInputConfig, InputTypeConfig } from '../../types';
 import api from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
 
@@ -26,16 +26,18 @@ function extractInputsFromPrompt(promptTemplate: string): string[] {
 
 export function ManusAgentPage() {
   const { t } = useLanguage();
+  const navigate = useNavigate();
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [prompt, setPrompt] = useState('');
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Template state
   const [showTemplates, setShowTemplates] = useState(false);
   const [templates, setTemplates] = useState<Recipe[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<Recipe | null>(null);
   const [selectedStep, setSelectedStep] = useState<RecipeStep | null>(null);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
-  const [manusKey, setManusKey] = useState(0);
-  const [initialPrompt, setInitialPrompt] = useState<string | undefined>(undefined);
-  const [isStartingTemplate, setIsStartingTemplate] = useState(false);
-  const [templateError, setTemplateError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getScrapingStatus()
@@ -52,24 +54,13 @@ export function ManusAgentPage() {
   const loadTemplates = async () => {
     try {
       const allRecipes = await api.getRecipes();
-      // Filter to templates that have manus steps
       const manusTemplates = allRecipes.filter((r) => r.is_template);
-      // Load full details for each to check step_type
       const detailed = await Promise.all(
         manusTemplates.map(async (r) => {
-          try {
-            const full = await api.getRecipe(r.id);
-            return full;
-          } catch {
-            return r;
-          }
+          try { return await api.getRecipe(r.id); } catch { return r; }
         })
       );
-      const filtered = detailed.filter((r) => {
-        const step = r.steps?.[0];
-        return step && step.step_type === 'manus';
-      });
-      setTemplates(filtered);
+      setTemplates(detailed.filter((r) => r.steps?.[0]?.step_type === 'manus'));
     } catch (err) {
       console.error('Failed to load manus templates:', err);
     }
@@ -80,7 +71,7 @@ export function ManusAgentPage() {
     setSelectedTemplate(template);
     setSelectedStep(step || null);
     setVariableValues({});
-    setTemplateError(null);
+    setError(null);
   };
 
   const templateVariables = useMemo(() => {
@@ -98,41 +89,68 @@ export function ManusAgentPage() {
     }
   };
 
-  const handleRunTemplate = async () => {
-    if (!selectedTemplate || !selectedStep) return;
+  // Submit freeform prompt -> create execution -> redirect
+  const handleSubmit = async () => {
+    if (!prompt.trim() || starting) return;
 
-    // Validate required variables are filled
+    setStarting(true);
+    setError(null);
+    try {
+      const result = await api.startQuickExecution('manus', prompt.trim());
+      if (result.executionId) {
+        navigate(`/executions/${result.executionId}`);
+      } else {
+        setError(result.error || 'Failed to create execution');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to start task');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  // Submit from template -> create execution with template recipe -> redirect
+  const handleRunTemplate = async () => {
+    if (!selectedTemplate || starting) return;
+
     const missing = templateVariables.filter(
       (v) => !variableValues[v] || !variableValues[v].trim()
     );
     if (missing.length > 0) {
-      setTemplateError(t('manusTemplate.fillVariables') + ': ' + missing.join(', '));
+      setError(t('manusTemplate.fillVariables') + ': ' + missing.join(', '));
       return;
     }
 
-    setIsStartingTemplate(true);
-    setTemplateError(null);
-
+    setStarting(true);
+    setError(null);
     try {
-      const result = await api.startManusTaskFromTemplate(selectedTemplate.id, variableValues);
-      // Remount ManusChat with the compiled prompt and let it auto-start
-      setInitialPrompt(result.compiledPrompt);
-      setManusKey((k) => k + 1);
+      const result = await api.startExecution(
+        selectedTemplate.id,
+        variableValues
+      );
+      if (result.executionId) {
+        navigate(`/executions/${result.executionId}`);
+      } else {
+        setError(result.error || 'Failed to create execution');
+      }
     } catch (err: any) {
-      setTemplateError(err.message || 'Failed to start template task');
+      setError(err.message || 'Failed to start template task');
     } finally {
-      setIsStartingTemplate(false);
+      setStarting(false);
     }
   };
 
-  const handleComplete = (result: { output: string; files?: ManusFile[]; creditsUsed?: number }) => {
-    console.log('[ManusAgent] Task completed', result);
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
   };
 
   if (configured === null) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
       </div>
     );
   }
@@ -169,12 +187,9 @@ export function ManusAgentPage() {
           {/* Template Sidebar */}
           {showTemplates && (
             <div className="w-80 flex-shrink-0 flex flex-col border border-secondary-200 rounded-lg bg-white overflow-hidden">
-              {/* Sidebar Header */}
               <div className="px-4 py-3 border-b border-secondary-200 bg-secondary-50">
                 <h3 className="font-semibold text-secondary-900 text-sm">{t('manusTemplate.savedTemplates')}</h3>
               </div>
-
-              {/* Template List */}
               <div className="flex-1 overflow-y-auto">
                 {templates.length === 0 ? (
                   <div className="p-4 text-center text-secondary-500 text-sm">
@@ -203,64 +218,61 @@ export function ManusAgentPage() {
                 )}
               </div>
 
-              {/* Variable Form (when template selected) */}
+              {/* Variable Form */}
               {selectedTemplate && selectedStep && (
                 <div className="border-t border-secondary-200 bg-secondary-50 p-4 space-y-3 max-h-[50%] overflow-y-auto">
                   <h4 className="font-medium text-sm text-secondary-900">
                     {selectedTemplate.name}
                   </h4>
-
                   {templateVariables.length > 0 ? (
-                    <>
-                      {templateVariables.map((varName) => {
-                        const config = getInputConfig(varName);
-                        return (
-                          <div key={varName}>
-                            <label className="block text-xs font-medium text-secondary-700 mb-1">
-                              {config.label || varName}
-                            </label>
-                            {config.type === 'textarea' ? (
-                              <textarea
-                                value={variableValues[varName] || ''}
-                                onChange={(e) =>
-                                  setVariableValues({ ...variableValues, [varName]: e.target.value })
-                                }
-                                placeholder={config.placeholder || varName}
-                                rows={3}
-                                className="w-full px-2.5 py-1.5 text-sm border border-secondary-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                              />
-                            ) : (
-                              <input
-                                type="text"
-                                value={variableValues[varName] || ''}
-                                onChange={(e) =>
-                                  setVariableValues({ ...variableValues, [varName]: e.target.value })
-                                }
-                                placeholder={config.placeholder || varName}
-                                className="w-full px-2.5 py-1.5 text-sm border border-secondary-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                              />
-                            )}
-                            {config.description && (
-                              <p className="text-xs text-secondary-400 mt-0.5">{config.description}</p>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </>
+                    templateVariables.map((varName) => {
+                      const config = getInputConfig(varName);
+                      return (
+                        <div key={varName}>
+                          <label className="block text-xs font-medium text-secondary-700 mb-1">
+                            {config.label || varName}
+                          </label>
+                          {config.type === 'textarea' ? (
+                            <textarea
+                              value={variableValues[varName] || ''}
+                              onChange={(e) =>
+                                setVariableValues({ ...variableValues, [varName]: e.target.value })
+                              }
+                              placeholder={config.placeholder || varName}
+                              rows={3}
+                              className="w-full px-2.5 py-1.5 text-sm border border-secondary-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              value={variableValues[varName] || ''}
+                              onChange={(e) =>
+                                setVariableValues({ ...variableValues, [varName]: e.target.value })
+                              }
+                              placeholder={config.placeholder || varName}
+                              className="w-full px-2.5 py-1.5 text-sm border border-secondary-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                            />
+                          )}
+                          {config.description && (
+                            <p className="text-xs text-secondary-400 mt-0.5">{config.description}</p>
+                          )}
+                        </div>
+                      );
+                    })
                   ) : (
                     <p className="text-xs text-secondary-500">{t('manusTemplate.noVariables')}</p>
                   )}
 
-                  {templateError && (
-                    <div className="text-xs text-red-600 bg-red-50 rounded px-2 py-1.5">{templateError}</div>
+                  {error && (
+                    <div className="text-xs text-red-600 bg-red-50 rounded px-2 py-1.5">{error}</div>
                   )}
 
                   <button
                     onClick={handleRunTemplate}
-                    disabled={isStartingTemplate}
+                    disabled={starting}
                     className="w-full px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                   >
-                    {isStartingTemplate ? (
+                    {starting ? (
                       <>
                         <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
                         {t('manusTemplate.starting')}
@@ -277,15 +289,53 @@ export function ManusAgentPage() {
             </div>
           )}
 
-          {/* ManusChat (main area) */}
-          <div className="flex-1 min-h-0">
-            <ManusChat
-              key={manusKey}
-              showPromptInput={true}
-              standalone={true}
-              initialPrompt={initialPrompt}
-              onComplete={handleComplete}
-            />
+          {/* Freeform prompt area */}
+          <div className="flex-1 min-h-0 flex flex-col items-center justify-center border border-secondary-200 rounded-lg bg-white p-8">
+            <div className="w-full max-w-xl space-y-4">
+              <div className="text-center mb-6">
+                <div className="w-14 h-14 mx-auto mb-3 bg-purple-100 rounded-full flex items-center justify-center text-2xl">
+                  &#129504;
+                </div>
+                <h2 className="text-lg font-semibold text-secondary-900">
+                  What should Manus do?
+                </h2>
+                <p className="text-sm text-secondary-500 mt-1">
+                  Describe a task and Manus will execute it autonomously.
+                </p>
+              </div>
+
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="e.g., Scrape the top 10 products from Amazon for wireless headphones and create a comparison table..."
+                rows={4}
+                disabled={starting}
+                className="w-full px-4 py-3 text-sm border border-secondary-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none disabled:bg-secondary-50"
+              />
+
+              {error && !selectedTemplate && (
+                <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
+              )}
+
+              <button
+                onClick={handleSubmit}
+                disabled={!prompt.trim() || starting}
+                className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {starting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                    Starting...
+                  </>
+                ) : (
+                  <>
+                    <PlayIcon className="w-4 h-4" />
+                    Start Task
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       ) : (
@@ -308,9 +358,7 @@ function StatusBadge({ configured, t }: { configured: boolean; t: (key: any) => 
   return (
     <span
       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-        configured
-          ? 'bg-green-100 text-green-800'
-          : 'bg-red-100 text-red-800'
+        configured ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
       }`}
     >
       <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${configured ? 'bg-green-500' : 'bg-red-500'}`} />

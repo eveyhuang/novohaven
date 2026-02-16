@@ -17,6 +17,7 @@ import executorsRouter from './routes/executors';
 import assistantRouter from './routes/assistant';
 import manusRouter from './routes/manus';
 import browserRouter from './routes/browser';
+import executionStreamRouter from './routes/executionStream';
 
 // Load environment variables from server directory
 // This ensures .env is loaded whether running from project root or server directory
@@ -66,6 +67,7 @@ app.use('/api/executors', executorsRouter);
 app.use('/api/assistant', assistantRouter);
 app.use('/api/manus', manusRouter);
 app.use('/api/browser', browserRouter);
+app.use('/api/executions', executionStreamRouter);
 
 // 404 handler
 app.use((req, res) => {

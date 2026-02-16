@@ -4,6 +4,7 @@ import { Recipe, RecipeStep, AIModel, InputType, InputTypeConfig, TemplateInputC
 import api, { ExecutorInfo } from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, DynamicInput } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
+import { useNotifications } from '../../context/NotificationContext';
 import { TranslationKey } from '../../i18n/translations';
 import ReactMarkdown from 'react-markdown';
 
@@ -46,6 +47,7 @@ export function TemplateEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const { trackExecution } = useNotifications();
   const isNew = !id || id === 'new';
   const promptTextAreaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -95,6 +97,12 @@ export function TemplateEditor() {
   const [testGeneratedImages, setTestGeneratedImages] = useState<GeneratedImage[]>([]);
   const [isTestRunning, setIsTestRunning] = useState(false);
   const [testError, setTestError] = useState<string | null>(null);
+
+  // Run mode state
+  const [showRunPanel, setShowRunPanel] = useState(false);
+  const [runInputValues, setRunInputValues] = useState<Record<string, any>>({});
+  const [isRunStarting, setIsRunStarting] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   useEffect(() => {
     loadModels();
@@ -396,6 +404,78 @@ export function TemplateEditor() {
     }
   };
 
+  // Open run panel with initialized input values
+  const openRunPanel = () => {
+    const initialValues: Record<string, any> = {};
+    allVariables.forEach((varName) => {
+      const config = getInputConfig(varName);
+      if (config.type === 'url_list') {
+        initialValues[varName] = [''];
+      } else if (config.type === 'image' || config.type === 'file') {
+        initialValues[varName] = null;
+      } else {
+        initialValues[varName] = '';
+      }
+    });
+    setRunInputValues(initialValues);
+    setRunError(null);
+    setShowRunPanel(true);
+  };
+
+  // Run as a real execution and navigate to chat interface
+  const handleRunExecution = async () => {
+    if (!id || isNew) return;
+
+    // Validate required inputs
+    const missingInputs = allVariables.filter((varName) => {
+      const value = runInputValues[varName];
+      const config = getInputConfig(varName);
+      if ((config as any).optional) return false;
+      if (config.type === 'image' || config.type === 'file') {
+        return !value;
+      } else if (config.type === 'url_list') {
+        return !Array.isArray(value) || value.filter((u: string) => u.trim()).length === 0;
+      }
+      return !value || (typeof value === 'string' && !value.trim());
+    });
+
+    if (missingInputs.length > 0) {
+      setRunError(`${t('fillRequiredFields')}: ${missingInputs.map(v => getInputConfig(v).label || v).join(', ')}`);
+      return;
+    }
+
+    // Process inputs for the execution
+    const processedInputs: Record<string, string> = {};
+    for (const [key, value] of Object.entries(runInputValues)) {
+      const config = getInputConfig(key);
+      if (config.type === 'image' && value?.base64) {
+        processedInputs[key] = value.base64;
+        processedInputs[`${key}_description`] = `[Image: ${value.name}]`;
+      } else if (config.type === 'file' && value?.content) {
+        processedInputs[key] = value.content;
+      } else if (config.type === 'url_list' && Array.isArray(value)) {
+        processedInputs[key] = value.filter((u: string) => u.trim()).join('\n');
+      } else if (typeof value === 'string' && value.trim()) {
+        processedInputs[key] = value;
+      }
+    }
+
+    setIsRunStarting(true);
+    setRunError(null);
+
+    try {
+      const recipeId = parseInt(id);
+      const result = await api.startExecution(recipeId, processedInputs);
+      console.log('[TemplateEditor] Execution started, navigating to:', `/executions/${result.executionId}`);
+      setShowRunPanel(false);
+      navigate(`/executions/${result.executionId}`);
+    } catch (err: any) {
+      console.error('[TemplateEditor] Execution failed:', err);
+      setRunError(err.message);
+      setIsRunStarting(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!template.name) {
       setError(t('templateNameRequired'));
@@ -503,20 +583,11 @@ export function TemplateEditor() {
               {t('delete')}
             </Button>
           )}
-          {template.step_type === 'ai' ? (
-            /* For AI templates, show Test Template button */
-            <Button variant="secondary" onClick={openTestPanel}>
+          {!isNew && (
+            <Button variant="secondary" onClick={openRunPanel}>
               <PlayIcon className="w-4 h-4 mr-2" />
-              {t('testTemplate')}
+              {t('run')}
             </Button>
-          ) : (
-            /* For non-AI templates, show Run Workflow button */
-            !isNew && (
-              <Button variant="secondary" onClick={() => navigate(`/recipes/${id}/run`)}>
-                <PlayIcon className="w-4 h-4 mr-2" />
-                {t('run')}
-              </Button>
-            )
           )}
           <Button onClick={handleSave} isLoading={isSaving}>
             {isNew ? t('createTemplate') : t('saveChanges')}
@@ -1280,6 +1351,78 @@ export function TemplateEditor() {
                 {t('runTest')}
               </Button>
             </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Run Execution Panel */}
+      <Modal
+        isOpen={showRunPanel}
+        onClose={() => setShowRunPanel(false)}
+        title={t('run')}
+        size="xl"
+      >
+        <div className="space-y-6">
+          {/* Template Info */}
+          <div className="bg-secondary-50 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-medium text-secondary-900">{template.name || t('untitledTemplate')}</h3>
+                <p className="text-sm text-secondary-500 mt-1">
+                  {t('model')}: {models.find(m => m.id === template.ai_model)?.name || template.ai_model}
+                </p>
+              </div>
+              <span className="px-2 py-1 text-xs font-medium bg-primary-100 text-primary-700 rounded">
+                {template.output_format}
+              </span>
+            </div>
+          </div>
+
+          {/* Input Fields */}
+          {allVariables.length > 0 && (
+            <div>
+              <h3 className="font-medium text-secondary-900 mb-3">{t('inputValues')}</h3>
+              <div className="space-y-4">
+                {allVariables.map((varName) => {
+                  const config = getInputConfig(varName);
+                  const displayConfig = {
+                    ...config,
+                    label: config.label || varName,
+                  };
+
+                  return (
+                    <DynamicInput
+                      key={varName}
+                      name={varName}
+                      config={displayConfig}
+                      value={runInputValues[varName]}
+                      onChange={(value) =>
+                        setRunInputValues({ ...runInputValues, [varName]: value })
+                      }
+                      t={t}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Error Display */}
+          {runError && (
+            <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
+              {runError}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex justify-between items-center pt-4 border-t border-secondary-200">
+            <Button variant="ghost" onClick={() => setShowRunPanel(false)}>
+              {t('close')}
+            </Button>
+            <Button onClick={handleRunExecution} isLoading={isRunStarting}>
+              <PlayIcon className="w-4 h-4 mr-2" />
+              {t('run')}
+            </Button>
           </div>
         </div>
       </Modal>

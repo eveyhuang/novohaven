@@ -111,6 +111,55 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 // POST /api/executions - Start new execution
+// POST /api/executions/quick - Create a quick single-step execution (e.g. Manus shortcut)
+router.post('/quick', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { step_type, prompt, input_data } = req.body;
+
+    if (!prompt || !prompt.trim()) {
+      res.status(400).json({ error: 'prompt is required' });
+      return;
+    }
+
+    const type = step_type || 'manus';
+
+    // Create a temporary recipe for this execution
+    const recipeResult = queries.createRecipe(
+      `Quick ${type} task`,
+      `Auto-created for quick ${type} execution`,
+      userId,
+      false
+    );
+    const recipeId = recipeResult.lastInsertRowid;
+
+    // Create the single step
+    const customSteps: RecipeStep[] = [{
+      id: -1,
+      recipe_id: recipeId,
+      step_order: 1,
+      step_name: `${type} task`,
+      step_type: type,
+      ai_model: type === 'ai' ? 'gpt-4o' : '',
+      prompt_template: prompt.trim(),
+      output_format: 'text',
+      created_at: new Date().toISOString(),
+    }];
+
+    const result = await startExecution(recipeId, userId, input_data || {}, customSteps);
+
+    if (!result.success && result.executionId === 0) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    res.status(201).json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/executions - Start execution from a recipe
 router.post('/', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id;

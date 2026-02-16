@@ -1,4 +1,5 @@
 import { RecipeStep, StepExecution } from '../types';
+import type { ExecutionEventEmitter } from '../services/executionEvents';
 
 /**
  * Context provided to each executor when executing a step.
@@ -9,6 +10,7 @@ export interface StepExecutorContext {
   stepExecution: StepExecution;
   userInputs: Record<string, any>;
   completedStepExecutions: StepExecution[];
+  emitter?: ExecutionEventEmitter;
 }
 
 /**

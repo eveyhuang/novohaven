@@ -309,6 +309,35 @@ export interface UsageStats {
 }
 
 
+// Execution Chat Message types (unified chat protocol)
+export type ExecutionChatMessageType =
+  | 'step-start' | 'progress' | 'agent-message' | 'user-message'
+  | 'step-output' | 'step-error' | 'action-required'
+  | 'step-approved' | 'step-rejected' | 'execution-complete';
+
+export interface ExecutionChatMessage {
+  id: string;
+  executionId: number;
+  stepOrder: number;
+  stepName: string;
+  stepType: StepType;
+  type: ExecutionChatMessageType;
+  role: 'system' | 'assistant' | 'user';
+  content: string;
+  metadata?: {
+    taskId?: string;
+    images?: GeneratedImage[];
+    files?: ManusFile[];
+    usage?: { promptTokens: number; completionTokens: number };
+    model?: string;
+    actionType?: 'approve' | 'captcha' | 'take-control';
+    debuggerUrl?: string;
+    isJson?: boolean;
+    stepExecutionId?: number;
+  };
+  timestamp: string;
+}
+
 // Express extended types
 declare global {
   namespace Express {

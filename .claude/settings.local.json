@@ -46,7 +46,9 @@
       "WebFetch(domain:manus.im)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:manus-api.mintlify.app)",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "Bash(grep:*)",
+      "Bash(python:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

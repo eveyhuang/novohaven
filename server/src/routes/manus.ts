@@ -278,6 +278,31 @@ router.get('/tasks/:taskId/stream', async (req: Request, res: Response) => {
   poll();
 });
 
+// GET /api/manus/tasks/:taskId/messages — Get conversation history for chat reconstruction
+router.get('/tasks/:taskId/messages', async (req: Request, res: Response) => {
+  try {
+    const { taskId } = req.params;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+
+    const result = await getTaskMessages(taskId);
+    res.json({
+      taskId,
+      messages: result.messages,
+      status: result.status,
+      files: result.files,
+      creditsUsed: result.creditsUsed,
+    });
+  } catch (error: any) {
+    console.error('[Manus] Get messages error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST /api/manus/tasks/:taskId/messages — Send reply to a task
 router.post('/tasks/:taskId/messages', async (req: Request, res: Response) => {
   try {

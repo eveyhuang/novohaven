@@ -87,16 +87,33 @@ export class ScrapingExecutor implements StepExecutor {
     }
     console.log('[ScrapingExecutor] Retrieved task object, status:', task.status);
 
+    const { emitter, executionId } = context;
+
     try {
       // Store browserTaskId early so frontend can connect to SSE stream
       const earlyMetadata = JSON.stringify({ browserTaskId, stepType: 'scraping', platform });
       console.log('[ScrapingExecutor] Updating step execution with metadata:', earlyMetadata);
       queries.updateStepExecution('running', earlyMetadata, 'browser:scrape', urlList.join(', '), context.stepExecution.id);
 
-      // Wait a moment for frontend to poll and connect to SSE stream
-      console.log('[ScrapingExecutor] Waiting 4 seconds for frontend to connect...');
-      await new Promise(resolve => setTimeout(resolve, 4000));
-      console.log('[ScrapingExecutor] Frontend should be connected now, listener count:', task.emitter.listenerCount('progress'));
+      // Emit progress through execution emitter
+      if (emitter) {
+        const progressMsg = emitter.createMessage({
+          executionId,
+          stepOrder: context.stepExecution.step_order,
+          stepName: _step.step_name,
+          stepType: 'scraping',
+          type: 'progress',
+          role: 'system',
+          content: `Starting browser scraping for ${platform}...`,
+          metadata: { taskId: browserTaskId },
+        });
+        emitter.emit(executionId, progressMsg);
+      }
+
+      // Brief pause to let frontend connect to SSE stream after navigating
+      console.log('[ScrapingExecutor] Waiting 1 second for frontend to connect...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      console.log('[ScrapingExecutor] Listener count:', task.emitter.listenerCount('progress'));
 
       // Emit initial message so UI shows activity immediately
       console.log('[ScrapingExecutor] Emitting initial messages to task', browserTaskId);
@@ -121,14 +138,45 @@ export class ScrapingExecutor implements StepExecutor {
           role: 'system',
           content: [{ type: 'text', text: message }],
         });
+        // Also emit through execution emitter
+        if (emitter) {
+          const progressMsg = emitter.createMessage({
+            executionId,
+            stepOrder: context.stepExecution.step_order,
+            stepName: _step.step_name,
+            stepType: 'scraping',
+            type: 'progress',
+            role: 'system',
+            content: message,
+            metadata: { taskId: browserTaskId },
+          });
+          emitter.emit(executionId, progressMsg);
+        }
       };
 
       const result = await strategy.execute(page, urlList, onProgress);
 
-      // Check for CAPTCHA
-      const hasCaptcha = await browserService.detectCaptcha(browserTaskId);
+      // Only check for CAPTCHA if extraction failed with no results (page may be blocked)
+      // A 429 rate limit or partial failure with some reviews is NOT a CAPTCHA
+      const hasCaptcha = !result.success && !result.reviewCount
+        ? await browserService.detectCaptcha(browserTaskId)
+        : false;
       if (hasCaptcha) {
         onProgress('CAPTCHA detected. Waiting for manual resolution...');
+        // Emit action-required for CAPTCHA
+        if (emitter) {
+          const captchaMsg = emitter.createMessage({
+            executionId,
+            stepOrder: context.stepExecution.step_order,
+            stepName: _step.step_name,
+            stepType: 'scraping',
+            type: 'action-required',
+            role: 'system',
+            content: 'CAPTCHA detected. Please resolve manually.',
+            metadata: { actionType: 'captcha', taskId: browserTaskId },
+          });
+          emitter.emit(executionId, captchaMsg);
+        }
         await browserService.waitForCaptchaResolution(browserTaskId);
         // Retry extraction
         const retryResult = await strategy.execute(page, urlList, onProgress);

@@ -2,16 +2,24 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 
-// Patterns that indicate CAPTCHA/bot detection (reused from manusService verification patterns)
-const VERIFICATION_PATTERNS = [
+// Patterns matched against VISIBLE page text (not full HTML) to detect active CAPTCHA challenges
+const VISIBLE_TEXT_PATTERNS = [
   /press\s*&?\s*hold/i,
-  /solve.*captcha/i,  // More specific: must have "solve" and "captcha" together
+  /solve.*captcha/i,
   /complete\s+(this|the)\s+(verification|captcha|challenge)/i,
   /bot\s+detection/i,
-  /perimeterx/i,
-  /px-captcha/i,
-  /cf-challenge/i,  // Cloudflare challenge
-  /challenge-platform/i,  // Generic challenge platform
+  /please\s+verify\s+(you\s+are|that\s+you)/i,
+  /are\s+you\s+a\s+(human|robot)/i,
+];
+
+// CSS selectors for known CAPTCHA challenge elements that must be visible
+const CAPTCHA_SELECTORS = [
+  '#px-captcha',           // PerimeterX active challenge
+  '.cf-challenge-running', // Cloudflare active challenge
+  '#challenge-running',    // Cloudflare variant
+  'iframe[src*="captcha"]',
+  'iframe[src*="challenge"]',
+  '[data-captcha]',
 ];
 
 export interface BrowserTask {
@@ -159,9 +167,35 @@ class BrowserService {
     if (!task?.page) return false;
 
     try {
-      const content = await task.page.content();
-      for (const pattern of VERIFICATION_PATTERNS) {
-        if (pattern.test(content)) {
+      // Check for visible CAPTCHA elements in the DOM
+      const hasVisibleCaptchaElement = await task.page.evaluate((selectors: string[]) => {
+        for (const selector of selectors) {
+          const el = document.querySelector(selector);
+          if (el) {
+            const rect = (el as HTMLElement).getBoundingClientRect();
+            const style = window.getComputedStyle(el as HTMLElement);
+            // Element must exist and be visible (not hidden/zero-sized)
+            if (rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden') {
+              return true;
+            }
+          }
+        }
+        return false;
+      }, CAPTCHA_SELECTORS);
+
+      if (hasVisibleCaptchaElement) {
+        task.status = 'captcha';
+        this.emit(task, 'take_control', {
+          browserUrl: `http://localhost:${BROWSER_DEBUG_PORT}`,
+          message: 'CAPTCHA detected. Please solve it in the browser, then click Resume.',
+        });
+        return true;
+      }
+
+      // Check visible text content (not full HTML which includes scripts)
+      const visibleText = await task.page.evaluate(() => document.body.innerText);
+      for (const pattern of VISIBLE_TEXT_PATTERNS) {
+        if (pattern.test(visibleText)) {
           task.status = 'captcha';
           this.emit(task, 'take_control', {
             browserUrl: `http://localhost:${BROWSER_DEBUG_PORT}`,

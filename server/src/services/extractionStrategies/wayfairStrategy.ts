@@ -88,52 +88,71 @@ export class WayfairStrategy implements ExtractionStrategy {
     });
     onProgress(`Total reviews found: ${totalCount}`);
 
-    // Step 5: Fetch all reviews via GraphQL API (executed inside page context)
+    // Step 5: Fetch all reviews via GraphQL API with retry on rate limit
     onProgress('Fetching all reviews via GraphQL...');
-    const graphqlResult: any = await page.evaluate(
-      async (params: { nodeId: string; totalCount: number; hash: string; clientVersion: string }) => {
-        try {
-          const response = await fetch('https://www.wayfair.com/federation/graphql', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-oi-client': 'sf-ui-web',
-              'apollographql-client-name': '@wayfair/sf-ui-core-funnel',
-              'apollographql-client-version': params.clientVersion,
-              'x-wayfair-locale': 'en-US',
-              'x-wf-way': 'true',
-            },
-            credentials: 'include',
-            body: JSON.stringify({
-              operationName: 'PDPReviewsMPLVByNodeIdDataQuery',
-              variables: {
-                nodeId: params.nodeId,
-                firstImage: 1,
-                firstReview: params.totalCount,
-                sort: 'RELEVANCE_DESC',
-                includeImages: true,
+    const maxRetries = 3;
+    let graphqlResult: any = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      graphqlResult = await page.evaluate(
+        async (params: { nodeId: string; totalCount: number; hash: string; clientVersion: string }) => {
+          try {
+            const response = await fetch('https://www.wayfair.com/federation/graphql', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-oi-client': 'sf-ui-web',
+                'apollographql-client-name': '@wayfair/sf-ui-core-funnel',
+                'apollographql-client-version': params.clientVersion,
+                'x-wayfair-locale': 'en-US',
+                'x-wf-way': 'true',
               },
-              extensions: {
-                persistedQuery: {
-                  version: 1,
-                  sha256Hash: params.hash,
+              credentials: 'include',
+              body: JSON.stringify({
+                operationName: 'PDPReviewsMPLVByNodeIdDataQuery',
+                variables: {
+                  nodeId: params.nodeId,
+                  firstImage: 1,
+                  firstReview: params.totalCount,
+                  sort: 'RELEVANCE_DESC',
+                  includeImages: true,
                 },
-              },
-            }),
-          });
+                extensions: {
+                  persistedQuery: {
+                    version: 1,
+                    sha256Hash: params.hash,
+                  },
+                },
+              }),
+            });
 
-          if (!response.ok) {
-            return { error: `GraphQL request failed: ${response.status} ${response.statusText}` };
+            if (!response.ok) {
+              return { error: `GraphQL request failed: ${response.status}`, status: response.status };
+            }
+
+            const data = await response.json();
+            return data;
+          } catch (err: any) {
+            return { error: err.message || 'GraphQL fetch failed', status: 0 };
           }
+        },
+        { nodeId, totalCount, hash: GRAPHQL_SHA256_HASH, clientVersion: CLIENT_VERSION },
+      );
 
-          const data = await response.json();
-          return data;
-        } catch (err: any) {
-          return { error: err.message || 'GraphQL fetch failed' };
-        }
-      },
-      { nodeId, totalCount, hash: GRAPHQL_SHA256_HASH, clientVersion: CLIENT_VERSION },
-    );
+      // Success — no error
+      if (!graphqlResult.error) break;
+
+      // Retry on 429 (rate limit) with exponential backoff
+      if (graphqlResult.status === 429 && attempt < maxRetries) {
+        const delayMs = attempt * 5000; // 5s, 10s, 15s
+        onProgress(`Rate limited (429). Retrying in ${delayMs / 1000}s... (attempt ${attempt}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      // Non-retryable error or last attempt
+      break;
+    }
 
     if (graphqlResult.error) {
       throw new Error(graphqlResult.error);

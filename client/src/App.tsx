@@ -7,7 +7,8 @@ import { Layout, Notifications } from './components/common';
 import { Dashboard } from './components/Dashboard';
 import { RecipeBuilder, RecipeRunner } from './components/RecipeBuilder';
 import { TemplateEditor } from './components/TemplateEditor';
-import { ExecutionList, ExecutionView } from './components/WorkflowExecution';
+import { ExecutionList } from './components/WorkflowExecution';
+import ChatExecution from './components/ChatExecution/ChatExecution';
 import { StandardsManager } from './components/CompanyStandards';
 import { OutputsGallery } from './components/OutputsGallery';
 import { UsageDashboard } from './components/ReviewAnalysis';
@@ -37,7 +38,7 @@ function App() {
 
             {/* Execution Routes */}
             <Route path="/executions" element={<ExecutionList />} />
-            <Route path="/executions/:id" element={<ExecutionView />} />
+            <Route path="/executions/:id" element={<ChatExecution />} />
 
             {/* Outputs Gallery */}
             <Route path="/outputs" element={<OutputsGallery />} />

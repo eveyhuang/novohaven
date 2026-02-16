@@ -1,7 +1,7 @@
 /**
  * Tests that the workflow engine correctly dispatches step execution
  * to the executor registry, and that the orchestration logic
- * (status updates, pause-for-review, error handling) works correctly.
+ * (status updates, auto-run, pause-for-review, error handling) works correctly.
  */
 
 // Mock the executor registry
@@ -30,6 +30,26 @@ const mockQueries = {
 
 jest.mock('../../models/database', () => ({
   queries: mockQueries,
+}));
+
+// Mock the execution events emitter
+const mockEmit = jest.fn();
+const mockCreateMessage = jest.fn().mockImplementation((partial: any) => ({
+  ...partial,
+  id: 'test-msg-id',
+  timestamp: '2024-01-01T00:00:00.000Z',
+}));
+const mockCleanup = jest.fn();
+
+jest.mock('../../services/executionEvents', () => ({
+  executionEvents: {
+    emit: mockEmit,
+    createMessage: mockCreateMessage,
+    cleanup: mockCleanup,
+    subscribe: jest.fn(),
+    unsubscribe: jest.fn(),
+    isActive: jest.fn().mockReturnValue(true),
+  },
 }));
 
 import { startExecution, approveStep, retryStep } from '../../services/workflowEngine';
@@ -81,14 +101,19 @@ describe('Workflow Engine - Executor Dispatch', () => {
     beforeEach(() => {
       mockQueries.getStepsByRecipeId.mockReturnValue(steps);
       mockQueries.createExecution.mockReturnValue({ lastInsertRowid: 100 });
-      mockQueries.getStepExecutionsByExecutionId.mockReturnValue([{
-        id: 1,
-        execution_id: 100,
-        step_id: 1,
-        step_order: 1,
-        status: 'pending',
-        approved: false,
-      }]);
+
+      // For single AI step: first call returns pending, second call (after auto-approve) returns no pending
+      mockQueries.getStepExecutionsByExecutionId
+        .mockReturnValueOnce([{
+          id: 1, execution_id: 100, step_id: 1, step_order: 1,
+          status: 'pending', approved: false,
+        }])
+        .mockReturnValue([{
+          id: 1, execution_id: 100, step_id: 1, step_order: 1,
+          status: 'completed', approved: true,
+          output_data: JSON.stringify({ content: 'AI output' }),
+        }]);
+
       mockQueries.getExecutionById.mockReturnValue({
         id: 100,
         recipe_id: 1,
@@ -99,7 +124,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
     });
 
     test('dispatches to the correct executor based on step_type', async () => {
-      const result = await startExecution(1, 1, { input: 'test' });
+      await startExecution(1, 1, { input: 'test' });
 
       expect(mockGetExecutor).toHaveBeenCalledWith('ai');
       expect(mockExecute).toHaveBeenCalled();
@@ -132,35 +157,53 @@ describe('Workflow Engine - Executor Dispatch', () => {
       expect(mockGetExecutor).toHaveBeenCalledWith('ai');
     });
 
-    test('updates step status to awaiting_review on success', async () => {
-      await startExecution(1, 1, { input: 'test' });
-
-      expect(mockQueries.updateStepExecution).toHaveBeenCalledWith(
-        'awaiting_review',
-        expect.any(String),
-        'gpt-4o',
-        'compiled prompt',
-        1
-      );
-    });
-
-    test('pauses execution for review after successful step', async () => {
-      // After the executor runs, return updated step executions for the response
-      mockQueries.getStepExecutionsByExecutionId
-        .mockReturnValueOnce([{
-          id: 1, execution_id: 100, step_id: 1, step_order: 1,
-          status: 'pending', approved: false,
-        }])
-        .mockReturnValueOnce([{
-          id: 1, execution_id: 100, step_id: 1, step_order: 1,
-          status: 'awaiting_review', approved: false,
-          output_data: JSON.stringify({ content: 'AI output' }),
-        }]);
-
+    test('AI steps auto-approve and complete execution', async () => {
       const result = await startExecution(1, 1, { input: 'test' });
 
-      expect(result.status).toBe('paused');
-      expect(mockQueries.updateExecutionStatus).toHaveBeenCalledWith('paused', 1, 100);
+      // AI steps auto-approve — should call approveStepExecution
+      expect(mockQueries.approveStepExecution).toHaveBeenCalledWith(true, 'completed', 1);
+      // After auto-approve, no more pending steps → execution completes
+      expect(result.status).toBe('completed');
+      expect(mockQueries.completeExecution).toHaveBeenCalledWith('completed', 100);
+    });
+
+    test('emits step-start event before executing', async () => {
+      await startExecution(1, 1, { input: 'test' });
+
+      const stepStartCall = mockCreateMessage.mock.calls.find(
+        (call: any[]) => call[0].type === 'step-start'
+      );
+      expect(stepStartCall).toBeDefined();
+      expect(stepStartCall![0].stepName).toBe('AI Step');
+    });
+
+    test('emits step-output event after successful execution', async () => {
+      await startExecution(1, 1, { input: 'test' });
+
+      const stepOutputCall = mockCreateMessage.mock.calls.find(
+        (call: any[]) => call[0].type === 'step-output'
+      );
+      expect(stepOutputCall).toBeDefined();
+      expect(stepOutputCall![0].content).toBe('AI output');
+    });
+
+    test('emits step-approved event for auto-run steps', async () => {
+      await startExecution(1, 1, { input: 'test' });
+
+      const approvedCall = mockCreateMessage.mock.calls.find(
+        (call: any[]) => call[0].type === 'step-approved'
+      );
+      expect(approvedCall).toBeDefined();
+      expect(approvedCall![0].content).toContain('auto-approved');
+    });
+
+    test('emits execution-complete when all steps done', async () => {
+      await startExecution(1, 1, { input: 'test' });
+
+      const completeCall = mockCreateMessage.mock.calls.find(
+        (call: any[]) => call[0].type === 'execution-complete'
+      );
+      expect(completeCall).toBeDefined();
     });
 
     test('sets step error and pauses on executor failure', async () => {
@@ -179,6 +222,22 @@ describe('Workflow Engine - Executor Dispatch', () => {
         'Model overloaded',
         1
       );
+    });
+
+    test('emits step-error event on executor failure', async () => {
+      mockExecute.mockResolvedValue({
+        success: false,
+        content: '',
+        error: 'Model overloaded',
+      });
+
+      await startExecution(1, 1, { input: 'test' });
+
+      const errorCall = mockCreateMessage.mock.calls.find(
+        (call: any[]) => call[0].type === 'step-error'
+      );
+      expect(errorCall).toBeDefined();
+      expect(errorCall![0].content).toBe('Model overloaded');
     });
 
     test('handles executor throwing an exception', async () => {
@@ -207,7 +266,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
       await startExecution(1, 1, { input: 'test' });
 
       const storedOutput = mockQueries.updateStepExecution.mock.calls.find(
-        (call: any[]) => call[0] === 'awaiting_review'
+        (call: any[]) => call[0] === 'completed'
       );
       expect(storedOutput).toBeDefined();
       const parsed = JSON.parse(storedOutput![1]);
@@ -225,7 +284,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
       expect(result.error).toBe('Recipe has no steps');
     });
 
-    test('passes correct context to executor', async () => {
+    test('passes correct context to executor including emitter', async () => {
       await startExecution(1, 1, { input: 'test_value' });
 
       expect(mockExecute).toHaveBeenCalledWith(
@@ -235,8 +294,91 @@ describe('Workflow Engine - Executor Dispatch', () => {
           executionId: 100,
           userInputs: { input: 'test_value' },
           completedStepExecutions: [],
+          emitter: expect.anything(),
         })
       );
+    });
+  });
+
+  describe('interactive steps (scraping/manus)', () => {
+    const mockScrapingExecutor = {
+      type: 'scraping',
+      displayName: 'Web Scraping',
+      icon: '🔍',
+      description: 'Scraping',
+      execute: jest.fn().mockResolvedValue({
+        success: true,
+        content: JSON.stringify({ reviews: [] }),
+        metadata: { service: 'browser', stepType: 'scraping' },
+        promptUsed: 'Scraped 1 URL(s)',
+        modelUsed: 'browser:scrape',
+      }),
+      validateConfig: jest.fn(),
+      getConfigSchema: jest.fn(),
+    };
+
+    beforeEach(() => {
+      mockGetExecutor.mockImplementation((type: string) => {
+        if (type === 'ai') return mockAIExecutor;
+        if (type === 'scraping') return mockScrapingExecutor;
+        return undefined;
+      });
+
+      const scrapingSteps: RecipeStep[] = [{
+        id: 2,
+        recipe_id: 1,
+        step_order: 1,
+        step_name: 'Scrape Step',
+        step_type: 'scraping',
+        ai_model: '',
+        prompt_template: '',
+        output_format: 'json',
+        created_at: '2024-01-01',
+      }];
+
+      mockQueries.getStepsByRecipeId.mockReturnValue(scrapingSteps);
+      mockQueries.createExecution.mockReturnValue({ lastInsertRowid: 200 });
+      mockQueries.getStepExecutionsByExecutionId.mockReturnValue([{
+        id: 2, execution_id: 200, step_id: 2, step_order: 1,
+        status: 'pending', approved: false,
+      }]);
+      mockQueries.getExecutionById.mockReturnValue({
+        id: 200, recipe_id: 1, user_id: 1, status: 'pending', current_step: 0,
+      });
+    });
+
+    test('dispatches scraping steps to ScrapingExecutor', async () => {
+      await startExecution(1, 1, { product_urls: 'https://amazon.com/p1' });
+
+      expect(mockGetExecutor).toHaveBeenCalledWith('scraping');
+      expect(mockScrapingExecutor.execute).toHaveBeenCalled();
+      expect(mockAIExecutor.execute).not.toHaveBeenCalled();
+    });
+
+    test('scraping steps pause for review (do NOT auto-approve)', async () => {
+      const result = await startExecution(1, 1, { product_urls: 'https://amazon.com/p1' });
+
+      expect(result.status).toBe('paused');
+      // Should set awaiting_review, not completed
+      expect(mockQueries.updateStepExecution).toHaveBeenCalledWith(
+        'awaiting_review',
+        expect.any(String),
+        'browser:scrape',
+        'Scraped 1 URL(s)',
+        2
+      );
+      // Should NOT auto-approve
+      expect(mockQueries.approveStepExecution).not.toHaveBeenCalled();
+    });
+
+    test('scraping steps emit action-required event', async () => {
+      await startExecution(1, 1, { product_urls: 'https://amazon.com/p1' });
+
+      const actionCall = mockCreateMessage.mock.calls.find(
+        (call: any[]) => call[0].type === 'action-required'
+      );
+      expect(actionCall).toBeDefined();
+      expect(actionCall![0].metadata?.actionType).toBe('approve');
     });
   });
 
@@ -289,7 +431,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
     });
 
     test('dispatches retry to executor via registry', async () => {
-      const result = await retryStep(100, 10, 1);
+      await retryStep(100, 10, 1);
 
       expect(mockGetExecutor).toHaveBeenCalledWith('ai');
       expect(mockExecute).toHaveBeenCalled();
@@ -320,63 +462,6 @@ describe('Workflow Engine - Executor Dispatch', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Retry failed');
-    });
-  });
-
-  describe('scraping step dispatch', () => {
-    const mockScrapingExecutor = {
-      type: 'scraping',
-      displayName: 'Web Scraping',
-      icon: '🔍',
-      description: 'Scraping',
-      execute: jest.fn().mockResolvedValue({
-        success: true,
-        content: JSON.stringify({ reviews: [], summary: { total_reviews: 0 } }),
-        metadata: { service: 'brightdata', usage: { requests_made: 1, reviews_fetched: 0 }, stepType: 'scraping' },
-        promptUsed: 'Scraped 1 URL(s)',
-        modelUsed: 'brightdata:scrape_reviews',
-      }),
-      validateConfig: jest.fn(),
-      getConfigSchema: jest.fn(),
-    };
-
-    beforeEach(() => {
-      mockGetExecutor.mockImplementation((type: string) => {
-        if (type === 'ai') return mockAIExecutor;
-        if (type === 'scraping') return mockScrapingExecutor;
-        return undefined;
-      });
-
-      const scrapingSteps: RecipeStep[] = [{
-        id: 2,
-        recipe_id: 1,
-        step_order: 1,
-        step_name: 'Scrape Step',
-        step_type: 'scraping',
-        ai_model: '',
-        prompt_template: '',
-        output_format: 'json',
-        api_config: JSON.stringify({ service: 'brightdata', endpoint: 'scrape_reviews' }),
-        created_at: '2024-01-01',
-      }];
-
-      mockQueries.getStepsByRecipeId.mockReturnValue(scrapingSteps);
-      mockQueries.createExecution.mockReturnValue({ lastInsertRowid: 200 });
-      mockQueries.getStepExecutionsByExecutionId.mockReturnValue([{
-        id: 2, execution_id: 200, step_id: 2, step_order: 1,
-        status: 'pending', approved: false,
-      }]);
-      mockQueries.getExecutionById.mockReturnValue({
-        id: 200, recipe_id: 1, user_id: 1, status: 'pending', current_step: 0,
-      });
-    });
-
-    test('dispatches scraping steps to ScrapingExecutor', async () => {
-      await startExecution(1, 1, { product_urls: 'https://amazon.com/p1' });
-
-      expect(mockGetExecutor).toHaveBeenCalledWith('scraping');
-      expect(mockScrapingExecutor.execute).toHaveBeenCalled();
-      expect(mockAIExecutor.execute).not.toHaveBeenCalled();
     });
   });
 });

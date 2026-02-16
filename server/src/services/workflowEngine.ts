@@ -1,13 +1,18 @@
 import { queries } from '../models/database';
 import { getExecutor } from '../executors/registry';
 import { StepExecutorContext } from '../executors/StepExecutor';
+import { executionEvents } from './executionEvents';
 import {
   WorkflowExecution,
   StepExecution,
   RecipeStep,
   ExecutionStatus,
   StepExecutionStatus,
+  StepType,
 } from '../types';
+
+// Step types that auto-run (no human approval needed)
+const AUTO_RUN_STEP_TYPES: StepType[] = ['ai', 'script', 'http', 'transform'];
 
 export interface ExecutionResult {
   success: boolean;
@@ -97,8 +102,24 @@ export async function startExecution(
     );
   }
 
-  // Start executing the workflow with the steps
-  return executeWorkflowWithSteps(executionId, userId, inputData, steps);
+  // Fire-and-forget: always run execution in background so frontend can navigate immediately
+  executeWorkflowWithSteps(executionId, userId, inputData, steps).catch(err => {
+    console.error(`[WorkflowEngine] Background execution ${executionId} error:`, err);
+  });
+
+  // Return immediately so frontend can navigate to chat page
+  return {
+    success: true,
+    executionId,
+    status: 'running',
+    currentStep: 1,
+    stepResults: steps.map(s => ({
+      stepId: s.id,
+      stepOrder: s.step_order,
+      stepName: s.step_name,
+      status: 'pending' as StepExecutionStatus,
+    })),
+  };
 }
 
 // Extract required inputs from steps
@@ -167,8 +188,6 @@ async function executeWorkflowWithSteps(
   const execution = queries.getExecutionById(executionId) as WorkflowExecution;
   const stepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
 
-  const stepResults: StepExecutionResult[] = [];
-
   // Find the next step to execute
   let currentStepOrder = execution.current_step;
   const nextStepExecution = stepExecutions.find(
@@ -178,6 +197,20 @@ async function executeWorkflowWithSteps(
   if (!nextStepExecution) {
     // All steps completed
     queries.completeExecution('completed', executionId);
+
+    // Emit execution-complete
+    const completeMsg = executionEvents.createMessage({
+      executionId,
+      stepOrder: currentStepOrder,
+      stepName: '',
+      stepType: 'ai',
+      type: 'execution-complete',
+      role: 'system',
+      content: 'All steps complete',
+    });
+    executionEvents.emit(executionId, completeMsg);
+    executionEvents.cleanup(executionId);
+
     return {
       success: true,
       executionId,
@@ -211,6 +244,20 @@ async function executeWorkflowWithSteps(
     };
   }
 
+  const stepType = step.step_type || 'ai';
+
+  // Emit step-start
+  const startMsg = executionEvents.createMessage({
+    executionId,
+    stepOrder: step.step_order,
+    stepName: step.step_name,
+    stepType,
+    type: 'step-start',
+    role: 'system',
+    content: `Starting step ${step.step_order}: ${step.step_name}`,
+  });
+  executionEvents.emit(executionId, startMsg);
+
   // Update step status to running
   queries.updateStepExecution(
     'running',
@@ -222,7 +269,7 @@ async function executeWorkflowWithSteps(
   queries.updateExecutionStatus('running', step.step_order, executionId);
 
   // Dispatch to the appropriate executor via the registry
-  const executor = getExecutor(step.step_type || 'ai') || getExecutor('ai')!;
+  const executor = getExecutor(stepType) || getExecutor('ai')!;
 
   const executorContext: StepExecutorContext = {
     userId,
@@ -230,6 +277,7 @@ async function executeWorkflowWithSteps(
     stepExecution: nextStepExecution,
     userInputs,
     completedStepExecutions: stepExecutions.filter(se => se.status === 'completed'),
+    emitter: executionEvents,
   };
 
   try {
@@ -238,6 +286,20 @@ async function executeWorkflowWithSteps(
     if (!result.success) {
       queries.setStepExecutionError('failed', result.error || 'Step execution failed', nextStepExecution.id);
       queries.updateExecutionStatus('paused', step.step_order, executionId);
+
+      // Emit step-error
+      const errorMsg = executionEvents.createMessage({
+        executionId,
+        stepOrder: step.step_order,
+        stepName: step.step_name,
+        stepType,
+        type: 'step-error',
+        role: 'system',
+        content: result.error || 'Step execution failed',
+        metadata: { stepExecutionId: nextStepExecution.id },
+      });
+      executionEvents.emit(executionId, errorMsg);
+
       return {
         success: false,
         executionId,
@@ -260,6 +322,54 @@ async function executeWorkflowWithSteps(
       ...result.metadata,
     });
 
+    // Emit step-output
+    const outputMsg = executionEvents.createMessage({
+      executionId,
+      stepOrder: step.step_order,
+      stepName: step.step_name,
+      stepType,
+      type: 'step-output',
+      role: 'system',
+      content: result.content,
+      metadata: {
+        model: result.modelUsed,
+        usage: result.metadata?.usage,
+        images: result.metadata?.generatedImages,
+        isJson: result.metadata?.isJson || step.output_format === 'json',
+        stepExecutionId: nextStepExecution.id,
+      },
+    });
+    executionEvents.emit(executionId, outputMsg);
+
+    // Auto-run logic: non-interactive steps auto-approve and continue
+    if (AUTO_RUN_STEP_TYPES.includes(stepType)) {
+      // Auto-approve: set completed directly
+      queries.updateStepExecution(
+        'completed',
+        outputData,
+        result.modelUsed || executor.type,
+        result.promptUsed || '',
+        nextStepExecution.id
+      );
+      queries.approveStepExecution(true, 'completed', nextStepExecution.id);
+
+      // Emit step-approved
+      const approvedMsg = executionEvents.createMessage({
+        executionId,
+        stepOrder: step.step_order,
+        stepName: step.step_name,
+        stepType,
+        type: 'step-approved',
+        role: 'system',
+        content: 'Step auto-approved, continuing...',
+      });
+      executionEvents.emit(executionId, approvedMsg);
+
+      // Continue to next step
+      return executeWorkflowWithSteps(executionId, userId, userInputs, steps);
+    }
+
+    // Interactive steps (scraping, manus) — pause for review
     queries.updateStepExecution(
       'awaiting_review',
       outputData,
@@ -267,9 +377,23 @@ async function executeWorkflowWithSteps(
       result.promptUsed || '',
       nextStepExecution.id
     );
-
-    // Pause execution for review
     queries.updateExecutionStatus('paused', step.step_order, executionId);
+
+    // Emit action-required
+    const actionMsg = executionEvents.createMessage({
+      executionId,
+      stepOrder: step.step_order,
+      stepName: step.step_name,
+      stepType,
+      type: 'action-required',
+      role: 'system',
+      content: 'Step complete. Please review and approve or reject.',
+      metadata: {
+        actionType: 'approve',
+        stepExecutionId: nextStepExecution.id,
+      },
+    });
+    executionEvents.emit(executionId, actionMsg);
 
     // Get updated step executions
     const updatedStepExecutions = queries.getStepExecutionsByExecutionId(executionId) as StepExecution[];
@@ -292,9 +416,23 @@ async function executeWorkflowWithSteps(
       }),
     };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Step execution failed';
-    queries.setStepExecutionError('failed', errorMsg, nextStepExecution.id);
+    const errStr = error instanceof Error ? error.message : 'Step execution failed';
+    queries.setStepExecutionError('failed', errStr, nextStepExecution.id);
     queries.updateExecutionStatus('paused', step.step_order, executionId);
+
+    // Emit step-error
+    const errorMsg = executionEvents.createMessage({
+      executionId,
+      stepOrder: step.step_order,
+      stepName: step.step_name,
+      stepType,
+      type: 'step-error',
+      role: 'system',
+      content: errStr,
+      metadata: { stepExecutionId: nextStepExecution.id },
+    });
+    executionEvents.emit(executionId, errorMsg);
+
     return {
       success: false,
       executionId,
@@ -305,9 +443,9 @@ async function executeWorkflowWithSteps(
         stepOrder: step.step_order,
         stepName: step.step_name,
         status: 'failed',
-        error: errorMsg,
+        error: errStr,
       }],
-      error: errorMsg,
+      error: errStr,
     };
   }
 }
@@ -387,6 +525,19 @@ export async function approveStep(
   // Mark step as approved and completed
   queries.approveStepExecution(true, 'completed', stepExecutionId);
 
+  // Emit step-approved
+  const step = queries.getStepById(stepExecution.step_id) as RecipeStep;
+  const approvedMsg = executionEvents.createMessage({
+    executionId,
+    stepOrder: stepExecution.step_order,
+    stepName: step?.step_name || 'Unknown',
+    stepType: step?.step_type || 'ai',
+    type: 'step-approved',
+    role: 'system',
+    content: 'Step approved, continuing...',
+  });
+  executionEvents.emit(executionId, approvedMsg);
+
   // Get user inputs and custom steps from execution
   let userInputs: Record<string, any> = {};
   let customSteps: RecipeStep[] | undefined;
@@ -430,6 +581,19 @@ export function rejectStep(
   // Reset step to pending for retry
   queries.approveStepExecution(false, 'pending', stepExecutionId);
   queries.updateExecutionStatus('paused', stepExecution.step_order - 1, executionId);
+
+  // Emit step-rejected
+  const step = queries.getStepById(stepExecution.step_id) as RecipeStep;
+  const rejectedMsg = executionEvents.createMessage({
+    executionId,
+    stepOrder: stepExecution.step_order,
+    stepName: step?.step_name || 'Unknown',
+    stepType: step?.step_type || 'ai',
+    type: 'step-rejected',
+    role: 'system',
+    content: 'Step rejected',
+  });
+  executionEvents.emit(executionId, rejectedMsg);
 
   return { success: true };
 }

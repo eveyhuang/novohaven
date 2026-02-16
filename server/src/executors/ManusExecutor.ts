@@ -1,5 +1,5 @@
 import { RecipeStep } from '../types';
-import { createTask, waitForCompletion, isManusConfigured } from '../services/manusService';
+import { createTask, waitForCompletion, isManusConfigured, getTaskMessages } from '../services/manusService';
 import { compilePrompt } from '../services/promptParser';
 import { logUsage } from '../services/usageTrackingService';
 import { queries } from '../models/database';
@@ -56,6 +56,8 @@ export class ManusExecutor implements StepExecutor {
 
     const fullPrompt = compiled.compiledPrompt;
 
+    const { emitter, executionId } = context;
+
     try {
       const taskId = await createTask(fullPrompt);
 
@@ -64,7 +66,59 @@ export class ManusExecutor implements StepExecutor {
       const earlyMetadata = JSON.stringify({ manusTaskId: taskId, stepType: 'manus' });
       queries.updateStepExecution('running', earlyMetadata, 'manus:agent', fullPrompt, stepExecution.id);
 
+      // Emit progress with taskId so frontend knows about the Manus task
+      if (emitter) {
+        const progressMsg = emitter.createMessage({
+          executionId,
+          stepOrder: stepExecution.step_order,
+          stepName: step.step_name,
+          stepType: 'manus',
+          type: 'progress',
+          role: 'system',
+          content: 'Manus agent task started...',
+          metadata: { taskId },
+        });
+        emitter.emit(executionId, progressMsg);
+      }
+
+      // Poll for messages while waiting for completion
+      let lastMessageCount = 0;
+      const pollInterval = setInterval(async () => {
+        if (!emitter) return;
+        try {
+          const messagesResult = await getTaskMessages(taskId);
+          const messages = messagesResult.messages || [];
+          // Emit any new messages
+          for (let i = lastMessageCount; i < messages.length; i++) {
+            const msg = messages[i];
+            if (msg.role === 'assistant') {
+              const textContent = msg.content
+                ?.filter((c: any) => c.type === 'text')
+                .map((c: any) => c.text)
+                .join('\n') || '';
+              if (textContent) {
+                const agentMsg = emitter.createMessage({
+                  executionId,
+                  stepOrder: stepExecution.step_order,
+                  stepName: step.step_name,
+                  stepType: 'manus',
+                  type: 'agent-message',
+                  role: 'assistant',
+                  content: textContent,
+                  metadata: { taskId },
+                });
+                emitter.emit(executionId, agentMsg);
+              }
+            }
+          }
+          lastMessageCount = messages.length;
+        } catch {
+          // Ignore polling errors
+        }
+      }, 6000);
+
       const result = await waitForCompletion(taskId);
+      clearInterval(pollInterval);
 
       if (result.status === 'failed') {
         return {
@@ -89,6 +143,7 @@ export class ManusExecutor implements StepExecutor {
           creditsUsed: result.creditsUsed,
           stepType: 'manus',
           manusTaskId: taskId,
+          files: result.files,
         },
         promptUsed: fullPrompt,
         modelUsed: 'manus:agent',

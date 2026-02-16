@@ -135,6 +135,21 @@ class ApiClient {
     return this.request<WorkflowExecution>(`/executions/${id}`);
   }
 
+  async startQuickExecution(
+    stepType: string,
+    prompt: string,
+    inputData?: Record<string, any>
+  ): Promise<ExecutionResult> {
+    return this.request<ExecutionResult>('/executions/quick', {
+      method: 'POST',
+      body: JSON.stringify({
+        step_type: stepType,
+        prompt,
+        input_data: inputData || {},
+      }),
+    });
+  }
+
   async startExecution(
     recipeId: number,
     inputData: Record<string, any>,
@@ -367,6 +382,24 @@ class ApiClient {
 
   async getBrowserScreenshot(taskId: string): Promise<{ screenshot: string }> {
     return this.request<{ screenshot: string }>(`/browser/tasks/${taskId}/screenshot`);
+  }
+
+  // Execution stream (unified chat SSE)
+  connectExecutionStream(executionId: number): EventSource {
+    const token = this.getToken();
+    const url = `${API_BASE_URL}/executions/${executionId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    return new EventSource(url);
+  }
+
+  // Get Manus conversation history for chat reconstruction
+  async getManusMessages(taskId: string): Promise<{
+    taskId: string;
+    messages: any[];
+    status: string;
+    files?: any[];
+    creditsUsed?: number;
+  }> {
+    return this.request(`/manus/tasks/${taskId}/messages`);
   }
 
   // Assistant endpoints
