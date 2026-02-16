@@ -1,7 +1,8 @@
-import { RecipeStep, ScrapingPlatform } from '../types';
-import { scrapeReviews, isBrightDataConfigured } from '../services/brightDataService';
-import { parseReviewCSV } from '../services/csvParserService';
+import { RecipeStep } from '../types';
+import { browserService } from '../services/browserService';
+import { getStrategy, getAllStrategies } from '../services/extractionStrategies';
 import { logUsage } from '../services/usageTrackingService';
+import { queries } from '../models/database';
 import {
   StepExecutor,
   StepExecutorContext,
@@ -11,182 +12,235 @@ import {
 
 export class ScrapingExecutor implements StepExecutor {
   type = 'scraping';
-  displayName = 'Web Scraping';
-  icon = '🔍';
-  description = 'Scrape product reviews from e-commerce platforms using BrightData';
+  displayName = 'Browser Scraping';
+  icon = '🌐';
+  description = 'Scrape reviews from e-commerce platforms using browser automation';
 
   validateConfig(step: RecipeStep): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
-    // Scraping steps need input_config with variables or api_config
-    if (!step.input_config && !step.api_config) {
-      errors.push('Scraping step requires input configuration or API configuration');
+    if (!step.input_config) {
+      errors.push('Scraping step requires input configuration');
     }
     return { valid: errors.length === 0, errors };
   }
 
-  async execute(step: RecipeStep, context: StepExecutorContext): Promise<StepExecutorResult> {
-    // Parse API config to determine service
-    let apiConfig = { service: 'brightdata', endpoint: 'scrape_reviews' };
-    if (step.api_config) {
-      try {
-        apiConfig = JSON.parse(step.api_config);
-      } catch {
-        // Use defaults
-      }
-    }
-
+  async execute(_step: RecipeStep, context: StepExecutorContext): Promise<StepExecutorResult> {
     const { userInputs, userId } = context;
 
-    // Get input variables
-    let urls: string[] = [];
-    let csvData: string | undefined;
-    let platform: ScrapingPlatform | undefined;
+    console.log('[ScrapingExecutor] Starting execution');
+    console.log('[ScrapingExecutor] User inputs:', JSON.stringify(userInputs, null, 2));
+    console.log('[ScrapingExecutor] Step execution ID:', context.stepExecution.id);
 
-    // Check for URLs from user input
-    if (userInputs.product_urls) {
-      if (Array.isArray(userInputs.product_urls)) {
-        urls = userInputs.product_urls;
-      } else if (typeof userInputs.product_urls === 'string') {
-        urls = userInputs.product_urls
-          .split(/[\n,]/)
-          .map((url: string) => url.trim())
-          .filter((url: string) => url.length > 0);
-      }
+    // Parse URLs - accept multiple possible input names
+    const rawUrls = userInputs.urls || userInputs.product_urls || userInputs.product_url;
+    let urlList: string[] = [];
+    if (typeof rawUrls === 'string') {
+      urlList = rawUrls.split(/[\n,]/).map((u: string) => u.trim()).filter(Boolean);
+    } else if (Array.isArray(rawUrls)) {
+      urlList = rawUrls.filter(Boolean);
     }
 
-    // Check for CSV data
-    if (userInputs.csv_data) {
-      csvData = userInputs.csv_data;
-    } else if (userInputs.csv_file) {
-      csvData = typeof userInputs.csv_file === 'string'
-        ? userInputs.csv_file
-        : userInputs.csv_file?.content || userInputs.csv_file;
-    }
+    console.log('[ScrapingExecutor] Parsed URL list:', urlList);
 
-    // Check for platform specification
-    if (userInputs.platform) {
-      platform = userInputs.platform as ScrapingPlatform;
-    }
-
-    // Validate input
-    if (urls.length === 0 && !csvData) {
+    if (urlList.length === 0) {
       return {
         success: false,
         content: '',
-        error: 'No product URLs or CSV data provided for scraping',
+        error: 'No URLs provided. Please provide at least one URL to scrape.',
       };
     }
 
-    let scrapedData: any[] = [];
-    let usageInfo = { requests_made: 0, reviews_fetched: 0 };
+    // Determine platform
+    const platform = userInputs.platform || this.detectPlatform(urlList[0]);
+    console.log('[ScrapingExecutor] Detected platform:', platform);
 
-    // Process CSV data if provided
-    if (csvData) {
-      const parseResult = parseReviewCSV(csvData, platform);
-      if (parseResult.success && parseResult.data) {
-        scrapedData = parseResult.data;
-        usageInfo.reviews_fetched += parseResult.data.length;
-      } else if (!parseResult.success && urls.length === 0) {
-        return {
-          success: false,
-          content: '',
-          error: parseResult.error || 'Failed to parse CSV data',
-        };
-      }
+    if (!platform) {
+      return {
+        success: false,
+        content: '',
+        error: 'Could not determine platform. Please select a platform or provide a supported URL.',
+      };
     }
 
-    // Scrape URLs if provided
-    if (urls.length > 0) {
-      if (!isBrightDataConfigured()) {
-        return {
-          success: false,
-          content: '',
-          error: 'BrightData is not configured. Please set BRIGHTDATA_API_KEY environment variable.',
-        };
-      }
-
-      const scrapingResult = await scrapeReviews(urls);
-
-      if (scrapingResult.success && scrapingResult.data) {
-        for (const product of scrapingResult.data) {
-          scrapedData.push(...product.reviews.map(review => ({
-            ...review,
-            product_url: product.url,
-            product_name: product.product_name,
-            product_price: product.product_price,
-            product_features: product.product_features,
-          })));
-        }
-
-        if (scrapingResult.usage) {
-          usageInfo.requests_made += scrapingResult.usage.requests_made;
-          usageInfo.reviews_fetched += scrapingResult.usage.reviews_fetched;
-        }
-      } else if (!scrapingResult.success && scrapedData.length === 0) {
-        return {
-          success: false,
-          content: '',
-          error: scrapingResult.error || 'Failed to scrape reviews from URLs',
-        };
-      }
+    const strategy = getStrategy(platform);
+    if (!strategy) {
+      const available = getAllStrategies().map(s => s.platform);
+      return {
+        success: false,
+        content: '',
+        error: `Unsupported platform: ${platform}. Available: ${available.join(', ')}`,
+      };
     }
 
-    // Log usage for billing
-    logUsage(
-      userId,
-      apiConfig.service,
-      apiConfig.endpoint,
-      usageInfo.requests_made,
-      usageInfo.reviews_fetched
-    );
+    // Create browser task
+    const browserTaskId = browserService.createTask();
+    console.log('[ScrapingExecutor] Created browser task:', browserTaskId);
+    
+    const task = browserService.getTask(browserTaskId);
+    if (!task) {
+      console.error('[ScrapingExecutor] CRITICAL: Task not found immediately after creation!');
+      return {
+        success: false,
+        content: '',
+        error: 'Failed to create browser task',
+      };
+    }
+    console.log('[ScrapingExecutor] Retrieved task object, status:', task.status);
 
-    // Format output data
-    const outputContent = JSON.stringify({
-      reviews: scrapedData,
-      summary: {
-        total_reviews: scrapedData.length,
-        urls_processed: urls.length,
-        csv_rows_processed: csvData ? scrapedData.length - (urls.length > 0 ? scrapedData.length : 0) : 0,
+    try {
+      // Store browserTaskId early so frontend can connect to SSE stream
+      const earlyMetadata = JSON.stringify({ browserTaskId, stepType: 'scraping', platform });
+      console.log('[ScrapingExecutor] Updating step execution with metadata:', earlyMetadata);
+      queries.updateStepExecution('running', earlyMetadata, 'browser:scrape', urlList.join(', '), context.stepExecution.id);
+
+      // Wait a moment for frontend to poll and connect to SSE stream
+      console.log('[ScrapingExecutor] Waiting 4 seconds for frontend to connect...');
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      console.log('[ScrapingExecutor] Frontend should be connected now, listener count:', task.emitter.listenerCount('progress'));
+
+      // Emit initial message so UI shows activity immediately
+      console.log('[ScrapingExecutor] Emitting initial messages to task', browserTaskId);
+      browserService.emit(task, 'message', {
+        role: 'system',
+        content: [{ type: 'text', text: `Starting browser scraping for ${platform}...` }],
+      });
+
+      browserService.emit(task, 'message', {
+        role: 'system',
+        content: [{ type: 'text', text: `Processing ${urlList.length} URL(s)` }],
+      });
+
+      // Launch browser
+      console.log('[ScrapingExecutor] Launching browser...');
+      const page = await browserService.launchBrowser(browserTaskId);
+      console.log('[ScrapingExecutor] Browser launched successfully');
+
+      // Run extraction strategy
+      const onProgress = (message: string) => {
+        browserService.emit(task, 'message', {
+          role: 'system',
+          content: [{ type: 'text', text: message }],
+        });
+      };
+
+      const result = await strategy.execute(page, urlList, onProgress);
+
+      // Check for CAPTCHA
+      const hasCaptcha = await browserService.detectCaptcha(browserTaskId);
+      if (hasCaptcha) {
+        onProgress('CAPTCHA detected. Waiting for manual resolution...');
+        await browserService.waitForCaptchaResolution(browserTaskId);
+        // Retry extraction
+        const retryResult = await strategy.execute(page, urlList, onProgress);
+        const output = JSON.stringify(retryResult.data, null, 2);
+
+        // Emit completion event
+        browserService.emit(task, 'complete', {
+          output,
+          reviewCount: retryResult.reviewCount,
+        });
+
+        logUsage(userId, 'browser', 'scrape', 1, retryResult.reviewCount || 0, {
+          browserTaskId,
+          platform,
+        });
+
+        return {
+          success: retryResult.success,
+          content: output,
+          metadata: {
+            service: 'browser',
+            browserTaskId,
+            platform,
+            reviewCount: retryResult.reviewCount,
+            stepType: 'scraping',
+          },
+          modelUsed: 'browser:scrape',
+        };
       }
-    }, null, 2);
 
-    return {
-      success: true,
-      content: outputContent,
-      metadata: {
-        service: apiConfig.service,
-        usage: usageInfo,
-        stepType: 'scraping',
-      },
-      promptUsed: `Scraped ${urls.length} URL(s), processed ${scrapedData.length} reviews`,
-      modelUsed: `${apiConfig.service}:${apiConfig.endpoint}`,
-    };
+      const output = JSON.stringify(result.data, null, 2);
+
+      // Emit completion event
+      browserService.emit(task, 'complete', {
+        output,
+        reviewCount: result.reviewCount,
+      });
+
+      logUsage(userId, 'browser', 'scrape', 1, result.reviewCount || 0, {
+        browserTaskId,
+        platform,
+      });
+
+      return {
+        success: result.success,
+        content: output,
+        metadata: {
+          service: 'browser',
+          browserTaskId,
+          platform,
+          reviewCount: result.reviewCount,
+          stepType: 'scraping',
+        },
+        modelUsed: 'browser:scrape',
+      };
+    } catch (error: any) {
+      // Emit error event to UI
+      browserService.emit(task, 'error', {
+        error: `Browser scraping error: ${error.message}`,
+      });
+
+      return {
+        success: false,
+        content: '',
+        error: `Browser scraping error: ${error.message}`,
+      };
+    } finally {
+      // Don't destroy task immediately - keep it alive for 5 minutes so UI can connect
+      console.log('[ScrapingExecutor] Scheduling task cleanup in 5 minutes...');
+      setTimeout(async () => {
+        console.log('[ScrapingExecutor] Cleaning up browser task:', browserTaskId);
+        await browserService.destroyTask(browserTaskId);
+      }, 5 * 60 * 1000);
+    }
   }
 
   getConfigSchema(): ExecutorConfigSchema {
+    const strategies = getAllStrategies();
     return {
       fields: [
         {
-          name: 'service',
-          label: 'Scraping Service',
+          name: 'platform',
+          label: 'Platform',
           type: 'select',
           required: true,
-          defaultValue: 'brightdata',
-          options: [
-            { value: 'brightdata', label: 'BrightData' },
-          ],
+          options: strategies.map(s => ({ value: s.platform, label: s.displayName })),
+          helpText: 'Select the e-commerce platform to scrape reviews from.',
         },
         {
-          name: 'endpoint',
-          label: 'Endpoint',
-          type: 'select',
+          name: 'urls',
+          label: 'Product URLs',
+          type: 'textarea',
           required: true,
-          defaultValue: 'scrape_reviews',
-          options: [
-            { value: 'scrape_reviews', label: 'Scrape Reviews' },
-          ],
+          helpText: 'Product page URLs to extract reviews from, one per line.',
+        },
+        {
+          name: 'maxReviews',
+          label: 'Max Reviews',
+          type: 'number',
+          required: false,
+          defaultValue: 100,
+          helpText: 'Maximum number of reviews to extract per product (default: 100).',
         },
       ],
     };
+  }
+
+  private detectPlatform(url: string): string | null {
+    const lower = url.toLowerCase();
+    if (lower.includes('wayfair.com')) return 'wayfair';
+    if (lower.includes('amazon.com')) return 'amazon';
+    if (lower.includes('walmart.com')) return 'walmart';
+    return null;
   }
 }

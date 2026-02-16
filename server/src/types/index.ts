@@ -28,7 +28,7 @@ export interface RecipeWithSteps extends Recipe {
   steps: RecipeStep[];
 }
 
-export type StepType = 'ai' | 'scraping' | 'script' | 'browser' | 'http' | 'transform' | string;
+export type StepType = 'ai' | 'scraping' | 'manus' | 'script' | 'browser' | 'http' | 'transform' | string;
 
 export interface RecipeStep {
   id: number;
@@ -41,7 +41,7 @@ export interface RecipeStep {
   input_config?: string;
   output_format: 'text' | 'json' | 'markdown' | 'image';
   model_config?: string;
-  api_config?: string; // For non-AI steps: { service: 'brightdata', endpoint: 'scrape_reviews' }
+  api_config?: string; // For non-AI steps: { service: 'manus', endpoint: 'scrape' }
   executor_config?: string; // JSON: executor-specific configuration
   created_at: string;
 }
@@ -246,50 +246,44 @@ export interface TestAIRequest {
   config?: AIServiceConfig;
 }
 
-// Scraping types
-export type ScrapingPlatform = 'amazon' | 'walmart' | 'wayfair';
-
-export interface ScrapingRequest {
-  urls: string[];
-  platform?: ScrapingPlatform;
-}
-
-export interface ReviewData {
-  id: string;
-  platform: ScrapingPlatform;
-  product_url: string;
-  product_name?: string;
-  product_price?: string;
-  product_features?: string[];
-  reviewer_name?: string;
-  rating: number;
-  review_title?: string;
-  review_text: string;
-  review_date?: string;
-  verified_purchase?: boolean;
-  helpful_votes?: number;
-}
-
-export interface ScrapedProductData {
+// Manus AI scraping types
+export interface ManusFile {
+  name: string;
   url: string;
-  platform: ScrapingPlatform;
-  product_name: string;
-  product_price?: string;
-  product_features?: string[];
-  average_rating?: number;
-  total_reviews?: number;
-  reviews: ReviewData[];
-  scraped_at: string;
+  type: string;
+  size?: number;
 }
 
-export interface ScrapingResponse {
-  success: boolean;
-  data?: ScrapedProductData[];
+export interface ManusTaskResult {
+  taskId: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  output: string;
+  files?: ManusFile[];
+  creditsUsed?: number;
+}
+
+export interface ManusMessage {
+  role: 'assistant' | 'user' | 'system';
+  content: Array<{ type: string; text?: string; url?: string; [key: string]: any }>;
+  timestamp?: string;
+}
+
+export interface ScrapingStatus {
+  manus_configured: boolean;
+}
+
+// Browser automation types
+export interface BrowserTaskResult {
+  taskId: string;
+  status: 'created' | 'launching' | 'running' | 'captcha' | 'completed' | 'failed';
+  output?: string;
+  reviewCount?: number;
   error?: string;
-  usage?: {
-    requests_made: number;
-    reviews_fetched: number;
-  };
+}
+
+export interface BrowserProgressEvent {
+  type: 'status' | 'message' | 'take_control' | 'complete' | 'error';
+  data: Record<string, any>;
 }
 
 // Usage tracking types
@@ -314,19 +308,6 @@ export interface UsageStats {
   };
 }
 
-// CSV Upload types
-export interface CSVUploadRequest {
-  content: string;
-  filename: string;
-  platform?: ScrapingPlatform;
-}
-
-export interface CSVParseResult {
-  success: boolean;
-  data?: ReviewData[];
-  error?: string;
-  warnings?: string[];
-}
 
 // Express extended types
 declare global {

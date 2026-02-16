@@ -15,6 +15,8 @@ import scrapingRouter from './routes/scraping';
 import usageRouter from './routes/usage';
 import executorsRouter from './routes/executors';
 import assistantRouter from './routes/assistant';
+import manusRouter from './routes/manus';
+import browserRouter from './routes/browser';
 
 // Load environment variables from server directory
 // This ensures .env is loaded whether running from project root or server directory
@@ -62,6 +64,8 @@ app.use('/api/scraping', scrapingRouter);
 app.use('/api/usage', usageRouter);
 app.use('/api/executors', executorsRouter);
 app.use('/api/assistant', assistantRouter);
+app.use('/api/manus', manusRouter);
+app.use('/api/browser', browserRouter);
 
 // 404 handler
 app.use((req, res) => {
@@ -112,6 +116,13 @@ async function start() {
       console.log('  - POST /api/scraping/reviews');
       console.log('  - POST /api/scraping/csv/parse');
       console.log('  - POST /api/scraping/export');
+      console.log('  - POST /api/manus/tasks');
+      console.log('  - GET  /api/manus/tasks/:taskId/stream');
+      console.log('  - POST /api/manus/tasks/:taskId/messages');
+      console.log('  - POST /api/browser/tasks');
+      console.log('  - GET  /api/browser/tasks/:id/stream');
+      console.log('  - POST /api/browser/tasks/:id/resume');
+      console.log('  - GET  /api/browser/tasks/:id/screenshot');
       console.log('  - GET  /api/usage');
       console.log('  - GET  /api/usage/history');
       console.log('  - GET  /api/usage/billing');

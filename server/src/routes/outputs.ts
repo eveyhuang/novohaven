@@ -21,6 +21,13 @@ interface OutputRecord {
   output_format: string;
 }
 
+interface ManusFileOutput {
+  name: string;
+  url: string;
+  type: string;
+  size?: number;
+}
+
 interface ParsedOutput {
   id: number;
   executionId: number;
@@ -35,6 +42,8 @@ interface ParsedOutput {
     base64: string;
     mimeType: string;
   }>;
+  manusFiles?: ManusFileOutput[];
+  manusTaskId?: string;
 }
 
 // GET /api/outputs - Get all outputs for the current user
@@ -66,13 +75,40 @@ router.get('/', (req: Request, res: Response) => {
       };
     });
 
+    // Also fetch Manus standalone outputs
+    const manusOutputs = queries.getManusOutputsByUser(userId) as any[];
+    const parsedManusOutputs: ParsedOutput[] = manusOutputs.map((mo) => {
+      let files: ManusFileOutput[] | undefined;
+      try {
+        if (mo.files) files = JSON.parse(mo.files);
+      } catch { /* ignore */ }
+
+      return {
+        id: mo.id + 1000000, // offset to avoid ID collision with step_executions
+        executionId: 0,
+        stepId: 0,
+        recipeName: 'Manus AI Agent',
+        stepName: mo.prompt ? (mo.prompt.length > 60 ? mo.prompt.slice(0, 60) + '...' : mo.prompt) : 'Manus Task',
+        outputFormat: files?.length ? 'files' : 'markdown',
+        aiModel: 'Manus AI',
+        executedAt: mo.created_at,
+        content: mo.output_text || '',
+        manusFiles: files,
+        manusTaskId: mo.task_id,
+      };
+    });
+
+    const allOutputs = [...parsedOutputs, ...parsedManusOutputs]
+      .sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
+
     // Categorize by output type
     const categorized = {
-      all: parsedOutputs,
-      text: parsedOutputs.filter(o => o.outputFormat === 'text' && !o.generatedImages?.length),
-      markdown: parsedOutputs.filter(o => o.outputFormat === 'markdown' && !o.generatedImages?.length),
-      json: parsedOutputs.filter(o => o.outputFormat === 'json' && !o.generatedImages?.length),
-      images: parsedOutputs.filter(o => o.generatedImages && o.generatedImages.length > 0),
+      all: allOutputs,
+      text: allOutputs.filter(o => o.outputFormat === 'text' && !o.generatedImages?.length && !o.manusFiles?.length),
+      markdown: allOutputs.filter(o => o.outputFormat === 'markdown' && !o.generatedImages?.length && !o.manusFiles?.length),
+      json: allOutputs.filter(o => o.outputFormat === 'json' && !o.generatedImages?.length),
+      images: allOutputs.filter(o => o.generatedImages && o.generatedImages.length > 0),
+      files: allOutputs.filter(o => o.manusFiles && o.manusFiles.length > 0),
     };
 
     res.json(categorized);

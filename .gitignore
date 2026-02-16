@@ -30,3 +30,5 @@ yarn-error.log*
 .rts2_cache_es/
 .rts2_cache_umd/
 .cache
+client/node_modules/ 
+server/node_modules/ 

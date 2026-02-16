@@ -6,6 +6,8 @@ import api from '../../services/api';
 import { Button, Card, CardBody, CardHeader, Modal, TextArea, TranslatedText } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
 import { ReviewAnalysisDisplay } from '../ReviewAnalysis';
+import { ManusChat } from '../ManusChat/ManusChat';
+import { BrowserChat } from '../BrowserChat/BrowserChat';
 
 export function ExecutionView() {
   const { id } = useParams();
@@ -53,6 +55,8 @@ export function ExecutionView() {
     pollingRef.current = setInterval(async () => {
       try {
         const data = await api.getExecution(parseInt(id!));
+        console.log('[ExecutionView] Polling received data:', data);
+        console.log('[ExecutionView] Step executions:', data.step_executions?.map(s => ({ id: s.id, name: s.step_name, status: s.status, output_data: s.output_data })));
         setExecution(data);
 
         // Update selected step if needed
@@ -60,10 +64,12 @@ export function ExecutionView() {
           (se) => se.status === 'awaiting_review'
         );
         if (currentStep && (!selectedStep || selectedStep.id !== currentStep.id)) {
+          console.log('[ExecutionView] Setting selected step to awaiting_review step:', currentStep.id);
           setSelectedStep(currentStep);
         } else if (data.step_executions?.length && !currentStep) {
           const lastStep = data.step_executions[data.step_executions.length - 1];
           if (!selectedStep || selectedStep.id !== lastStep.id || selectedStep.status !== lastStep.status) {
+            console.log('[ExecutionView] Setting selected step to last step:', lastStep.id, 'status:', lastStep.status);
             setSelectedStep(lastStep);
           }
         }
@@ -83,6 +89,7 @@ export function ExecutionView() {
     setIsLoading(true);
     try {
       const data = await api.getExecution(executionId);
+      console.log('[ExecutionView] loadExecution received data:', data);
       setExecution(data);
 
       // Auto-select the current step being reviewed
@@ -90,9 +97,12 @@ export function ExecutionView() {
         (se) => se.status === 'awaiting_review'
       );
       if (reviewStep) {
+        console.log('[ExecutionView] Initial selected step (review):', reviewStep.id, reviewStep.status);
         setSelectedStep(reviewStep);
       } else if (data.step_executions?.length) {
-        setSelectedStep(data.step_executions[data.step_executions.length - 1]);
+        const lastStep = data.step_executions[data.step_executions.length - 1];
+        console.log('[ExecutionView] Initial selected step (last):', lastStep.id, lastStep.status, 'output_data:', lastStep.output_data);
+        setSelectedStep(lastStep);
       }
     } catch (err: any) {
       setError(err.message);
@@ -311,17 +321,36 @@ export function ExecutionView() {
                     This step hasn't been executed yet.
                   </div>
                 )}
-                {selectedStep.status === 'running' && (
-                  <div className="text-center py-8">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto"></div>
-                    <p className="text-secondary-500 mt-4">Processing...</p>
-                  </div>
-                )}
-                {selectedStep.status === 'failed' && selectedStep.error_message && (
-                  <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg mb-4">
-                    {selectedStep.error_message}
-                  </div>
-                )}
+                {selectedStep.status === 'running' && (() => {
+                  console.log('[ExecutionView] Rendering running step, step data:', selectedStep);
+                  return <ScrapingOrSpinner step={selectedStep} />;
+                })()}
+                {selectedStep.status === 'failed' && (() => {
+                  console.log('[ExecutionView] Step failed, checking for browser/manus task...');
+                  // Check if this failed step has an active browser/manus task
+                  let hasBrowserTask = false;
+                  let hasManusTask = false;
+                  try {
+                    const data = typeof selectedStep.output_data === 'string' 
+                      ? JSON.parse(selectedStep.output_data) 
+                      : selectedStep.output_data;
+                    hasBrowserTask = !!data?.browserTaskId;
+                    hasManusTask = !!data?.manusTaskId;
+                    console.log('[ExecutionView] Failed step has browserTask:', hasBrowserTask, 'manusTask:', hasManusTask);
+                  } catch {}
+                  
+                  // If there's an active browser/manus task, show the chat interface
+                  if (hasBrowserTask || hasManusTask) {
+                    return <ScrapingOrSpinner step={selectedStep} />;
+                  }
+                  
+                  // Otherwise show the error message
+                  return selectedStep.error_message ? (
+                    <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg mb-4">
+                      {selectedStep.error_message}
+                    </div>
+                  ) : null;
+                })()}
                 {(selectedStep.status === 'completed' ||
                   selectedStep.status === 'awaiting_review') &&
                   selectedStep.output && (
@@ -448,6 +477,65 @@ export function ExecutionView() {
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+// Show BrowserChat/ManusChat for running scraping steps, generic spinner for others
+function ScrapingOrSpinner({ step }: { step: StepExecution }) {
+  // Check if this step has a browserTaskId or manusTaskId in its output_data
+  const { browserTaskId, manusTaskId } = useMemo(() => {
+    console.log('[ScrapingOrSpinner] Checking step output_data:', step.output_data);
+    if (!step.output_data) {
+      console.log('[ScrapingOrSpinner] No output_data found');
+      return { browserTaskId: null, manusTaskId: null };
+    }
+    try {
+      const data = typeof step.output_data === 'string' ? JSON.parse(step.output_data) : step.output_data;
+      console.log('[ScrapingOrSpinner] Parsed output_data:', data);
+      const result = {
+        browserTaskId: data.browserTaskId || null,
+        manusTaskId: data.manusTaskId || null,
+      };
+      console.log('[ScrapingOrSpinner] Extracted IDs:', result);
+      return result;
+    } catch (err) {
+      console.error('[ScrapingOrSpinner] Error parsing output_data:', err);
+      return { browserTaskId: null, manusTaskId: null };
+    }
+  }, [step.output_data]);
+
+  if (browserTaskId) {
+    console.log('[ScrapingOrSpinner] Rendering BrowserChat with taskId:', browserTaskId);
+    return (
+      <BrowserChat
+        taskId={browserTaskId}
+        onComplete={() => {
+          console.log('[ScrapingOrSpinner] BrowserChat completed');
+          // The executor handles completion server-side; polling will pick up the status change
+        }}
+      />
+    );
+  }
+
+  if (manusTaskId) {
+    console.log('[ScrapingOrSpinner] Rendering ManusChat with taskId:', manusTaskId);
+    return (
+      <ManusChat
+        taskId={manusTaskId}
+        onComplete={() => {
+          console.log('[ScrapingOrSpinner] ManusChat completed');
+          // The executor handles completion server-side; polling will pick up the status change
+        }}
+      />
+    );
+  }
+
+  console.log('[ScrapingOrSpinner] No taskId found, showing spinner');
+  return (
+    <div className="text-center py-8">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto"></div>
+      <p className="text-secondary-500 mt-4">Processing...</p>
     </div>
   );
 }

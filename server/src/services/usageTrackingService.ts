@@ -71,13 +71,13 @@ export function generateBillingReport(userId: number): {
 } {
   const stats = getUserUsageStats(userId);
 
-  // Simple cost estimation (you can adjust based on BrightData pricing)
-  // BrightData typically charges per successful request or per 1000 records
-  const COST_PER_REQUEST = 0.01; // Example: $0.01 per request
-  const COST_PER_1000_RECORDS = 0.50; // Example: $0.50 per 1000 records
+  // Simple cost estimation based on Manus AI credits
+  const COST_PER_REQUEST = 0.10; // Example: $0.10 per Manus task
 
-  const requestCost = (stats.by_service['brightdata']?.requests || 0) * COST_PER_REQUEST;
-  const recordCost = ((stats.by_service['brightdata']?.records || 0) / 1000) * COST_PER_1000_RECORDS;
+  const manusRequests = (stats.by_service['manus']?.requests || 0);
+  const legacyRequests = (stats.by_service['brightdata']?.requests || 0);
+  const requestCost = (manusRequests + legacyRequests) * COST_PER_REQUEST;
+  const recordCost = 0;
 
   return {
     userId,

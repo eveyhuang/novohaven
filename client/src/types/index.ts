@@ -19,7 +19,7 @@ export interface Recipe {
   required_inputs?: string[];
 }
 
-export type StepType = 'ai' | 'scraping' | 'script' | 'browser' | 'http' | 'transform' | string;
+export type StepType = 'ai' | 'scraping' | 'manus' | 'script' | 'browser' | 'http' | 'transform' | string;
 
 export interface RecipeStep {
   id?: number;
@@ -32,7 +32,7 @@ export interface RecipeStep {
   input_config?: string;
   output_format: 'text' | 'json' | 'markdown' | 'image';
   model_config?: string;
-  api_config?: string; // For non-AI steps: { service: 'brightdata', endpoint: 'scrape_reviews' }
+  api_config?: string; // For non-AI steps: { service: 'manus', endpoint: 'scrape' }
   executor_config?: string; // JSON: executor-specific configuration
   created_at?: string;
 }
@@ -233,7 +233,60 @@ export interface LoginResponse {
   message: string;
 }
 
-// Scraping types
+// Manus AI scraping types
+export interface ManusFile {
+  name: string;
+  url: string;
+  type: string;
+  size?: number;
+}
+
+export interface ManusTaskResult {
+  taskId: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  output: string;
+  files?: ManusFile[];
+  creditsUsed?: number;
+}
+
+export interface ManusMessage {
+  role: 'assistant' | 'user' | 'system';
+  content: Array<{ type: string; text?: string; url?: string }>;
+  timestamp?: string;
+}
+
+export interface ManusStreamEvent {
+  type: 'message' | 'status' | 'complete' | 'error' | 'take_control';
+  data: ManusMessage | { status: string; stopReason?: string; taskUrl?: string } | ManusTaskResult | { error: string } | { taskUrl: string; message: string };
+}
+
+export interface ScrapingStatus {
+  manus_configured: boolean;
+}
+
+export interface ManusTestResult {
+  success: boolean;
+  taskId: string;
+  output: string;
+  files?: ManusFile[];
+  creditsUsed?: number;
+}
+
+// Browser automation types
+export interface BrowserTaskResult {
+  taskId: string;
+  status: 'created' | 'launching' | 'running' | 'captcha' | 'completed' | 'failed';
+  output?: string;
+  reviewCount?: number;
+  error?: string;
+}
+
+export interface BrowserStreamEvent {
+  type: 'message' | 'status' | 'take_control' | 'complete' | 'error';
+  data: any;
+}
+
+// Review display types (used by ReviewDataViewer)
 export type ScrapingPlatform = 'amazon' | 'walmart' | 'wayfair';
 
 export interface ReviewData {
@@ -251,42 +304,6 @@ export interface ReviewData {
   verified_purchase?: boolean;
   helpful_votes?: number;
   sentiment?: 'positive' | 'neutral' | 'negative';
-}
-
-export interface ScrapedProductData {
-  url: string;
-  platform: ScrapingPlatform;
-  product_name: string;
-  product_price?: string;
-  product_features?: string[];
-  average_rating?: number;
-  total_reviews?: number;
-  reviews: ReviewData[];
-  scraped_at: string;
-}
-
-export interface ScrapingResponse {
-  success: boolean;
-  data?: ScrapedProductData[];
-  error?: string;
-  invalid_urls?: string[];
-  usage?: {
-    requests_made: number;
-    reviews_fetched: number;
-  };
-}
-
-export interface ScrapingStatus {
-  brightdata_configured: boolean;
-  supported_platforms: string[];
-  csv_upload_enabled: boolean;
-}
-
-export interface CSVParseResult {
-  success: boolean;
-  data?: ReviewData[];
-  error?: string;
-  warnings?: string[];
 }
 
 // Usage tracking types

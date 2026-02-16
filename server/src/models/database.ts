@@ -158,6 +158,21 @@ export async function initializeDatabase(): Promise<void> {
     )
   `);
 
+  // Manus standalone task outputs
+  db.run(`
+    CREATE TABLE IF NOT EXISTS manus_outputs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(id),
+      task_id TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      output_text TEXT,
+      files TEXT,
+      credits_used REAL,
+      status TEXT DEFAULT 'completed',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // Create indexes
   db.run('CREATE INDEX IF NOT EXISTS idx_recipes_created_by ON recipes(created_by)');
   db.run('CREATE INDEX IF NOT EXISTS idx_recipe_steps_recipe_id ON recipe_steps(recipe_id)');
@@ -168,6 +183,8 @@ export async function initializeDatabase(): Promise<void> {
   db.run('CREATE INDEX IF NOT EXISTS idx_api_usage_user_id ON api_usage(user_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_api_usage_service ON api_usage(service)');
   db.run('CREATE INDEX IF NOT EXISTS idx_api_usage_created_at ON api_usage(created_at)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_manus_outputs_user_id ON manus_outputs(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_manus_outputs_task_id ON manus_outputs(task_id)');
 
   // Insert mock user for MVP and get the user ID
   let mockUserId: number;
@@ -461,45 +478,7 @@ Generate the image according to the exact specifications provided in the require
     imageGenSteps
   );
 
-  // Template: Review Extractor (uses BrightData scraping API, not AI)
-
-  const reviewExtractorInputConfig = JSON.stringify({
-    variables: {
-      product_urls: {
-        type: 'url_list',
-        label: 'Product URLs',
-        description: 'Enter product page URLs from Amazon (one per line)',
-        placeholder: 'https://www.amazon.com/dp/...\nhttps://www.walmart.com/ip/...'
-      }
-    }
-  });
-
-  const reviewExtractorApiConfig = JSON.stringify({
-    service: 'brightdata',
-    endpoint: 'scrape_reviews',
-    description: 'Scrapes product reviews from e-commerce URLs using BrightData API'
-  });
-
-  const reviewExtractorSteps = [
-    {
-      step_order: 1,
-      step_name: 'Scrape Reviews from URLs',
-      step_type: 'scraping',
-      ai_model: '',  // Empty string for non-AI steps (scraping uses api_config instead)
-      prompt_template: '',
-      output_format: 'json',
-      model_config: null,
-      api_config: reviewExtractorApiConfig,
-      input_config: reviewExtractorInputConfig
-    }
-  ];
-
-  upsertTemplateRecipe(
-    'Amazon Review Extractor',
-    'Extract product reviews from Amazon URLs using BrightData API',
-    mockUserId,
-    reviewExtractorSteps
-  );
+  
 
   // Template: Review Analyzer
 
@@ -773,9 +752,11 @@ export const queries = {
     run(`INSERT INTO step_executions (execution_id, step_id, step_order, status, input_data)
       VALUES (?, ?, ?, 'pending', ?)`, [executionId, stepId, stepOrder, inputData]),
   updateStepExecution: (status: string, outputData: string | null, aiModelUsed: string | null,
-    promptUsed: string | null, id: number) =>
-    run(`UPDATE step_executions SET status = ?, output_data = ?, ai_model_used = ?, prompt_used = ?, executed_at = CURRENT_TIMESTAMP
-      WHERE id = ?`, [status, outputData, aiModelUsed, promptUsed, id]),
+    promptUsed: string | null, id: number) => {
+    console.log(`[DB] updateStepExecution: id=${id}, status=${status}, outputData=${outputData?.substring(0, 100)}`);
+    return run(`UPDATE step_executions SET status = ?, output_data = ?, ai_model_used = ?, prompt_used = ?, executed_at = CURRENT_TIMESTAMP
+      WHERE id = ?`, [status, outputData, aiModelUsed, promptUsed, id]);
+  },
   approveStepExecution: (approved: boolean, status: string, id: number) =>
     run('UPDATE step_executions SET approved = ?, status = ? WHERE id = ?', [approved ? 1 : 0, status, id]),
   setStepExecutionError: (status: string, errorMessage: string, id: number) =>
@@ -853,6 +834,17 @@ export const queries = {
       GROUP BY u.id, au.service
       ORDER BY total_requests DESC
     `),
+
+  // Manus Outputs
+  createManusOutput: (userId: number, taskId: string, prompt: string, outputText: string, files: string | null, creditsUsed: number | null) =>
+    run(`INSERT INTO manus_outputs (user_id, task_id, prompt, output_text, files, credits_used)
+      VALUES (?, ?, ?, ?, ?, ?)`, [userId, taskId, prompt, outputText, files, creditsUsed]),
+
+  getManusOutputsByUser: (userId: number) =>
+    getAll('SELECT * FROM manus_outputs WHERE user_id = ? ORDER BY created_at DESC', [userId]),
+
+  getManusOutputById: (id: number) =>
+    getOne('SELECT * FROM manus_outputs WHERE id = ?', [id]),
 };
 
 export default db;

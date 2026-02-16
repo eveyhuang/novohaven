@@ -80,6 +80,10 @@ export function RecipeRunner() {
             if (config.variables) {
               Object.entries(config.variables).forEach(([key, varConfig]) => {
                 configs[key] = varConfig;
+                // Ensure url_list types have default array value
+                if (varConfig.type === 'url_list' && !(key in initialValues)) {
+                  initialValues[key] = [''];
+                }
               });
             }
             // Collect default values (if any)
@@ -92,6 +96,18 @@ export function RecipeRunner() {
             }
           } catch {
             // Ignore parse errors
+          }
+        }
+        
+        // Fallback for scraping steps without input_config - add default URL input
+        if (step.step_type === 'scraping' && !step.input_config) {
+          configs['urls'] = {
+            type: 'url_list',
+            label: 'Product URLs',
+            placeholder: 'Enter product URLs (one per line)',
+          };
+          if (!('urls' in initialValues)) {
+            initialValues['urls'] = [''];
           }
         }
       });
@@ -123,6 +139,7 @@ export function RecipeRunner() {
   // Extract required inputs from current step prompts and input configs
   const extractRequiredInputs = (): string[] => {
     const inputs = new Set<string>();
+    const optionalInputs = new Set<string>();
     const variableRegex = /\{\{([^}]+)\}\}/g;
 
     const standardNames = [
@@ -130,33 +147,72 @@ export function RecipeRunner() {
       'image_style_guidelines', 'platform_requirements', 'tone_guidelines',
     ];
 
+    // First pass: collect all optional fields from input_configs
     for (const step of localSteps) {
-      // For non-AI steps, get inputs from input_config
-      if (step.step_type && step.step_type !== 'ai' && step.input_config) {
+      if (step.input_config) {
         try {
           const config = JSON.parse(step.input_config);
           if (config.variables) {
             // Handle both array format and object format
             if (Array.isArray(config.variables)) {
-              // Array format: [{ name: 'product_urls', source: 'user_input', ... }]
               for (const variable of config.variables) {
-                if (variable.source === 'user_input' && variable.required !== false) {
-                  inputs.add(variable.name);
+                if (variable.optional === true || variable.required === false) {
+                  optionalInputs.add(variable.name);
                 }
               }
             } else {
-              // Object format: { product_urls: { type: 'url_list', ... } }
               for (const [varName, varConfig] of Object.entries(config.variables)) {
                 const cfg = varConfig as any;
-                // Skip optional variables
-                if (cfg.optional !== true) {
-                  inputs.add(varName);
+                if (cfg.optional === true) {
+                  optionalInputs.add(varName);
                 }
               }
             }
           }
         } catch {
           // Ignore parse errors
+        }
+      }
+    }
+
+    // Second pass: collect required inputs
+    for (const step of localSteps) {
+      // For non-AI steps (including scraping), get inputs from input_config
+      if (step.step_type && step.step_type !== 'ai') {
+        let foundInputs = false;
+        if (step.input_config) {
+          try {
+            const config = JSON.parse(step.input_config);
+            if (config.variables) {
+              // Handle both array format and object format
+              if (Array.isArray(config.variables)) {
+                // Array format: [{ name: 'product_urls', source: 'user_input', ... }]
+                for (const variable of config.variables) {
+                  if (variable.source === 'user_input' && variable.required !== false && variable.optional !== true) {
+                    inputs.add(variable.name);
+                    foundInputs = true;
+                  }
+                }
+              } else {
+                // Object format: { product_urls: { type: 'url_list', ... } }
+                for (const [varName, varConfig] of Object.entries(config.variables)) {
+                  const cfg = varConfig as any;
+                  // Skip optional variables
+                  if (cfg.optional !== true) {
+                    inputs.add(varName);
+                    foundInputs = true;
+                  }
+                }
+              }
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+        
+        // Fallback for scraping steps without input_config
+        if (step.step_type === 'scraping' && !foundInputs) {
+          inputs.add('urls');
         }
         continue;
       }
@@ -166,9 +222,10 @@ export function RecipeRunner() {
       const template = step.prompt_template || '';
       while ((match = variableRegex.exec(template)) !== null) {
         const varName = match[1].trim();
-        // Skip step outputs and company standards
+        // Skip step outputs, company standards, and optional fields
         if (!varName.match(/^step_\d+_output$/) &&
-            !standardNames.some(s => varName.toLowerCase().includes(s.replace(/_/g, '')))) {
+            !standardNames.some(s => varName.toLowerCase().includes(s.replace(/_/g, ''))) &&
+            !optionalInputs.has(varName)) {
           inputs.add(varName);
         }
       }
@@ -177,6 +234,60 @@ export function RecipeRunner() {
   };
 
   const requiredInputs = extractRequiredInputs();
+
+  // Extract ALL inputs (both required and optional) for display
+  const allInputs = useMemo(() => {
+    const allVars = new Set<string>();
+    const variableRegex = /\{\{([^}]+)\}\}/g;
+
+    const standardNames = [
+      'brand_voice', 'amazon_requirements', 'social_media_guidelines',
+      'image_style_guidelines', 'platform_requirements', 'tone_guidelines',
+    ];
+
+    for (const step of localSteps) {
+      // Get inputs from input_config
+      if (step.input_config) {
+        try {
+          const config = JSON.parse(step.input_config);
+          if (config.variables) {
+            if (Array.isArray(config.variables)) {
+              for (const variable of config.variables) {
+                if (variable.source === 'user_input') {
+                  allVars.add(variable.name);
+                }
+              }
+            } else {
+              for (const varName of Object.keys(config.variables)) {
+                allVars.add(varName);
+              }
+            }
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+
+      // For AI steps, also get from prompt template
+      if (step.step_type === 'ai' || !step.step_type) {
+        let match;
+        const template = step.prompt_template || '';
+        while ((match = variableRegex.exec(template)) !== null) {
+          const varName = match[1].trim();
+          if (!varName.match(/^step_\d+_output$/) &&
+              !standardNames.some(s => varName.toLowerCase().includes(s.replace(/_/g, '')))) {
+            allVars.add(varName);
+          }
+        }
+      }
+
+      // Fallback for scraping steps
+      if (step.step_type === 'scraping') {
+        allVars.add('urls');
+      }
+    }
+    return Array.from(allVars);
+  }, [localSteps]);
 
   const updateStep = (index: number, updates: Partial<RecipeStep>) => {
     const newSteps = [...localSteps];
@@ -253,8 +364,20 @@ export function RecipeRunner() {
 
     // Prepare input data - convert complex types to strings for prompt injection
     const processedInputs: Record<string, string> = {};
+    const isOptionalInput = (key: string) => !requiredInputs.includes(key);
+    
     for (const [key, value] of Object.entries(inputValues)) {
       const config = inputConfigs[key];
+
+      // Skip empty optional fields
+      if (isOptionalInput(key)) {
+        const isEmpty = !value || 
+          (typeof value === 'string' && !value.trim()) ||
+          (Array.isArray(value) && value.filter((u: string) => u?.trim()).length === 0);
+        if (isEmpty) {
+          continue;
+        }
+      }
 
       if (config?.type === 'image' && value?.base64) {
         // For images, include the base64 data (will be used by vision models)
@@ -282,46 +405,6 @@ export function RecipeRunner() {
       return null;
     }
 
-    // Validate URLs for scraping steps - only Amazon is supported
-    const scrapingSteps = localSteps.filter(s => s.step_type === 'scraping');
-    if (scrapingSteps.length > 0) {
-      // Find all URL list inputs that might be used by scraping steps
-      for (const [key, value] of Object.entries(inputValues)) {
-        const config = inputConfigs[key];
-        if (config?.type === 'url_list' && Array.isArray(value)) {
-          const urls = value.filter((u: string) => u.trim());
-          const nonAmazonUrls = urls.filter((url: string) => {
-            const trimmed = url.trim();
-            return trimmed && !trimmed.toLowerCase().includes('amazon.');
-          });
-          
-          if (nonAmazonUrls.length > 0) {
-            const plural = nonAmazonUrls.length !== 1 ? 's' : '';
-            const errorMsg = t('nonAmazonUrlsDetected')
-              .replace('{count}', nonAmazonUrls.length.toString())
-              .replace('{plural}', plural);
-            setError(`${t('onlyAmazonSupported')} ${errorMsg}`);
-            return null;
-          }
-        } else if (config?.type === 'url_list' && typeof value === 'string') {
-          // Handle case where URL list is stored as a string (newline-separated)
-          const urls = value.split('\n').filter((u: string) => u.trim());
-          const nonAmazonUrls = urls.filter((url: string) => {
-            const trimmed = url.trim();
-            return trimmed && !trimmed.toLowerCase().includes('amazon.');
-          });
-          
-          if (nonAmazonUrls.length > 0) {
-            const plural = nonAmazonUrls.length !== 1 ? 's' : '';
-            const errorMsg = t('nonAmazonUrlsDetected')
-              .replace('{count}', nonAmazonUrls.length.toString())
-              .replace('{plural}', plural);
-            setError(`${t('onlyAmazonSupported')} ${errorMsg}`);
-            return null;
-          }
-        }
-      }
-    }
 
     return processedInputs;
   };
@@ -339,6 +422,7 @@ export function RecipeRunner() {
     try {
       // Pass modified steps to the execution with processed inputs
       const result = await api.startExecution(recipe.id, processedInputs, localSteps);
+      console.log('[RecipeRunner] Execution started, executionId:', result.executionId);
 
       if (runInBackground) {
         // Track the execution in background and navigate to dashboard
@@ -350,12 +434,15 @@ export function RecipeRunner() {
           autoClose: true,
           duration: 3000,
         });
+        console.log('[RecipeRunner] Navigating to dashboard (background mode)');
         navigate('/');
       } else {
         // Navigate directly to the execution view
+        console.log('[RecipeRunner] Navigating to execution view:', `/executions/${result.executionId}`);
         navigate(`/executions/${result.executionId}`);
       }
     } catch (err: any) {
+      console.error('[RecipeRunner] Execution failed:', err);
       setError(err.message);
       setIsStarting(false);
     }
@@ -425,7 +512,7 @@ export function RecipeRunner() {
       )}
 
       {/* Input Values */}
-      {requiredInputs.length > 0 && (
+      {allInputs.length > 0 && (
         <Card>
           <CardHeader>
             <h2 className="font-semibold text-secondary-900">{t('inputValues')}</h2>
@@ -434,7 +521,7 @@ export function RecipeRunner() {
             </p>
           </CardHeader>
           <CardBody className="space-y-4">
-            {requiredInputs.map((input) => {
+            {allInputs.map((input) => {
               const config = inputConfigs[input] || {
                 type: 'text' as const,
                 label: formatLabel(input),
@@ -446,11 +533,22 @@ export function RecipeRunner() {
                 config.label = formatLabel(input);
               }
 
+              // Check if this input is optional
+              const isOptional = !requiredInputs.includes(input);
+              
+              // Add "(Optional)" to label if field is optional
+              const displayConfig = {
+                ...config,
+                label: isOptional && !config.label?.includes('Optional') 
+                  ? `${config.label} (Optional)` 
+                  : config.label,
+              };
+
               return (
                 <DynamicInput
                   key={input}
                   name={input}
-                  config={config}
+                  config={displayConfig}
                   value={inputValues[input]}
                   onChange={(value) =>
                     setInputValues({ ...inputValues, [input]: value })
@@ -506,7 +604,7 @@ export function RecipeRunner() {
                     </h4>
                     <p className="text-sm text-secondary-500">
                       {step.step_type === 'scraping'
-                        ? 'BrightData Scraping'
+                        ? 'Browser Scraping'
                         : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
                     </p>
                   </div>
@@ -554,35 +652,32 @@ export function RecipeRunner() {
                     <div className="space-y-4">
                       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <div className="flex items-center space-x-2 mb-2">
-                          <span className="text-2xl">🔍</span>
-                          <h4 className="font-medium text-blue-800">Scraping Step</h4>
+                          <span className="text-2xl">🌐</span>
+                          <h4 className="font-medium text-blue-800">Browser Scraping</h4>
                         </div>
                         <p className="text-sm text-blue-700">
-                          This step extracts product reviews from e-commerce URLs using the BrightData API.
-                          You can also upload CSV files with review data.
+                          Puppeteer-based browser automation extracts reviews directly from e-commerce sites.
                         </p>
-                        {step.api_config && (() => {
-                          try {
-                            const apiConfig = JSON.parse(step.api_config);
-                            return (
-                              <div className="mt-3 text-sm">
-                                <span className="text-blue-600 font-medium">Service:</span>
-                                <span className="ml-2 text-blue-800">{apiConfig.service}</span>
-                                <span className="ml-4 text-blue-600 font-medium">Endpoint:</span>
-                                <span className="ml-2 text-blue-800">{apiConfig.endpoint}</span>
-                              </div>
-                            );
-                          } catch {
-                            return null;
-                          }
-                        })()}
                       </div>
                       <div className="bg-secondary-50 rounded-lg p-4">
                         <h5 className="text-sm font-medium text-secondary-700 mb-2">Supported Platforms</h5>
                         <div className="flex space-x-2">
-                          <span className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded border border-orange-200">
-                            📦 Amazon
+                          <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded border border-purple-200">
+                            🛋️ Wayfair
                           </span>
+                        </div>
+                      </div>
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                        <div className="flex items-start space-x-2">
+                          <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <div>
+                            <h5 className="text-sm font-medium text-amber-800 mb-1">Required Input</h5>
+                            <p className="text-sm text-amber-700">
+                              This step requires <strong>Product URLs</strong> to be provided in the Input Values section above.
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </div>

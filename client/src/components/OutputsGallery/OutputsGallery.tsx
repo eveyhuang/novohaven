@@ -6,7 +6,7 @@ import { Card, CardBody, Button, Modal } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
 import { TranslationKey } from '../../i18n/translations';
 
-type OutputCategory = 'all' | 'text' | 'markdown' | 'json' | 'images';
+type OutputCategory = 'all' | 'text' | 'markdown' | 'json' | 'images' | 'files';
 
 export function OutputsGallery() {
   const navigate = useNavigate();
@@ -41,6 +41,7 @@ export function OutputsGallery() {
     { key: 'markdown', labelKey: 'markdownOutputs', icon: '📄' },
     { key: 'json', labelKey: 'jsonOutputs', icon: '{ }' },
     { key: 'images', labelKey: 'imageOutputs', icon: '🖼️' },
+    { key: 'files', labelKey: 'fileOutputs', icon: '📎' },
   ];
 
   const getDisplayOutputs = (): OutputItem[] => {
@@ -52,6 +53,23 @@ export function OutputsGallery() {
     if (!dateString) return '';
     const date = new Date(dateString);
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+  };
+
+  const formatBytes = (bytes?: number): string => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const getFileEmoji = (type: string): string => {
+    const t = type.toLowerCase();
+    if (t.includes('csv') || t.includes('excel') || t.includes('spreadsheet')) return '📊';
+    if (t.includes('pdf')) return '📕';
+    if (t.includes('image') || t.includes('png') || t.includes('jpg')) return '🖼️';
+    if (t.includes('json')) return '{ }';
+    if (t.includes('zip') || t.includes('archive')) return '📦';
+    return '📄';
   };
 
   const truncateContent = (content: string, maxLength: number = 200): string => {
@@ -188,6 +206,8 @@ export function OutputsGallery() {
                     px-2 py-1 text-xs font-medium rounded
                     ${output.generatedImages?.length
                       ? 'bg-purple-100 text-purple-700'
+                      : output.manusFiles?.length
+                      ? 'bg-orange-100 text-orange-700'
                       : output.outputFormat === 'json'
                       ? 'bg-blue-100 text-blue-700'
                       : output.outputFormat === 'markdown'
@@ -195,7 +215,7 @@ export function OutputsGallery() {
                       : 'bg-secondary-100 text-secondary-700'
                     }
                   `}>
-                    {output.generatedImages?.length ? t('image') : output.outputFormat}
+                    {output.generatedImages?.length ? t('image') : output.manusFiles?.length ? t('fileOutputs') : output.outputFormat}
                   </span>
                 </div>
 
@@ -211,6 +231,21 @@ export function OutputsGallery() {
                         />
                       </div>
                     ))}
+                  </div>
+                ) : output.manusFiles && output.manusFiles.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {output.manusFiles.slice(0, 3).map((file, idx) => (
+                      <div key={idx} className="flex items-center space-x-2 bg-secondary-50 rounded p-2">
+                        <span className="text-lg">{getFileEmoji(file.type)}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-secondary-800 truncate">{file.name}</p>
+                          <p className="text-xs text-secondary-500">{file.type}{file.size ? ` - ${formatBytes(file.size)}` : ''}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {output.manusFiles.length > 3 && (
+                      <p className="text-xs text-secondary-500">+{output.manusFiles.length - 3} more</p>
+                    )}
                   </div>
                 ) : (
                   <div className="bg-secondary-50 rounded p-3 text-sm text-secondary-700 max-h-24 overflow-hidden">
@@ -290,6 +325,40 @@ export function OutputsGallery() {
                   ))}
                 </div>
               </div>
+            ) : selectedOutput.manusFiles && selectedOutput.manusFiles.length > 0 ? (
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium text-secondary-700">{t('fileOutputs')}</h3>
+                <div className="space-y-2">
+                  {selectedOutput.manusFiles.map((file, idx) => (
+                    <a
+                      key={idx}
+                      href={file.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center space-x-3 p-3 bg-secondary-50 rounded-lg border border-secondary-200 hover:border-primary-300 hover:bg-primary-50 transition-colors"
+                    >
+                      <span className="text-2xl">{getFileEmoji(file.type)}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-secondary-900">{file.name}</p>
+                        <p className="text-xs text-secondary-500">{file.type}{file.size ? ` - ${formatBytes(file.size)}` : ''}</p>
+                      </div>
+                      <svg className="w-5 h-5 text-secondary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                    </a>
+                  ))}
+                </div>
+                {selectedOutput.content && (
+                  <div>
+                    <h3 className="text-sm font-medium text-secondary-700 mb-2">{t('content')}</h3>
+                    <div className="bg-secondary-50 rounded-lg p-4 max-h-96 overflow-auto">
+                      <div className="prose prose-sm max-w-none">
+                        <ReactMarkdown>{selectedOutput.content}</ReactMarkdown>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               <div>
                 <div className="flex items-center justify-between mb-3">
@@ -334,12 +403,16 @@ export function OutputsGallery() {
 
             {/* Actions */}
             <div className="flex justify-between pt-4 border-t border-secondary-200">
-              <Button
-                variant="ghost"
-                onClick={() => navigate(`/executions/${selectedOutput.executionId}`)}
-              >
-                {t('viewExecution')}
-              </Button>
+              {selectedOutput.executionId > 0 ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => navigate(`/executions/${selectedOutput.executionId}`)}
+                >
+                  {t('viewExecution')}
+                </Button>
+              ) : (
+                <span className="text-xs text-secondary-400">Manus AI Agent</span>
+              )}
               <Button variant="secondary" onClick={() => setShowDetailModal(false)}>
                 {t('close')}
               </Button>

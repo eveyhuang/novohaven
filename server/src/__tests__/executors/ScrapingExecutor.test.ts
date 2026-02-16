@@ -3,13 +3,26 @@ import { RecipeStep, StepExecution } from '../../types';
 import { StepExecutorContext } from '../../executors/StepExecutor';
 
 // Mock dependencies
-jest.mock('../../services/brightDataService', () => ({
-  scrapeReviews: jest.fn(),
-  isBrightDataConfigured: jest.fn(),
-}));
+jest.mock('../../services/browserService', () => {
+  const mockEmitter = { on: jest.fn(), once: jest.fn(), emit: jest.fn(), removeListener: jest.fn() };
+  return {
+    browserService: {
+      createTask: jest.fn().mockReturnValue('browser-task-123'),
+      getTask: jest.fn().mockReturnValue({ id: 'browser-task-123', emitter: mockEmitter, status: 'running' }),
+      launchBrowser: jest.fn().mockResolvedValue({}),
+      detectCaptcha: jest.fn().mockResolvedValue(false),
+      waitForCaptchaResolution: jest.fn(),
+      emit: jest.fn(),
+      destroyTask: jest.fn().mockResolvedValue(undefined),
+    },
+  };
+});
 
-jest.mock('../../services/csvParserService', () => ({
-  parseReviewCSV: jest.fn(),
+jest.mock('../../services/extractionStrategies', () => ({
+  getStrategy: jest.fn(),
+  getAllStrategies: jest.fn().mockReturnValue([
+    { platform: 'wayfair', displayName: 'Wayfair Reviews' },
+  ]),
 }));
 
 jest.mock('../../services/usageTrackingService', () => ({
@@ -17,16 +30,17 @@ jest.mock('../../services/usageTrackingService', () => ({
 }));
 
 jest.mock('../../models/database', () => ({
-  queries: {},
+  queries: {
+    updateStepExecution: jest.fn(),
+  },
 }));
 
-import { scrapeReviews, isBrightDataConfigured } from '../../services/brightDataService';
-import { parseReviewCSV } from '../../services/csvParserService';
+import { browserService } from '../../services/browserService';
+import { getStrategy } from '../../services/extractionStrategies';
 import { logUsage } from '../../services/usageTrackingService';
 
-const mockScrapeReviews = scrapeReviews as jest.MockedFunction<typeof scrapeReviews>;
-const mockIsBrightDataConfigured = isBrightDataConfigured as jest.MockedFunction<typeof isBrightDataConfigured>;
-const mockParseReviewCSV = parseReviewCSV as jest.MockedFunction<typeof parseReviewCSV>;
+const mockBrowserService = browserService as jest.Mocked<typeof browserService>;
+const mockGetStrategy = getStrategy as jest.MockedFunction<typeof getStrategy>;
 const mockLogUsage = logUsage as jest.MockedFunction<typeof logUsage>;
 
 describe('ScrapingExecutor', () => {
@@ -42,14 +56,13 @@ describe('ScrapingExecutor', () => {
       id: 1,
       recipe_id: 1,
       step_order: 1,
-      step_name: 'Scrape Reviews',
+      step_name: 'Scrape Data',
       step_type: 'scraping',
       ai_model: '',
       prompt_template: '',
       output_format: 'json',
-      api_config: JSON.stringify({ service: 'brightdata', endpoint: 'scrape_reviews' }),
       input_config: JSON.stringify({
-        variables: { product_urls: { type: 'url_list' } },
+        variables: { urls: { type: 'textarea' } },
       }),
       created_at: '2024-01-01',
     };
@@ -66,7 +79,8 @@ describe('ScrapingExecutor', () => {
         approved: false,
       } as StepExecution,
       userInputs: {
-        product_urls: 'https://amazon.com/product1\nhttps://amazon.com/product2',
+        platform: 'wayfair',
+        urls: 'https://www.wayfair.com/product/test-123.html',
       },
       completedStepExecutions: [],
     };
@@ -77,12 +91,16 @@ describe('ScrapingExecutor', () => {
       expect(executor.type).toBe('scraping');
     });
 
-    test('has display name', () => {
-      expect(executor.displayName).toBe('Web Scraping');
+    test('has display name mentioning Browser', () => {
+      expect(executor.displayName).toContain('Browser');
     });
 
     test('has an icon', () => {
       expect(executor.icon).toBeTruthy();
+    });
+
+    test('has description mentioning browser automation', () => {
+      expect(executor.description.toLowerCase()).toContain('browser');
     });
   });
 
@@ -92,16 +110,8 @@ describe('ScrapingExecutor', () => {
       expect(result.valid).toBe(true);
     });
 
-    test('returns valid when api_config is present', () => {
+    test('returns error when input_config is missing', () => {
       mockStep.input_config = undefined;
-      mockStep.api_config = JSON.stringify({ service: 'brightdata' });
-      const result = executor.validateConfig(mockStep);
-      expect(result.valid).toBe(true);
-    });
-
-    test('returns error when both input_config and api_config are missing', () => {
-      mockStep.input_config = undefined;
-      mockStep.api_config = undefined;
       const result = executor.validateConfig(mockStep);
       expect(result.valid).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
@@ -109,192 +119,169 @@ describe('ScrapingExecutor', () => {
   });
 
   describe('execute', () => {
-    test('scrapes URLs successfully via BrightData', async () => {
-      mockIsBrightDataConfigured.mockReturnValue(true);
-      mockScrapeReviews.mockResolvedValue({
-        success: true,
-        data: [{
-          url: 'https://amazon.com/product1',
-          platform: 'amazon',
-          product_name: 'Test Product',
-          reviews: [{
-            id: 'r1',
-            platform: 'amazon',
-            product_url: 'https://amazon.com/product1',
-            rating: 5,
-            review_text: 'Great product!',
-          }],
-          scraped_at: '2024-01-01',
-        }],
-        usage: { requests_made: 1, reviews_fetched: 1 },
-      });
-
-      const result = await executor.execute(mockStep, mockContext);
-
-      expect(result.success).toBe(true);
-      expect(result.content).toBeTruthy();
-      const parsed = JSON.parse(result.content);
-      expect(parsed.reviews).toHaveLength(1);
-      expect(parsed.summary.total_reviews).toBe(1);
-    });
-
-    test('returns failure when no URLs or CSV data provided', async () => {
-      mockContext.userInputs = {};
-
-      const result = await executor.execute(mockStep, mockContext);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('No product URLs or CSV data');
-    });
-
-    test('returns failure when BrightData is not configured', async () => {
-      mockIsBrightDataConfigured.mockReturnValue(false);
-
-      const result = await executor.execute(mockStep, mockContext);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('BrightData is not configured');
-    });
-
-    test('parses URLs from string with newlines', async () => {
-      mockIsBrightDataConfigured.mockReturnValue(true);
-      mockScrapeReviews.mockResolvedValue({
-        success: true,
-        data: [],
-        usage: { requests_made: 2, reviews_fetched: 0 },
-      });
-
-      await executor.execute(mockStep, mockContext);
-
-      expect(mockScrapeReviews).toHaveBeenCalledWith([
-        'https://amazon.com/product1',
-        'https://amazon.com/product2',
-      ]);
-    });
-
-    test('parses URLs from array input', async () => {
-      mockContext.userInputs.product_urls = [
-        'https://amazon.com/p1',
-        'https://amazon.com/p2',
-      ];
-      mockIsBrightDataConfigured.mockReturnValue(true);
-      mockScrapeReviews.mockResolvedValue({
-        success: true,
-        data: [],
-        usage: { requests_made: 2, reviews_fetched: 0 },
-      });
-
-      await executor.execute(mockStep, mockContext);
-
-      expect(mockScrapeReviews).toHaveBeenCalledWith([
-        'https://amazon.com/p1',
-        'https://amazon.com/p2',
-      ]);
-    });
-
-    test('processes CSV data when provided', async () => {
-      mockContext.userInputs = {
-        csv_data: 'header1,header2\nval1,val2',
+    test('completes a browser task successfully', async () => {
+      const mockStrategy = {
+        platform: 'wayfair',
+        displayName: 'Wayfair Reviews',
+        execute: jest.fn().mockResolvedValue({
+          success: true,
+          data: { reviews: [{ name: 'Test', rating: 5 }], totalCount: 1 },
+          reviewCount: 1,
+        }),
       };
-      mockParseReviewCSV.mockReturnValue({
-        success: true,
-        data: [{
-          id: 'csv1',
-          platform: 'amazon',
-          product_url: 'https://amazon.com/p1',
-          rating: 4,
-          review_text: 'Good',
-        }],
-      });
+      mockGetStrategy.mockReturnValue(mockStrategy);
 
       const result = await executor.execute(mockStep, mockContext);
 
       expect(result.success).toBe(true);
-      expect(mockParseReviewCSV).toHaveBeenCalledWith('header1,header2\nval1,val2', undefined);
+      expect(result.content).toContain('reviews');
+      expect(result.metadata?.service).toBe('browser');
+      expect(result.metadata?.browserTaskId).toBe('browser-task-123');
+      expect(result.metadata?.platform).toBe('wayfair');
+      expect(result.modelUsed).toBe('browser:scrape');
     });
 
-    test('processes csv_file input format', async () => {
-      mockContext.userInputs = {
-        csv_file: 'file content here',
-      };
-      mockParseReviewCSV.mockReturnValue({
-        success: true,
-        data: [{ id: '1', platform: 'amazon', product_url: 'url', rating: 5, review_text: 'text' }],
-      });
-
-      const result = await executor.execute(mockStep, mockContext);
-
-      expect(result.success).toBe(true);
-      expect(mockParseReviewCSV).toHaveBeenCalledWith('file content here', undefined);
-    });
-
-    test('logs usage after successful scraping', async () => {
-      mockIsBrightDataConfigured.mockReturnValue(true);
-      mockScrapeReviews.mockResolvedValue({
-        success: true,
-        data: [],
-        usage: { requests_made: 2, reviews_fetched: 10 },
-      });
-
-      await executor.execute(mockStep, mockContext);
-
-      expect(mockLogUsage).toHaveBeenCalledWith(1, 'brightdata', 'scrape_reviews', 2, 10);
-    });
-
-    test('returns failure when scraping fails and no CSV data', async () => {
-      mockIsBrightDataConfigured.mockReturnValue(true);
-      mockScrapeReviews.mockResolvedValue({
-        success: false,
-        error: 'Network error',
-      });
+    test('returns failure when no URLs are provided', async () => {
+      mockContext.userInputs = { platform: 'wayfair' };
 
       const result = await executor.execute(mockStep, mockContext);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Network error');
+      expect(result.error).toContain('No URLs provided');
     });
 
-    test('uses default api_config when parsing fails', async () => {
-      mockStep.api_config = 'invalid json';
-      mockIsBrightDataConfigured.mockReturnValue(true);
-      mockScrapeReviews.mockResolvedValue({
-        success: true,
-        data: [],
-        usage: { requests_made: 1, reviews_fetched: 0 },
+    test('returns failure when platform is unsupported', async () => {
+      mockContext.userInputs.platform = 'ebay';
+      mockGetStrategy.mockReturnValue(undefined);
+
+      const result = await executor.execute(mockStep, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Unsupported platform');
+    });
+
+    test('detects platform from URL when not explicitly set', async () => {
+      mockContext.userInputs = { urls: 'https://www.wayfair.com/product/test.html' };
+      const mockStrategy = {
+        platform: 'wayfair',
+        displayName: 'Wayfair Reviews',
+        execute: jest.fn().mockResolvedValue({
+          success: true,
+          data: { reviews: [] },
+          reviewCount: 0,
+        }),
+      };
+      mockGetStrategy.mockReturnValue(mockStrategy);
+
+      const result = await executor.execute(mockStep, mockContext);
+
+      expect(result.success).toBe(true);
+      expect(mockGetStrategy).toHaveBeenCalledWith('wayfair');
+    });
+
+    test('handles browser launch error', async () => {
+      mockGetStrategy.mockReturnValue({
+        platform: 'wayfair',
+        displayName: 'Wayfair Reviews',
+        execute: jest.fn(),
       });
+      mockBrowserService.launchBrowser.mockRejectedValueOnce(new Error('Max concurrent browsers reached'));
+
+      const result = await executor.execute(mockStep, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Max concurrent browsers');
+    });
+
+    test('handles extraction strategy error', async () => {
+      const mockStrategy = {
+        platform: 'wayfair',
+        displayName: 'Wayfair Reviews',
+        execute: jest.fn().mockRejectedValue(new Error('Failed to extract nodeId')),
+      };
+      mockGetStrategy.mockReturnValue(mockStrategy);
+
+      const result = await executor.execute(mockStep, mockContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Failed to extract nodeId');
+    });
+
+    test('parses comma-separated URLs', async () => {
+      mockContext.userInputs.urls = 'https://url1.com,https://url2.com';
+      const mockStrategy = {
+        platform: 'wayfair',
+        displayName: 'Wayfair Reviews',
+        execute: jest.fn().mockResolvedValue({
+          success: true,
+          data: [],
+          reviewCount: 0,
+        }),
+      };
+      mockGetStrategy.mockReturnValue(mockStrategy);
 
       await executor.execute(mockStep, mockContext);
 
-      // Should still work with defaults
-      expect(mockLogUsage).toHaveBeenCalledWith(1, 'brightdata', 'scrape_reviews', 1, 0);
+      const calledUrls = mockStrategy.execute.mock.calls[0][1];
+      expect(calledUrls).toHaveLength(2);
+      expect(calledUrls).toContain('https://url1.com');
+      expect(calledUrls).toContain('https://url2.com');
     });
 
-    test('returns metadata with service and usage info', async () => {
-      mockIsBrightDataConfigured.mockReturnValue(true);
-      mockScrapeReviews.mockResolvedValue({
-        success: true,
-        data: [],
-        usage: { requests_made: 1, reviews_fetched: 5 },
-      });
+    test('parses array URLs', async () => {
+      mockContext.userInputs.urls = ['https://url1.com', 'https://url2.com'];
+      const mockStrategy = {
+        platform: 'wayfair',
+        displayName: 'Wayfair Reviews',
+        execute: jest.fn().mockResolvedValue({
+          success: true,
+          data: [],
+          reviewCount: 0,
+        }),
+      };
+      mockGetStrategy.mockReturnValue(mockStrategy);
 
-      const result = await executor.execute(mockStep, mockContext);
+      await executor.execute(mockStep, mockContext);
 
-      expect(result.metadata?.service).toBe('brightdata');
-      expect(result.metadata?.usage).toEqual({ requests_made: 1, reviews_fetched: 5 });
-      expect(result.metadata?.stepType).toBe('scraping');
+      const calledUrls = mockStrategy.execute.mock.calls[0][1];
+      expect(calledUrls).toHaveLength(2);
     });
 
-    test('sets modelUsed to service:endpoint format', async () => {
-      mockIsBrightDataConfigured.mockReturnValue(true);
-      mockScrapeReviews.mockResolvedValue({
-        success: true,
-        data: [],
-        usage: { requests_made: 0, reviews_fetched: 0 },
-      });
+    test('logs usage with service browser', async () => {
+      const mockStrategy = {
+        platform: 'wayfair',
+        displayName: 'Wayfair Reviews',
+        execute: jest.fn().mockResolvedValue({
+          success: true,
+          data: { reviews: [] },
+          reviewCount: 5,
+        }),
+      };
+      mockGetStrategy.mockReturnValue(mockStrategy);
 
-      const result = await executor.execute(mockStep, mockContext);
+      await executor.execute(mockStep, mockContext);
 
-      expect(result.modelUsed).toBe('brightdata:scrape_reviews');
+      expect(mockLogUsage).toHaveBeenCalledWith(
+        1,
+        'browser',
+        'scrape',
+        1,
+        5,
+        expect.objectContaining({ browserTaskId: 'browser-task-123', platform: 'wayfair' })
+      );
+    });
+
+    test('always destroys browser task in finally block', async () => {
+      const mockStrategy = {
+        platform: 'wayfair',
+        displayName: 'Wayfair Reviews',
+        execute: jest.fn().mockRejectedValue(new Error('test error')),
+      };
+      mockGetStrategy.mockReturnValue(mockStrategy);
+
+      await executor.execute(mockStep, mockContext);
+
+      expect(mockBrowserService.destroyTask).toHaveBeenCalledWith('browser-task-123');
     });
   });
 
@@ -305,11 +292,32 @@ describe('ScrapingExecutor', () => {
       expect(schema.fields.length).toBeGreaterThan(0);
     });
 
-    test('includes service and endpoint fields', () => {
+    test('includes platform, urls, and maxReviews fields', () => {
       const schema = executor.getConfigSchema();
       const fieldNames = schema.fields.map(f => f.name);
-      expect(fieldNames).toContain('service');
-      expect(fieldNames).toContain('endpoint');
+      expect(fieldNames).toContain('platform');
+      expect(fieldNames).toContain('urls');
+      expect(fieldNames).toContain('maxReviews');
+    });
+
+    test('platform field is a select with options', () => {
+      const schema = executor.getConfigSchema();
+      const platformField = schema.fields.find(f => f.name === 'platform');
+      expect(platformField?.type).toBe('select');
+      expect(platformField?.options).toBeDefined();
+      expect(platformField?.options!.length).toBeGreaterThan(0);
+    });
+
+    test('urls field is required', () => {
+      const schema = executor.getConfigSchema();
+      const urlsField = schema.fields.find(f => f.name === 'urls');
+      expect(urlsField?.required).toBe(true);
+    });
+
+    test('maxReviews field is optional', () => {
+      const schema = executor.getConfigSchema();
+      const maxField = schema.fields.find(f => f.name === 'maxReviews');
+      expect(maxField?.required).toBe(false);
     });
   });
 });

@@ -12,11 +12,8 @@ import {
   LoginRequest,
   LoginResponse,
   User,
-  ScrapingResponse,
   ScrapingStatus,
-  CSVParseResult,
-  ScrapingPlatform,
-  ReviewData,
+  ManusTestResult,
   UsageStats,
   UsageHistoryItem,
   BillingReport,
@@ -292,65 +289,10 @@ class ApiClient {
     return this.request<ScrapingStatus>('/scraping/status');
   }
 
-  async scrapeReviews(urls: string[]): Promise<ScrapingResponse> {
-    return this.request<ScrapingResponse>('/scraping/reviews', {
+  async testScraping(prompt: string, urls?: string[]): Promise<ManusTestResult> {
+    return this.request<ManusTestResult>('/scraping/test', {
       method: 'POST',
-      body: JSON.stringify({ urls }),
-    });
-  }
-
-  async parseCSV(
-    content: string,
-    platform?: ScrapingPlatform,
-    productUrl?: string
-  ): Promise<CSVParseResult> {
-    return this.request<CSVParseResult>('/scraping/csv/parse', {
-      method: 'POST',
-      body: JSON.stringify({ content, platform, product_url: productUrl }),
-    });
-  }
-
-  async exportReviews(
-    reviews: ReviewData[],
-    format: 'csv' | 'json' = 'json'
-  ): Promise<Blob> {
-    const url = `${API_BASE_URL}/scraping/export`;
-    const token = this.getToken();
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-    };
-    if (token) {
-      (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ reviews, format }),
-    });
-
-    if (!response.ok) {
-      throw new Error('Export failed');
-    }
-
-    return response.blob();
-  }
-
-  async normalizeReviews(
-    scrapedData?: any[],
-    csvReviews?: ReviewData[]
-  ): Promise<{
-    success: boolean;
-    total_reviews: number;
-    products: any[];
-    all_reviews: ReviewData[];
-  }> {
-    return this.request('/scraping/normalize', {
-      method: 'POST',
-      body: JSON.stringify({
-        scraped_data: scrapedData,
-        csv_reviews: csvReviews,
-      }),
+      body: JSON.stringify({ prompt, urls }),
     });
   }
 
@@ -370,6 +312,61 @@ class ApiClient {
 
   async getAdminUsage(): Promise<AdminUsageItem[]> {
     return this.request<AdminUsageItem[]>('/usage/admin');
+  }
+
+  // Manus chat endpoints
+  async startManusTask(prompt: string, urls?: string[]): Promise<{ taskId: string }> {
+    return this.request<{ taskId: string }>('/manus/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ prompt, urls }),
+    });
+  }
+
+  async startManusTaskFromTemplate(
+    templateId: number,
+    variables: Record<string, string>
+  ): Promise<{ taskId: string; compiledPrompt: string }> {
+    return this.request<{ taskId: string; compiledPrompt: string }>('/manus/tasks/from-template', {
+      method: 'POST',
+      body: JSON.stringify({ templateId, variables }),
+    });
+  }
+
+  async sendManusMessage(taskId: string, message: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/manus/tasks/${taskId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    });
+  }
+
+  connectManusStream(taskId: string): EventSource {
+    const token = this.getToken();
+    const url = `${API_BASE_URL}/manus/tasks/${taskId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    return new EventSource(url);
+  }
+
+  // Browser automation endpoints
+  async startBrowserTask(platform: string, urls: string[], maxReviews?: number): Promise<{ taskId: string; platform: string }> {
+    return this.request<{ taskId: string; platform: string }>('/browser/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ platform, urls, maxReviews }),
+    });
+  }
+
+  connectBrowserStream(taskId: string): EventSource {
+    const token = this.getToken();
+    const url = `${API_BASE_URL}/browser/tasks/${taskId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    return new EventSource(url);
+  }
+
+  async resumeBrowserTask(taskId: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/browser/tasks/${taskId}/resume`, {
+      method: 'POST',
+    });
+  }
+
+  async getBrowserScreenshot(taskId: string): Promise<{ screenshot: string }> {
+    return this.request<{ screenshot: string }>(`/browser/tasks/${taskId}/screenshot`);
   }
 
   // Assistant endpoints
@@ -410,6 +407,13 @@ export interface ExecutorInfo {
   configSchema: { fields: ExecutorConfigField[] };
 }
 
+export interface ManusFileOutput {
+  name: string;
+  url: string;
+  type: string;
+  size?: number;
+}
+
 export interface OutputItem {
   id: number;
   executionId: number;
@@ -424,6 +428,8 @@ export interface OutputItem {
     base64: string;
     mimeType: string;
   }>;
+  manusFiles?: ManusFileOutput[];
+  manusTaskId?: string;
 }
 
 export interface OutputsResponse {
@@ -432,6 +438,7 @@ export interface OutputsResponse {
   markdown: OutputItem[];
   json: OutputItem[];
   images: OutputItem[];
+  files: OutputItem[];
 }
 
 export interface AssistantMessage {

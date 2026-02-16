@@ -12,6 +12,7 @@ import { StandardsManager } from './components/CompanyStandards';
 import { OutputsGallery } from './components/OutputsGallery';
 import { UsageDashboard } from './components/ReviewAnalysis';
 import { AIWorkflowBuilder } from './components/WorkflowBuilder';
+import { ManusAgentPage } from './components/ManusAgent/ManusAgentPage';
 
 function App() {
   return (
@@ -47,6 +48,9 @@ function App() {
             {/* AI Workflow Builder */}
             <Route path="/workflows/ai-builder" element={<AIWorkflowBuilder />} />
 
+            {/* Manus AI Agent */}
+            <Route path="/manus" element={<ManusAgentPage />} />
+
             {/* Usage Dashboard */}
             <Route path="/usage" element={<UsageDashboardPage />} />
 
@@ -78,7 +82,7 @@ function UsageDashboardPage() {
       <div>
         <h1 className="text-2xl font-bold text-secondary-900">API Usage</h1>
         <p className="text-secondary-600 mt-1">
-          Track your BrightData scraping usage and estimated costs
+          Track your scraping usage and estimated costs
         </p>
       </div>
       <UsageDashboard showBilling={true} />

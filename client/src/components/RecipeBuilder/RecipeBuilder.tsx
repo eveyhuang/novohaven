@@ -410,30 +410,6 @@ export function RecipeBuilder() {
                       <p className="text-sm text-blue-700">
                         {t('scrapingStepDescription')}
                       </p>
-                      {selectedStep.api_config && (() => {
-                        try {
-                          const apiConfig = JSON.parse(selectedStep.api_config);
-                          return (
-                            <div className="mt-3 text-sm">
-                              <span className="text-blue-600 font-medium">{t('service')}:</span>
-                              <span className="ml-2 text-blue-800">{apiConfig.service}</span>
-                              <span className="ml-4 text-blue-600 font-medium">{t('endpoint')}:</span>
-                              <span className="ml-2 text-blue-800">{apiConfig.endpoint}</span>
-                            </div>
-                          );
-                        } catch {
-                          return null;
-                        }
-                      })()}
-                    </div>
-
-                    <div className="bg-secondary-50 rounded-lg p-4">
-                      <h5 className="text-sm font-medium text-secondary-700 mb-2">{t('supportedPlatforms')}</h5>
-                      <div className="flex space-x-2">
-                        <span className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded border border-orange-200">
-                          📦 Amazon
-                        </span>
-                      </div>
                     </div>
 
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">

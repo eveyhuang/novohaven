@@ -104,15 +104,20 @@ describe('Built-in executor classes', () => {
   });
 
   test('ScrapingExecutor implements StepExecutor interface', () => {
-    jest.mock('../../services/brightDataService', () => ({ scrapeReviews: jest.fn(), isBrightDataConfigured: jest.fn() }));
-    jest.mock('../../services/csvParserService', () => ({ parseReviewCSV: jest.fn() }));
+    jest.mock('../../services/browserService', () => ({
+      browserService: { createTask: jest.fn(), launchBrowser: jest.fn(), destroyTask: jest.fn(), getTask: jest.fn(), emit: jest.fn(), detectCaptcha: jest.fn() },
+    }));
+    jest.mock('../../services/extractionStrategies', () => ({
+      getStrategy: jest.fn(),
+      getAllStrategies: jest.fn().mockReturnValue([{ platform: 'wayfair', displayName: 'Wayfair Reviews' }]),
+    }));
     jest.mock('../../services/usageTrackingService', () => ({ logUsage: jest.fn() }));
-    jest.mock('../../models/database', () => ({ queries: {} }));
+    jest.mock('../../models/database', () => ({ queries: { updateStepExecution: jest.fn() } }));
 
     const { ScrapingExecutor } = require('../../executors/ScrapingExecutor');
     const scraping = new ScrapingExecutor();
     expect(scraping.type).toBe('scraping');
-    expect(scraping.displayName).toBe('Web Scraping');
+    expect(scraping.displayName).toContain('Browser');
     expect(typeof scraping.execute).toBe('function');
     expect(typeof scraping.validateConfig).toBe('function');
     expect(typeof scraping.getConfigSchema).toBe('function');

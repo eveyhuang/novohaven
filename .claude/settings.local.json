@@ -32,7 +32,21 @@
       "Bash(pkill:*)",
       "mcp__chrome-devtools__take_screenshot",
       "Bash(curl:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "WebSearch",
+      "WebFetch(domain:open.manus.im)",
+      "mcp__chrome-devtools__list_network_requests",
+      "mcp__chrome-devtools__emulate",
+      "mcp__chrome-devtools__get_network_request",
+      "mcp__chrome-devtools__list_console_messages",
+      "mcp__larkmcp__docx_builtin_import",
+      "WebFetch(domain:docs.aimlapi.com)",
+      "WebFetch(domain:new2026.medium.com)",
+      "WebFetch(domain:docs.elastic.io)",
+      "WebFetch(domain:manus.im)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:manus-api.mintlify.app)",
+      "Bash(npm test:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
