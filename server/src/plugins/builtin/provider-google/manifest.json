@@ -1,0 +1,14 @@
+{
+  "name": "provider-google",
+  "version": "1.0.0",
+  "type": "provider",
+  "displayName": "Google Gemini",
+  "description": "Gemini models via Google Generative AI API, with embeddings support",
+  "entry": "./index.ts",
+  "config": {
+    "type": "object",
+    "properties": {
+      "apiKey": { "type": "string", "description": "Google API key (falls back to GOOGLE_API_KEY env var)", "secret": true }
+    }
+  }
+}

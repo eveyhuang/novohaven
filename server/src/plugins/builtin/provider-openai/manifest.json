@@ -1,0 +1,14 @@
+{
+  "name": "provider-openai",
+  "version": "1.0.0",
+  "type": "provider",
+  "displayName": "OpenAI",
+  "description": "GPT models via OpenAI API, with embeddings support",
+  "entry": "./index.ts",
+  "config": {
+    "type": "object",
+    "properties": {
+      "apiKey": { "type": "string", "description": "OpenAI API key (falls back to OPENAI_API_KEY env var)", "secret": true }
+    }
+  }
+}
