@@ -1,0 +1,14 @@
+{
+  "name": "provider-anthropic",
+  "version": "1.0.0",
+  "type": "provider",
+  "displayName": "Anthropic Claude",
+  "description": "Claude models via Anthropic API",
+  "entry": "./index.ts",
+  "config": {
+    "type": "object",
+    "properties": {
+      "apiKey": { "type": "string", "description": "Anthropic API key (falls back to ANTHROPIC_API_KEY env var)", "secret": true }
+    }
+  }
+}

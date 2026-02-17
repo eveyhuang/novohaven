@@ -18,6 +18,8 @@ import assistantRouter from './routes/assistant';
 import manusRouter from './routes/manus';
 import browserRouter from './routes/browser';
 import executionStreamRouter from './routes/executionStream';
+import pluginsRouter from './routes/plugins';
+import { loadAllPlugins } from './plugins/loader';
 
 // Load environment variables from server directory
 // This ensures .env is loaded whether running from project root or server directory
@@ -68,6 +70,7 @@ app.use('/api/assistant', assistantRouter);
 app.use('/api/manus', manusRouter);
 app.use('/api/browser', browserRouter);
 app.use('/api/executions', executionStreamRouter);
+app.use('/api/plugins', pluginsRouter);
 
 // 404 handler
 app.use((req, res) => {
@@ -87,6 +90,10 @@ async function start() {
     console.log('Initializing database...');
     initializeDatabase();
     console.log('Database initialized successfully');
+
+    console.log('Loading plugins...');
+    await loadAllPlugins();
+    console.log('Plugins loaded successfully');
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
