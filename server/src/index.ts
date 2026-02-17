@@ -20,6 +20,7 @@ import browserRouter from './routes/browser';
 import executionStreamRouter from './routes/executionStream';
 import pluginsRouter from './routes/plugins';
 import { loadAllPlugins } from './plugins/loader';
+import { createChannelRouter } from './gateway/channelRouter';
 
 // Load environment variables from server directory
 // This ensures .env is loaded whether running from project root or server directory
@@ -94,6 +95,13 @@ async function start() {
     console.log('Loading plugins...');
     await loadAllPlugins();
     console.log('Plugins loaded successfully');
+
+    // Mount channel routes (will be empty until channel plugins are added)
+    const channelRouter = createChannelRouter(async (message) => {
+      // Will be wired to agent supervisor in Task 4.3
+      console.log('[Gateway] Received message:', message.channelType, message.content.text?.substring(0, 50));
+    });
+    app.use('/channels', channelRouter);
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
