@@ -1,0 +1,15 @@
+{
+  "name": "tool-fileops",
+  "version": "1.0.0",
+  "type": "tool",
+  "displayName": "File Operations",
+  "description": "Read, write, and list files with path restrictions",
+  "entry": "./index.ts",
+  "config": {
+    "type": "object",
+    "properties": {
+      "allowedPaths": { "type": "array", "items": { "type": "string" }, "description": "Allowed directory paths" },
+      "maxFileSize": { "type": "number", "description": "Max file size in bytes for read/write", "default": 1048576 }
+    }
+  }
+}

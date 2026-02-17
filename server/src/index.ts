@@ -19,8 +19,16 @@ import manusRouter from './routes/manus';
 import browserRouter from './routes/browser';
 import executionStreamRouter from './routes/executionStream';
 import pluginsRouter from './routes/plugins';
+import sessionsRouter from './routes/sessions';
+import agentsRouter from './routes/agents';
+import skillsRouter from './routes/skills';
+import workflowsRouter from './routes/workflows';
+import skillDraftsRouter from './routes/skillDrafts';
 import { loadAllPlugins } from './plugins/loader';
 import { createChannelRouter } from './gateway/channelRouter';
+import { SessionManager } from './gateway/sessionManager';
+import { AgentSupervisor } from './gateway/agentSupervisor';
+import { pluginRegistry } from './plugins/registry';
 
 // Load environment variables from server directory
 // This ensures .env is loaded whether running from project root or server directory
@@ -72,6 +80,11 @@ app.use('/api/manus', manusRouter);
 app.use('/api/browser', browserRouter);
 app.use('/api/executions', executionStreamRouter);
 app.use('/api/plugins', pluginsRouter);
+app.use('/api/sessions', sessionsRouter);
+app.use('/api/agents', agentsRouter);
+app.use('/api/skills/drafts', skillDraftsRouter);
+app.use('/api/skills', skillsRouter);
+app.use('/api/workflows', workflowsRouter);
 
 // 404 handler
 app.use((req, res) => {
@@ -96,53 +109,67 @@ async function start() {
     await loadAllPlugins();
     console.log('Plugins loaded successfully');
 
-    // Mount channel routes (will be empty until channel plugins are added)
+    // Initialize gateway components
+    console.log('Initializing gateway...');
+    const sessionManager = new SessionManager();
+
+    // Response handler: route agent responses back to the correct channel
+    const agentSupervisor = new AgentSupervisor({
+      sessionManager,
+      onResponse: async (sessionId, response) => {
+        const session = sessionManager.getSession(sessionId);
+        if (!session) {
+          console.warn(`[Gateway] No session found for response: ${sessionId}`);
+          return;
+        }
+
+        // Persist assistant message
+        sessionManager.appendMessage(sessionId, 'assistant', response.text || '');
+
+        // Route response back to the originating channel
+        for (const [name, channel] of pluginRegistry.getAllChannels()) {
+          if (name.includes(session.channel_type) || session.channel_type === name.replace('channel-', '')) {
+            try {
+              await channel.sendOutbound(session.channel_id, response);
+            } catch (err: any) {
+              console.error(`[Gateway] Failed to send response via ${name}:`, err.message);
+            }
+            break;
+          }
+        }
+      },
+    });
+    agentSupervisor.start();
+
+    // Mount channel routes — wire to agent supervisor
     const channelRouter = createChannelRouter(async (message) => {
-      // Will be wired to agent supervisor in Task 4.3
-      console.log('[Gateway] Received message:', message.channelType, message.content.text?.substring(0, 50));
+      console.log(`[Gateway] Routing message from ${message.channelType}: ${message.content.text?.substring(0, 50)}`);
+
+      // Persist user message
+      const session = sessionManager.resolveSession(
+        message.channelType, message.channelId,
+        message.userId, message.threadId
+      );
+      sessionManager.appendMessage(session.id, 'user', message.content.text || '');
+
+      // Route to agent
+      await agentSupervisor.routeMessage(message);
     });
     app.use('/channels', channelRouter);
+    console.log('Gateway initialized successfully');
 
     app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(`\nServer running on http://localhost:${PORT}`);
       console.log(`Health check: http://localhost:${PORT}/api/health`);
-      console.log('\nAvailable endpoints:');
-      console.log('  - GET  /api/recipes');
-      console.log('  - POST /api/recipes');
-      console.log('  - GET  /api/recipes/:id');
-      console.log('  - PUT  /api/recipes/:id');
-      console.log('  - DELETE /api/recipes/:id');
-      console.log('  - POST /api/recipes/:id/clone');
-      console.log('  - GET  /api/executions');
-      console.log('  - POST /api/executions');
-      console.log('  - GET  /api/executions/:id');
-      console.log('  - POST /api/executions/:id/steps/:stepId/approve');
-      console.log('  - POST /api/executions/:id/steps/:stepId/reject');
-      console.log('  - POST /api/executions/:id/steps/:stepId/retry');
-      console.log('  - GET  /api/standards');
-      console.log('  - POST /api/standards');
-      console.log('  - GET  /api/standards/:id');
-      console.log('  - PUT  /api/standards/:id');
-      console.log('  - DELETE /api/standards/:id');
-      console.log('  - GET  /api/ai/models');
-      console.log('  - GET  /api/ai/providers');
-      console.log('  - POST /api/ai/test');
-      console.log('  - POST /api/auth/login');
-      console.log('  - GET  /api/auth/me');
-      console.log('  - GET  /api/scraping/status');
-      console.log('  - POST /api/scraping/reviews');
-      console.log('  - POST /api/scraping/csv/parse');
-      console.log('  - POST /api/scraping/export');
-      console.log('  - POST /api/manus/tasks');
-      console.log('  - GET  /api/manus/tasks/:taskId/stream');
-      console.log('  - POST /api/manus/tasks/:taskId/messages');
-      console.log('  - POST /api/browser/tasks');
-      console.log('  - GET  /api/browser/tasks/:id/stream');
-      console.log('  - POST /api/browser/tasks/:id/resume');
-      console.log('  - GET  /api/browser/tasks/:id/screenshot');
-      console.log('  - GET  /api/usage');
-      console.log('  - GET  /api/usage/history');
-      console.log('  - GET  /api/usage/billing');
+      console.log('\nGateway endpoints:');
+      console.log('  - POST /channels/channel-web/message');
+      console.log('  - GET  /channels/channel-web/stream');
+      console.log('  - POST /channels/channel-lark/webhook');
+      console.log('\nAPI endpoints:');
+      console.log('  - /api/skills, /api/workflows, /api/sessions');
+      console.log('  - /api/agents, /api/plugins, /api/skills/drafts');
+      console.log('  - /api/recipes, /api/executions, /api/standards');
+      console.log('  - /api/ai, /api/auth, /api/outputs, /api/usage');
     });
   } catch (error) {
     console.error('Failed to start server:', error);

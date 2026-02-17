@@ -1,0 +1,228 @@
+/**
+ * ToolExecutor — bridges LLM tool calls to tool plugins and built-in tools.
+ *
+ * Aggregates tool definitions from:
+ * - All registered tool plugins (via getTools())
+ * - Built-in agent tools: skill:search, skill:execute, skill:test, skill:edit, skill:create, skill:validate, approval:request
+ *
+ * Routes tool calls to the appropriate handler:
+ * - skill:* and approval:* → internal handlers
+ * - Everything else → delegate to matching tool plugin
+ */
+import { ToolDefinition, ToolPlugin, ToolResult, ToolContext } from '../plugins/types';
+
+export class ToolExecutor {
+  private toolPlugins: Map<string, ToolPlugin>;
+  private context: ToolContext;
+
+  constructor(toolPlugins: Map<string, ToolPlugin>, context: ToolContext) {
+    this.toolPlugins = toolPlugins;
+    this.context = context;
+  }
+
+  /**
+   * Get all available tool definitions (plugin tools + built-in).
+   */
+  getToolDefinitions(): ToolDefinition[] {
+    const defs: ToolDefinition[] = [];
+
+    // Gather from all registered tool plugins
+    for (const [, plugin] of this.toolPlugins) {
+      defs.push(...plugin.getTools());
+    }
+
+    // Add built-in agent tools
+    defs.push(...this.getBuiltInToolDefinitions());
+
+    return defs;
+  }
+
+  /**
+   * Execute a tool call by name.
+   */
+  async execute(toolName: string, args: Record<string, any>): Promise<ToolResult> {
+    // Check built-in tools first
+    if (toolName.startsWith('skill:') || toolName.startsWith('approval:')) {
+      return this.executeBuiltIn(toolName, args);
+    }
+
+    // Find the plugin that owns this tool
+    for (const [, plugin] of this.toolPlugins) {
+      const tools = plugin.getTools();
+      if (tools.some(t => t.name === toolName)) {
+        return plugin.execute(toolName, args, this.context);
+      }
+    }
+
+    return { success: false, output: `Unknown tool: ${toolName}` };
+  }
+
+  /**
+   * Execute a built-in agent tool.
+   * These are stubs that delegate to the tool-skill-manager plugin
+   * or internal approval logic. The actual implementations live in the
+   * tool-skill-manager plugin (Task 6.1).
+   */
+  private async executeBuiltIn(toolName: string, args: Record<string, any>): Promise<ToolResult> {
+    // Delegate skill:* tools to the skill manager plugin if registered
+    const skillManager = this.toolPlugins.get('tool-skill-manager');
+    if (skillManager) {
+      const tools = skillManager.getTools();
+      if (tools.some(t => t.name === toolName)) {
+        return skillManager.execute(toolName, args, this.context);
+      }
+    }
+
+    // Handle approval:request internally
+    if (toolName === 'approval:request') {
+      return this.handleApprovalRequest(args);
+    }
+
+    return { success: false, output: `Built-in tool not available: ${toolName}` };
+  }
+
+  /**
+   * Request human approval via the gateway.
+   */
+  private async handleApprovalRequest(args: Record<string, any>): Promise<ToolResult> {
+    const requestId = `approval-${Date.now()}`;
+
+    // Send approval request to gateway via IPC
+    process.send!({
+      type: 'approval_request',
+      sessionId: this.context.sessionId,
+      requestId,
+      description: args.description || 'Agent requests approval',
+      data: args.data || {},
+    });
+
+    return {
+      success: true,
+      output: `Approval request sent (id: ${requestId}). Waiting for human response.`,
+      metadata: { requestId },
+    };
+  }
+
+  /**
+   * Built-in tool definitions that are always available to the agent.
+   */
+  private getBuiltInToolDefinitions(): ToolDefinition[] {
+    return [
+      {
+        name: 'skill:search',
+        description: 'Search for skills and workflows by name or description. Returns matching skills with IDs.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query' },
+            type: { type: 'string', enum: ['skill', 'workflow', 'all'], description: 'Filter by type' },
+            limit: { type: 'number', description: 'Max results (default 5)' },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'skill:execute',
+        description: 'Execute a skill or workflow by ID with the given inputs. Creates a workflow execution.',
+        parameters: {
+          type: 'object',
+          properties: {
+            skillId: { type: 'number', description: 'Skill or workflow ID' },
+            skillType: { type: 'string', enum: ['skill', 'workflow'], description: 'Type of skill' },
+            inputs: { type: 'object', description: 'Input variables for the skill' },
+          },
+          required: ['skillId', 'skillType'],
+        },
+      },
+      {
+        name: 'skill:test',
+        description: 'Test a skill with inputs without saving results. Returns the output for preview.',
+        parameters: {
+          type: 'object',
+          properties: {
+            skillId: { type: 'number', description: 'Skill ID to test' },
+            inputs: { type: 'object', description: 'Test input variables' },
+          },
+          required: ['skillId'],
+        },
+      },
+      {
+        name: 'skill:edit',
+        description: 'Propose edits to an existing skill. Creates a draft requiring human approval.',
+        parameters: {
+          type: 'object',
+          properties: {
+            skillId: { type: 'number', description: 'Skill ID to edit' },
+            name: { type: 'string', description: 'New name (optional)' },
+            description: { type: 'string', description: 'New description (optional)' },
+            steps: {
+              type: 'array',
+              description: 'Updated steps array',
+              items: {
+                type: 'object',
+                properties: {
+                  step_name: { type: 'string' },
+                  step_type: { type: 'string' },
+                  prompt_template: { type: 'string' },
+                  ai_model: { type: 'string' },
+                },
+              },
+            },
+            changeSummary: { type: 'string', description: 'Summary of what changed and why' },
+          },
+          required: ['skillId', 'changeSummary'],
+        },
+      },
+      {
+        name: 'skill:create',
+        description: 'Create a new skill draft. Requires human approval before becoming active.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Skill name' },
+            description: { type: 'string', description: 'Skill description' },
+            skillType: { type: 'string', enum: ['skill', 'workflow'], description: 'Type' },
+            steps: {
+              type: 'array',
+              description: 'Skill steps',
+              items: {
+                type: 'object',
+                properties: {
+                  step_name: { type: 'string' },
+                  step_type: { type: 'string' },
+                  prompt_template: { type: 'string' },
+                  ai_model: { type: 'string' },
+                },
+                required: ['step_name', 'prompt_template'],
+              },
+            },
+          },
+          required: ['name', 'description', 'steps'],
+        },
+      },
+      {
+        name: 'skill:validate',
+        description: 'Validate a skill for missing variables, invalid configs, or other issues.',
+        parameters: {
+          type: 'object',
+          properties: {
+            skillId: { type: 'number', description: 'Skill ID to validate' },
+          },
+          required: ['skillId'],
+        },
+      },
+      {
+        name: 'approval:request',
+        description: 'Request human approval for an action. The agent will pause until the human responds.',
+        parameters: {
+          type: 'object',
+          properties: {
+            description: { type: 'string', description: 'What the agent wants to do' },
+            data: { type: 'object', description: 'Additional context data' },
+          },
+          required: ['description'],
+        },
+      },
+    ];
+  }
+}

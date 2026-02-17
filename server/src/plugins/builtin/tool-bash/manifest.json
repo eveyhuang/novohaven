@@ -1,0 +1,17 @@
+{
+  "name": "tool-bash",
+  "version": "1.0.0",
+  "type": "tool",
+  "displayName": "Bash Executor",
+  "description": "Run shell commands with timeout and security restrictions",
+  "entry": "./index.ts",
+  "config": {
+    "type": "object",
+    "properties": {
+      "allowedCommands": { "type": "array", "items": { "type": "string" }, "description": "Allowed command prefixes (empty = all allowed)" },
+      "deniedCommands": { "type": "array", "items": { "type": "string" }, "description": "Denied command prefixes" },
+      "workingDirectory": { "type": "string", "description": "Working directory for commands" },
+      "timeoutMs": { "type": "number", "description": "Command timeout in ms", "default": 30000 }
+    }
+  }
+}

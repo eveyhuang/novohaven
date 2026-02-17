@@ -1,0 +1,8 @@
+{
+  "name": "channel-web",
+  "version": "1.0.0",
+  "type": "channel",
+  "displayName": "Web UI Channel",
+  "description": "Web-based messaging channel using REST + Server-Sent Events",
+  "entry": "./index.ts"
+}

@@ -13,6 +13,12 @@ export function Dashboard() {
   const [recentExecutions, setRecentExecutions] = useState<WorkflowExecution[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [agentHealth, setAgentHealth] = useState<{
+    activeSessions: number;
+    pendingDrafts: number;
+    skillCount: number;
+    workflowCount: number;
+  }>({ activeSessions: 0, pendingDrafts: 0, skillCount: 0, workflowCount: 0 });
 
   useEffect(() => {
     loadData();
@@ -28,6 +34,24 @@ export function Dashboard() {
       ]);
       setRecipes(recipesData);
       setRecentExecutions(executionsData.slice(0, 5));
+
+      // Load agent health data (non-blocking)
+      try {
+        const [sessions, drafts, skills, workflows] = await Promise.all([
+          api.getSessions().catch(() => []),
+          api.getSkillDrafts().catch(() => []),
+          api.getSkills().catch(() => []),
+          api.getWorkflows().catch(() => []),
+        ]);
+        setAgentHealth({
+          activeSessions: sessions.filter((s: any) => s.status === 'active').length,
+          pendingDrafts: drafts.length,
+          skillCount: skills.length,
+          workflowCount: workflows.length,
+        });
+      } catch {
+        // Agent health is optional
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -38,14 +62,14 @@ export function Dashboard() {
   const handleCloneRecipe = async (recipeId: number) => {
     try {
       const cloned = await api.cloneRecipe(recipeId);
-      navigate(`/recipes/${cloned.id}`);
+      navigate(`/workflows/${cloned.id}`);
     } catch (err: any) {
       setError(err.message);
     }
   };
 
   const handleDeleteRecipe = async (recipeId: number) => {
-    if (!window.confirm('Are you sure you want to delete this recipe?')) return;
+    if (!window.confirm('Are you sure you want to delete this?')) return;
     try {
       await api.deleteRecipe(recipeId);
       setRecipes(recipes.filter(r => r.id !== recipeId));
@@ -75,6 +99,34 @@ export function Dashboard() {
         </p>
       </div>
 
+      {/* Agent Health Panel */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card hoverable onClick={() => navigate('/sessions')}>
+          <CardBody className="text-center py-4">
+            <div className="text-2xl font-bold text-primary-600">{agentHealth.activeSessions}</div>
+            <div className="text-sm text-secondary-600">Active Sessions</div>
+          </CardBody>
+        </Card>
+        <Card hoverable onClick={() => navigate('/drafts')}>
+          <CardBody className="text-center py-4">
+            <div className="text-2xl font-bold text-yellow-600">{agentHealth.pendingDrafts}</div>
+            <div className="text-sm text-secondary-600">Pending Drafts</div>
+          </CardBody>
+        </Card>
+        <Card hoverable onClick={() => navigate('/skills/new')}>
+          <CardBody className="text-center py-4">
+            <div className="text-2xl font-bold text-green-600">{agentHealth.skillCount}</div>
+            <div className="text-sm text-secondary-600">Skills</div>
+          </CardBody>
+        </Card>
+        <Card hoverable onClick={() => navigate('/workflows/new')}>
+          <CardBody className="text-center py-4">
+            <div className="text-2xl font-bold text-blue-600">{agentHealth.workflowCount}</div>
+            <div className="text-sm text-secondary-600">Workflows</div>
+          </CardBody>
+        </Card>
+      </div>
+
       {/* Build with AI card */}
       <Card hoverable onClick={() => navigate('/workflows/ai-builder')} className="bg-gradient-to-r from-primary-50 to-blue-50 border-primary-200">
         <CardBody className="flex items-center gap-4 py-5">
@@ -95,27 +147,27 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Templates */}
+      {/* Skills (was Templates) */}
       <section>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-semibold text-secondary-900">
-              {t('myTemplates')}
+              My Skills
             </h2>
-            <p className="text-sm text-secondary-500">{t('templatesDescription')}</p>
+            <p className="text-sm text-secondary-500">Single-task building blocks for your workflows</p>
           </div>
-          <Button variant="secondary" size="sm" onClick={() => navigate('/templates/new')}>
-            {t('createNewTemplate')}
+          <Button variant="secondary" size="sm" onClick={() => navigate('/skills/new')}>
+            Create New Skill
           </Button>
         </div>
         {templateRecipes.length === 0 ? (
           <Card>
             <CardBody className="text-center py-8">
               <p className="text-secondary-600 mb-4">
-                {t('noTemplatesYet')}
+                No skills yet. Create your first skill to get started.
               </p>
-              <Button variant="secondary" onClick={() => navigate('/templates/new')}>
-                {t('createNewTemplate')}
+              <Button variant="secondary" onClick={() => navigate('/skills/new')}>
+                Create New Skill
               </Button>
             </CardBody>
           </Card>
@@ -125,7 +177,7 @@ export function Dashboard() {
               <TemplateCard
                 key={template.id}
                 template={template}
-                onEdit={() => navigate(`/templates/${template.id}`)}
+                onEdit={() => navigate(`/skills/${template.id}`)}
                 onDelete={() => handleDeleteRecipe(template.id)}
                 t={t}
               />
@@ -134,27 +186,27 @@ export function Dashboard() {
         )}
       </section>
 
-      {/* Recipes */}
+      {/* Workflows (was Recipes) */}
       <section>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-semibold text-secondary-900">
-              {t('myRecipes')}
+              My Workflows
             </h2>
-            <p className="text-sm text-secondary-500">{t('recipesDescription')}</p>
+            <p className="text-sm text-secondary-500">Multi-step workflows that chain skills together</p>
           </div>
-          <Button size="sm" onClick={() => navigate('/recipes/new')}>
-            {t('createNewRecipe')}
+          <Button size="sm" onClick={() => navigate('/workflows/new')}>
+            Create New Workflow
           </Button>
         </div>
         {userRecipes.length === 0 ? (
           <Card>
             <CardBody className="text-center py-12">
               <p className="text-secondary-600 mb-4">
-                {t('noRecipesYet')}
+                You haven't created any workflows yet.
               </p>
-              <Button onClick={() => navigate('/recipes/new')}>
-                {t('createFirstRecipe')}
+              <Button onClick={() => navigate('/workflows/new')}>
+                Create Your First Workflow
               </Button>
             </CardBody>
           </Card>
@@ -164,8 +216,8 @@ export function Dashboard() {
               <RecipeCard
                 key={recipe.id}
                 recipe={recipe}
-                onRun={() => navigate(`/recipes/${recipe.id}/run`)}
-                onEdit={() => navigate(`/recipes/${recipe.id}`)}
+                onRun={() => navigate(`/workflows/${recipe.id}/run`)}
+                onEdit={() => navigate(`/workflows/${recipe.id}`)}
                 onClone={() => handleCloneRecipe(recipe.id)}
                 onDelete={() => handleDeleteRecipe(recipe.id)}
                 t={t}

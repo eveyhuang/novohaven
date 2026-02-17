@@ -402,6 +402,129 @@ class ApiClient {
     return this.request(`/manus/tasks/${taskId}/messages`);
   }
 
+  // Skill endpoints (new architecture)
+  async getSkills(): Promise<any[]> {
+    return this.request('/skills');
+  }
+
+  async getSkill(id: number): Promise<any> {
+    return this.request(`/skills/${id}`);
+  }
+
+  async createSkill(data: any): Promise<any> {
+    return this.request('/skills', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateSkill(id: number, data: any): Promise<any> {
+    return this.request(`/skills/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteSkill(id: number): Promise<{ success: boolean }> {
+    return this.request(`/skills/${id}`, { method: 'DELETE' });
+  }
+
+  // Workflow endpoints (new architecture)
+  async getWorkflows(): Promise<any[]> {
+    return this.request('/workflows');
+  }
+
+  async getWorkflow(id: number): Promise<any> {
+    return this.request(`/workflows/${id}`);
+  }
+
+  async createWorkflow(data: any): Promise<any> {
+    return this.request('/workflows', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateWorkflow(id: number, data: any): Promise<any> {
+    return this.request(`/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteWorkflow(id: number): Promise<{ success: boolean }> {
+    return this.request(`/workflows/${id}`, { method: 'DELETE' });
+  }
+
+  // Session endpoints
+  async getSessions(): Promise<any[]> {
+    return this.request('/sessions');
+  }
+
+  async getSession(id: string): Promise<any> {
+    return this.request(`/sessions/${id}`);
+  }
+
+  async closeSession(id: string): Promise<{ success: boolean }> {
+    return this.request(`/sessions/${id}/close`, { method: 'POST' });
+  }
+
+  // Plugin endpoints
+  async getPlugins(): Promise<any[]> {
+    return this.request('/plugins');
+  }
+
+  async updatePlugin(name: string, data: { enabled: boolean; config?: any }): Promise<{ success: boolean }> {
+    return this.request(`/plugins/${name}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  // Agent config endpoints
+  async getAgents(): Promise<any[]> {
+    return this.request('/agents');
+  }
+
+  async getAgent(id: number): Promise<any> {
+    return this.request(`/agents/${id}`);
+  }
+
+  async createAgent(data: any): Promise<any> {
+    return this.request('/agents', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateAgent(id: number, data: any): Promise<any> {
+    return this.request(`/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteAgent(id: number): Promise<{ success: boolean }> {
+    return this.request(`/agents/${id}`, { method: 'DELETE' });
+  }
+
+  // Skill draft endpoints
+  async getSkillDrafts(): Promise<any[]> {
+    return this.request('/skills/drafts');
+  }
+
+  async getSkillDraft(id: number): Promise<any> {
+    return this.request(`/skills/drafts/${id}`);
+  }
+
+  async approveSkillDraft(id: number): Promise<{ success: boolean }> {
+    return this.request(`/skills/drafts/${id}/approve`, { method: 'POST' });
+  }
+
+  async rejectSkillDraft(id: number): Promise<{ success: boolean }> {
+    return this.request(`/skills/drafts/${id}/reject`, { method: 'POST' });
+  }
+
+  // Web channel endpoints (for AgentChat)
+  async sendAgentMessage(sessionId: string, text: string): Promise<any> {
+    const channelBase = API_BASE_URL.replace('/api', '');
+    const response = await fetch(`${channelBase}/channels/channel-web/message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.getToken() ? { Authorization: `Bearer ${this.getToken()}` } : {}),
+      },
+      body: JSON.stringify({ sessionId, text }),
+    });
+    return response.json();
+  }
+
+  connectAgentStream(sessionId: string): EventSource {
+    const channelBase = API_BASE_URL.replace('/api', '');
+    const token = this.getToken();
+    const url = `${channelBase}/channels/channel-web/stream?sessionId=${sessionId}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+    return new EventSource(url);
+  }
+
   // Assistant endpoints
   async assistantGenerate(messages: AssistantMessage[]): Promise<AssistantResponse> {
     return this.request<AssistantResponse>('/assistant/generate', {

@@ -1,0 +1,15 @@
+{
+  "name": "memory-sqlite-vec",
+  "version": "1.0.0",
+  "type": "memory",
+  "displayName": "SQLite Vector Memory",
+  "description": "Vector similarity search + BM25 keyword search for skills and session memory using sqlite-vec",
+  "entry": "./index.ts",
+  "config": {
+    "type": "object",
+    "properties": {
+      "embeddingProvider": { "type": "string", "description": "Provider plugin for embeddings (e.g. provider-openai)", "default": "provider-openai" },
+      "embeddingDimensions": { "type": "number", "description": "Embedding vector dimensions", "default": 1536 }
+    }
+  }
+}

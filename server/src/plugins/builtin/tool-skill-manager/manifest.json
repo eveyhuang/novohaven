@@ -1,0 +1,8 @@
+{
+  "name": "tool-skill-manager",
+  "version": "1.0.0",
+  "type": "tool",
+  "displayName": "Skill Manager",
+  "description": "Agent tools for searching, executing, testing, editing, creating, and validating skills and workflows",
+  "entry": "./index.ts"
+}

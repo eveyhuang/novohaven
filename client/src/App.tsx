@@ -5,8 +5,8 @@ import { LanguageProvider } from './context/LanguageContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { Layout, Notifications } from './components/common';
 import { Dashboard } from './components/Dashboard';
-import { RecipeBuilder, RecipeRunner } from './components/RecipeBuilder';
-import { TemplateEditor } from './components/TemplateEditor';
+import { WorkflowEditor, WorkflowRunner } from './components/RecipeBuilder';
+import { SkillEditor } from './components/TemplateEditor';
 import { ExecutionList } from './components/WorkflowExecution';
 import ChatExecution from './components/ChatExecution/ChatExecution';
 import { StandardsManager } from './components/CompanyStandards';
@@ -14,6 +14,10 @@ import { OutputsGallery } from './components/OutputsGallery';
 import { UsageDashboard } from './components/ReviewAnalysis';
 import { AIWorkflowBuilder } from './components/WorkflowBuilder';
 import { ManusAgentPage } from './components/ManusAgent/ManusAgentPage';
+import { AgentChat } from './components/AgentChat/AgentChat';
+import { SessionMonitor } from './components/SessionMonitor/SessionMonitor';
+import { PluginManager } from './components/PluginManager/PluginManager';
+import { DraftList } from './components/SkillDraftReview/DraftList';
 
 function App() {
   return (
@@ -27,14 +31,33 @@ function App() {
             {/* Dashboard */}
             <Route path="/" element={<Dashboard />} />
 
-            {/* Template Routes */}
-            <Route path="/templates/new" element={<TemplateEditor />} />
-            <Route path="/templates/:id" element={<TemplateEditor />} />
+            {/* Skill Routes (was Templates) */}
+            <Route path="/skills/new" element={<SkillEditor />} />
+            <Route path="/skills/:id" element={<SkillEditor />} />
 
-            {/* Recipe Routes */}
-            <Route path="/recipes/new" element={<RecipeBuilder />} />
-            <Route path="/recipes/:id" element={<RecipeBuilder />} />
-            <Route path="/recipes/:id/run" element={<RecipeRunner />} />
+            {/* Workflow Routes (was Recipes) */}
+            <Route path="/workflows/new" element={<WorkflowEditor />} />
+            <Route path="/workflows/:id" element={<WorkflowEditor />} />
+            <Route path="/workflows/:id/run" element={<WorkflowRunner />} />
+
+            {/* Backward compat routes */}
+            <Route path="/templates/new" element={<SkillEditor />} />
+            <Route path="/templates/:id" element={<SkillEditor />} />
+            <Route path="/recipes/new" element={<WorkflowEditor />} />
+            <Route path="/recipes/:id" element={<WorkflowEditor />} />
+            <Route path="/recipes/:id/run" element={<WorkflowRunner />} />
+
+            {/* Agent Chat */}
+            <Route path="/chat" element={<AgentChat />} />
+
+            {/* Session Monitor */}
+            <Route path="/sessions" element={<SessionMonitor />} />
+
+            {/* Plugin Manager */}
+            <Route path="/plugins" element={<PluginManager />} />
+
+            {/* Skill Draft Review */}
+            <Route path="/drafts" element={<DraftList />} />
 
             {/* Execution Routes */}
             <Route path="/executions" element={<ExecutionList />} />
