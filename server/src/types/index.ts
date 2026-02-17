@@ -65,6 +65,105 @@ export interface ModelConfig {
   topP?: number;
 }
 
+// --- New gateway types ---
+
+export interface Skill {
+  id: number;
+  name: string;
+  description: string;
+  created_by: number;
+  status: 'draft' | 'active' | 'archived';
+  tags: string; // JSON array
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Workflow {
+  id: number;
+  name: string;
+  description: string;
+  created_by: number;
+  status: 'draft' | 'active' | 'archived';
+  tags: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillStep {
+  id: number;
+  parent_id: number;
+  parent_type: 'skill' | 'workflow';
+  step_order: number;
+  step_name: string;
+  step_type: string;
+  ai_model: string;
+  prompt_template: string;
+  input_config: string;
+  output_format: string;
+  model_config: string;
+  executor_config: string;
+}
+
+export interface Session {
+  id: string;
+  channel_type: string;
+  channel_id: string;
+  user_id: number;
+  thread_id: string | null;
+  agent_pid: number | null;
+  status: 'active' | 'idle' | 'closed';
+  agent_config_id: number | null;
+  active_execution_id: number | null;
+  created_at: string;
+  last_active_at: string;
+}
+
+export interface SessionMessage {
+  id: number;
+  session_id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  tool_calls: string | null;
+  tool_results: string | null;
+  metadata: string;
+  created_at: string;
+}
+
+export interface AgentConfig {
+  id: number;
+  name: string;
+  description: string;
+  default_model: string;
+  system_prompt: string;
+  allowed_tools: string; // JSON array
+  allowed_channels: string; // JSON array
+  max_turns_per_session: number;
+  created_at: string;
+}
+
+export interface PluginConfig {
+  id: number;
+  plugin_name: string;
+  plugin_type: 'channel' | 'tool' | 'memory' | 'provider';
+  enabled: boolean;
+  config: string; // JSON
+  updated_at: string;
+}
+
+export interface SkillDraft {
+  id: number;
+  original_skill_id: number | null;
+  skill_type: 'skill' | 'workflow';
+  proposed_by_session: string | null;
+  name: string;
+  description: string;
+  steps: string; // JSON array
+  change_summary: string;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  reviewed_at: string | null;
+}
+
 // Company Standards types
 export interface CompanyStandard {
   id: number;

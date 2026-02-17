@@ -1,4 +1,4 @@
-import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
+import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
@@ -10,48 +10,47 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-let db: SqlJsDatabase | null = null;
+let db: Database.Database | null = null;
 
-// Save database to file
-function saveDatabase() {
-  if (db) {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
-  }
-}
+// No-op: better-sqlite3 persists to file automatically
+export function saveDatabase() {}
 
 // Helper to get single row
 function getOne(sql: string, params: any[] = []): any | undefined {
   if (!db) throw new Error('Database not initialized');
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    stmt.free();
-    return row;
-  }
-  stmt.free();
-  return undefined;
+  return db.prepare(sql).get(...params);
 }
 
-// Initialize database
-export async function initializeDatabase(): Promise<void> {
-  const SQL = await initSqlJs();
+// Helper to get all rows
+function getAll(sql: string, params: any[] = []): any[] {
+  if (!db) throw new Error('Database not initialized');
+  return db.prepare(sql).all(...params);
+}
 
-  // Load existing database or create new one
-  if (fs.existsSync(DB_PATH)) {
-    const fileBuffer = fs.readFileSync(DB_PATH);
-    db = new SQL.Database(fileBuffer);
-  } else {
-    db = new SQL.Database();
-  }
+// Helper to run insert/update/delete
+function run(sql: string, params: any[] = []): { lastInsertRowid: number; changes: number } {
+  if (!db) throw new Error('Database not initialized');
+  const result = db.prepare(sql).run(...params);
+  return {
+    lastInsertRowid: Number(result.lastInsertRowid),
+    changes: result.changes,
+  };
+}
 
-  // Enable foreign keys
-  db.run('PRAGMA foreign_keys = ON');
+// Get raw database instance
+export function getDatabase(): Database.Database {
+  if (!db) throw new Error('Database not initialized');
+  return db;
+}
+
+// Initialize database (synchronous with better-sqlite3)
+export function initializeDatabase(): void {
+  db = new Database(DB_PATH);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
 
   // Create tables
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
@@ -61,7 +60,7 @@ export async function initializeDatabase(): Promise<void> {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS recipes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -73,7 +72,7 @@ export async function initializeDatabase(): Promise<void> {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS recipe_steps (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       recipe_id INTEGER REFERENCES recipes(id) ON DELETE CASCADE,
@@ -86,22 +85,12 @@ export async function initializeDatabase(): Promise<void> {
       output_format TEXT DEFAULT 'text',
       model_config TEXT,
       api_config TEXT,
+      executor_config TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
-  // Migration: Add step_type, api_config, and executor_config columns if they don't exist
-  try {
-    db.run('ALTER TABLE recipe_steps ADD COLUMN step_type TEXT DEFAULT "ai"');
-  } catch (e) { /* Column already exists */ }
-  try {
-    db.run('ALTER TABLE recipe_steps ADD COLUMN api_config TEXT');
-  } catch (e) { /* Column already exists */ }
-  try {
-    db.run('ALTER TABLE recipe_steps ADD COLUMN executor_config TEXT');
-  } catch (e) { /* Column already exists */ }
-
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS company_standards (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER REFERENCES users(id),
@@ -113,7 +102,7 @@ export async function initializeDatabase(): Promise<void> {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS workflow_executions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       recipe_id INTEGER REFERENCES recipes(id),
@@ -127,7 +116,7 @@ export async function initializeDatabase(): Promise<void> {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS step_executions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       execution_id INTEGER REFERENCES workflow_executions(id) ON DELETE CASCADE,
@@ -144,8 +133,7 @@ export async function initializeDatabase(): Promise<void> {
     )
   `);
 
-  // API Usage tracking table
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS api_usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER REFERENCES users(id),
@@ -158,8 +146,7 @@ export async function initializeDatabase(): Promise<void> {
     )
   `);
 
-  // Manus standalone task outputs
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS manus_outputs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER REFERENCES users(id),
@@ -174,33 +161,101 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   // Create indexes
-  db.run('CREATE INDEX IF NOT EXISTS idx_recipes_created_by ON recipes(created_by)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_recipe_steps_recipe_id ON recipe_steps(recipe_id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_company_standards_user_id ON company_standards(user_id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_workflow_executions_recipe_id ON workflow_executions(recipe_id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_workflow_executions_user_id ON workflow_executions(user_id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_step_executions_execution_id ON step_executions(execution_id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_api_usage_user_id ON api_usage(user_id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_api_usage_service ON api_usage(service)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_api_usage_created_at ON api_usage(created_at)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_manus_outputs_user_id ON manus_outputs(user_id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_manus_outputs_task_id ON manus_outputs(task_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_created_by ON recipes(created_by)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_recipe_steps_recipe_id ON recipe_steps(recipe_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_company_standards_user_id ON company_standards(user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_executions_recipe_id ON workflow_executions(recipe_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_workflow_executions_user_id ON workflow_executions(user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_step_executions_execution_id ON step_executions(execution_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_api_usage_user_id ON api_usage(user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_api_usage_service ON api_usage(service)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_api_usage_created_at ON api_usage(created_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_manus_outputs_user_id ON manus_outputs(user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_manus_outputs_task_id ON manus_outputs(task_id)');
+
+  // --- New gateway tables ---
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      channel_type TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id),
+      thread_id TEXT,
+      agent_pid INTEGER,
+      status TEXT DEFAULT 'active' CHECK(status IN ('active','idle','closed')),
+      agent_config_id INTEGER,
+      active_execution_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT REFERENCES sessions(id),
+      role TEXT NOT NULL CHECK(role IN ('user','assistant','system','tool')),
+      content TEXT NOT NULL,
+      tool_calls TEXT,
+      tool_results TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      default_model TEXT NOT NULL,
+      system_prompt TEXT,
+      allowed_tools TEXT DEFAULT '[]',
+      allowed_channels TEXT DEFAULT '[]',
+      max_turns_per_session INTEGER DEFAULT 50,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plugin_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plugin_name TEXT UNIQUE NOT NULL,
+      plugin_type TEXT NOT NULL CHECK(plugin_type IN ('channel','tool','memory','provider')),
+      enabled BOOLEAN DEFAULT 1,
+      config TEXT NOT NULL DEFAULT '{}',
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS skill_drafts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      original_skill_id INTEGER,
+      skill_type TEXT NOT NULL CHECK(skill_type IN ('skill','workflow')),
+      proposed_by_session TEXT,
+      name TEXT NOT NULL,
+      description TEXT,
+      steps TEXT NOT NULL,
+      change_summary TEXT,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at DATETIME
+    )
+  `);
 
   // Insert mock user for MVP and get the user ID
   let mockUserId: number;
   const mockUser = getOne("SELECT id FROM users WHERE email = 'demo@novohaven.com'");
   if (!mockUser) {
-    db.run("INSERT INTO users (email, password_hash) VALUES ('demo@novohaven.com', 'mock_password_hash')");
-    // Save database to ensure user is persisted before using it
-    saveDatabase();
-    // Get the ID of the newly inserted user
+    run("INSERT INTO users (email, password_hash) VALUES ('demo@novohaven.com', 'mock_password_hash')");
     const insertedUser = getOne("SELECT id FROM users WHERE email = 'demo@novohaven.com'");
     if (!insertedUser || !insertedUser.id) {
       throw new Error('Failed to create mock user');
     }
     mockUserId = insertedUser.id;
   } else {
-    // Use existing user ID
     if (!mockUser.id) {
       throw new Error('Mock user exists but has no ID');
     }
@@ -216,8 +271,108 @@ export async function initializeDatabase(): Promise<void> {
   // Seed template recipes
   seedTemplateRecipes(mockUserId);
 
-  // Save to file
-  saveDatabase();
+  // Seed default agent config
+  const defaultAgent = getOne('SELECT id FROM agent_configs WHERE name = ?', ['Default Agent']);
+  if (!defaultAgent) {
+    run(`INSERT INTO agent_configs (name, description, default_model, system_prompt, allowed_tools, allowed_channels)
+      VALUES (?, ?, ?, ?, ?, ?)`,
+      ['Default Agent', 'Default agent configuration',
+       'claude-sonnet-4-5-20250929',
+       'You are a helpful AI assistant with access to skills and workflows. When a user asks you to do something, search for relevant skills first. If a skill exists, use it. If not, help the user directly or propose creating a new skill.',
+       '["tool-browser","tool-bash","tool-fileops","tool-skill-manager"]',
+       '["channel-web","channel-lark"]']);
+  }
+
+  // Run migrations (recipes → skills/workflows)
+  runMigrations();
+}
+
+function runMigrations(): void {
+  if (!db) return;
+
+  // Check if migration already ran
+  const hasSkillsTable = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='skills'"
+  ).get();
+  if (hasSkillsTable) return;
+
+  db.transaction(() => {
+    // Create skills table
+    db!.exec(`
+      CREATE TABLE skills (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_by INTEGER REFERENCES users(id),
+        status TEXT DEFAULT 'active' CHECK(status IN ('draft','active','archived')),
+        tags TEXT DEFAULT '[]',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create workflows table
+    db!.exec(`
+      CREATE TABLE workflows (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_by INTEGER REFERENCES users(id),
+        status TEXT DEFAULT 'active' CHECK(status IN ('draft','active','archived')),
+        tags TEXT DEFAULT '[]',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create skill_steps table
+    db!.exec(`
+      CREATE TABLE skill_steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id INTEGER NOT NULL,
+        parent_type TEXT NOT NULL CHECK(parent_type IN ('skill','workflow')),
+        step_order INTEGER NOT NULL,
+        step_name TEXT,
+        step_type TEXT DEFAULT 'ai',
+        ai_model TEXT,
+        prompt_template TEXT,
+        input_config TEXT DEFAULT '{}',
+        output_format TEXT DEFAULT 'text',
+        model_config TEXT DEFAULT '{}',
+        executor_config TEXT DEFAULT '{}',
+        UNIQUE(parent_id, parent_type, step_order)
+      )
+    `);
+
+    // Migrate data: templates → skills
+    db!.exec(`
+      INSERT INTO skills (id, name, description, created_by, status, created_at)
+      SELECT id, name, description, created_by, 'active', created_at
+      FROM recipes WHERE is_template = 1
+    `);
+
+    // Migrate data: non-templates → workflows
+    db!.exec(`
+      INSERT INTO workflows (id, name, description, created_by, status, created_at)
+      SELECT id, name, description, created_by, 'active', created_at
+      FROM recipes WHERE is_template = 0
+    `);
+
+    // Migrate recipe_steps → skill_steps
+    db!.exec(`
+      INSERT INTO skill_steps (id, parent_id, parent_type, step_order, step_name, step_type,
+        ai_model, prompt_template, input_config, output_format, model_config, executor_config)
+      SELECT rs.id, rs.recipe_id,
+        CASE WHEN r.is_template = 1 THEN 'skill' ELSE 'workflow' END,
+        rs.step_order, rs.step_name, rs.step_type, rs.ai_model, rs.prompt_template,
+        rs.input_config, rs.output_format, rs.model_config,
+        COALESCE(rs.executor_config, '{}')
+      FROM recipe_steps rs
+      JOIN recipes r ON rs.recipe_id = r.id
+    `);
+  })();
+
+  console.log('[Migration] recipes → skills/workflows migration complete');
 }
 
 // Helper function to upsert a template recipe
@@ -239,39 +394,32 @@ function upsertTemplateRecipe(
 ): number {
   if (!db) throw new Error('Database not initialized');
 
-  // Check if template exists using getOne helper
   const existing = getOne('SELECT id FROM recipes WHERE name = ? AND is_template = 1', [name]);
   let recipeId: number;
 
   if (existing) {
-    // Update existing template
     recipeId = existing.id;
-    db.run(`
+    run(`
       UPDATE recipes
       SET description = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `, [description, recipeId]);
 
-    // Delete existing steps (only if not referenced by step_executions)
-    // First, delete any step_executions that reference these steps
-    db.run(`
-      DELETE FROM step_executions 
+    run(`
+      DELETE FROM step_executions
       WHERE step_id IN (SELECT id FROM recipe_steps WHERE recipe_id = ?)
     `, [recipeId]);
-    // Now delete the steps
-    db.run('DELETE FROM recipe_steps WHERE recipe_id = ?', [recipeId]);
+    run('DELETE FROM recipe_steps WHERE recipe_id = ?', [recipeId]);
   } else {
-    // Insert new template
-    db.run(`
+    const result = run(`
       INSERT INTO recipes (name, description, created_by, is_template)
       VALUES (?, ?, ?, 1)
     `, [name, description, createdBy]);
-    recipeId = db.exec('SELECT last_insert_rowid()')[0].values[0][0] as number;
+    recipeId = result.lastInsertRowid;
   }
 
-  // Insert/update steps
   steps.forEach(step => {
-    db!.run(`
+    run(`
       INSERT INTO recipe_steps (recipe_id, step_order, step_name, step_type, ai_model, prompt_template, output_format, model_config, input_config, api_config)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
@@ -306,15 +454,13 @@ function upsertCompanyStandard(
   );
 
   if (existing) {
-    // Update existing standard
-    db.run(`
-      UPDATE company_standards 
-      SET content = ?, updated_at = CURRENT_TIMESTAMP 
+    run(`
+      UPDATE company_standards
+      SET content = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `, [content, existing.id]);
   } else {
-    // Insert new standard
-    db.run(`
+    run(`
       INSERT INTO company_standards (user_id, standard_type, name, content)
       VALUES (?, ?, ?, ?)
     `, [userId, standardType, name, content]);
@@ -478,8 +624,6 @@ Generate the image according to the exact specifications provided in the require
     imageGenSteps
   );
 
-  
-
   // Template: Review Analyzer
 
   const reviewAnalyzerInputConfig = JSON.stringify({
@@ -642,29 +786,6 @@ OUTPUT FORMAT (Markdown):
       ]
     })
   );
-}
-
-// Helper to get all rows
-function getAll(sql: string, params: any[] = []): any[] {
-  if (!db) throw new Error('Database not initialized');
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const results: any[] = [];
-  while (stmt.step()) {
-    results.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return results;
-}
-
-// Helper to run insert/update/delete
-function run(sql: string, params: any[] = []): { lastInsertRowid: number; changes: number } {
-  if (!db) throw new Error('Database not initialized');
-  db.run(sql, params);
-  const lastId = db.exec('SELECT last_insert_rowid()')[0]?.values[0][0] as number || 0;
-  const changes = db.getRowsModified();
-  saveDatabase();
-  return { lastInsertRowid: lastId, changes };
 }
 
 // Database access functions
