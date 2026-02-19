@@ -20,6 +20,11 @@ export class ToolExecutor {
     this.context = context;
   }
 
+  /** Update context attachments for the current turn (images from user message) */
+  setAttachments(attachments: import('../plugins/types').MessageAttachment[]): void {
+    this.context = { ...this.context, attachments };
+  }
+
   /**
    * Get all available tool definitions (plugin tools + built-in).
    */
@@ -129,25 +134,27 @@ export class ToolExecutor {
       },
       {
         name: 'skill_execute',
-        description: 'Execute a skill or workflow by ID with the given inputs. Creates a workflow execution.',
+        description: 'Execute a skill or workflow by ID with given inputs. For image inputs, map the variable name to the attachment index (0-based) from the user\'s uploaded images using imageInputs.',
         parameters: {
           type: 'object',
           properties: {
             skillId: { type: 'number', description: 'Skill or workflow ID' },
             skillType: { type: 'string', enum: ['skill', 'workflow'], description: 'Type of skill' },
-            inputs: { type: 'object', description: 'Input variables for the skill' },
+            inputs: { type: 'object', description: 'Text input variables (key=variable name, value=text)' },
+            imageInputs: { type: 'object', description: 'Image input variables. Map variable name to attachment index (e.g., {"reference_image": 0}). Index refers to the user\'s uploaded images in order.' },
           },
           required: ['skillId', 'skillType'],
         },
       },
       {
         name: 'skill_test',
-        description: 'Test a skill with inputs without saving results. Returns the output for preview.',
+        description: 'Test a skill with inputs without saving results. For image inputs, use imageInputs to map variable names to attachment indices.',
         parameters: {
           type: 'object',
           properties: {
             skillId: { type: 'number', description: 'Skill ID to test' },
-            inputs: { type: 'object', description: 'Test input variables' },
+            inputs: { type: 'object', description: 'Text input variables' },
+            imageInputs: { type: 'object', description: 'Image input variables mapped to attachment indices (e.g., {"reference_image": 0})' },
           },
           required: ['skillId'],
         },

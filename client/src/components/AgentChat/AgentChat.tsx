@@ -57,6 +57,54 @@ export function AgentChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const loadSessionMessages = useCallback(async (sessionId: string) => {
+    try {
+      const data = await api.getSession(sessionId);
+      if (data.messages && Array.isArray(data.messages)) {
+        const loaded: ChatMessage[] = data.messages
+          .filter((m: any) => m.role === 'user' || (m.role === 'assistant' && !m.tool_calls))
+          .map((m: any) => ({
+            id: `db-${m.id || m.created_at}`,
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            timestamp: m.created_at || new Date().toISOString(),
+          }));
+        setMessages(loaded);
+      }
+    } catch {
+      // Session may not be persisted yet (new local-only session)
+      setMessages([]);
+    }
+  }, []);
+
+  const loadSessions = useCallback(async () => {
+    try {
+      const data = await api.getSessions();
+      const sessionList: Session[] = (Array.isArray(data) ? data : []).map((s: any) => ({
+        id: s.id,
+        title: s.title || 'Untitled',
+        created_at: s.created_at,
+        updated_at: s.last_active_at,
+      }));
+      setSessions(sessionList);
+
+      // Auto-select the most recent session and load its messages
+      if (sessionList.length > 0) {
+        setActiveSessionId((current) => {
+          if (!current && sessionList.length > 0) {
+            const mostRecent = sessionList[0];
+            loadSessionMessages(mostRecent.id);
+            return mostRecent.id;
+          }
+          return current;
+        });
+      }
+    } catch {
+      // Sessions may not exist yet
+      setSessions([]);
+    }
+  }, [loadSessionMessages]);
+
   // Load sessions and model info on mount
   useEffect(() => {
     loadSessions();
@@ -79,16 +127,6 @@ export function AgentChat() {
       }
     };
   }, [activeSessionId]);
-
-  const loadSessions = async () => {
-    try {
-      const data = await api.getSessions();
-      setSessions(Array.isArray(data) ? data : []);
-    } catch {
-      // Sessions may not exist yet
-      setSessions([]);
-    }
-  };
 
   const loadModelInfo = async () => {
     try {
@@ -137,8 +175,8 @@ export function AgentChat() {
   const selectSession = useCallback((sessionId: string) => {
     setActiveSessionId(sessionId);
     setMessages([]);
-    // Messages will be loaded via SSE connection or could be fetched separately
-  }, []);
+    loadSessionMessages(sessionId);
+  }, [loadSessionMessages]);
 
   const deleteSession = useCallback(async (sessionId: string) => {
     try {

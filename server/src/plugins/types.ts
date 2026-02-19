@@ -41,6 +41,8 @@ export interface ToolContext {
   sessionId: string;
   userId: number;
   workingDirectory?: string;
+  /** Image attachments from the current conversation, keyed by variable name or indexed */
+  attachments?: MessageAttachment[];
 }
 
 export interface ToolResult {

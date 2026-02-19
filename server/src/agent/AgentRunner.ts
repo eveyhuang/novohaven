@@ -188,6 +188,22 @@ export class AgentRunner {
       }
     }
 
+    // Pass current message attachments to ToolExecutor so tools can access them
+    if (this.toolExecutor && inboundAttachments?.length) {
+      const toolAttachments = inboundAttachments
+        .filter(a => a.type === 'image')
+        .map(a => {
+          const dataUrl = a.url || '';
+          const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+          return {
+            type: 'image' as const,
+            mimeType: match ? match[1] : (a.mimeType || 'image/png'),
+            data: match ? match[2] : dataUrl,
+          };
+        });
+      this.toolExecutor.setAttachments(toolAttachments);
+    }
+
     // Step 4: Stream LLM response with tool call loop
     if (!this.provider) {
       const errorMsg = 'No LLM provider available. Please configure an API key.';

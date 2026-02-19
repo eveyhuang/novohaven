@@ -9,7 +9,10 @@ router.use(authMiddleware);
 router.get('/', (req, res) => {
   const db = getDatabase();
   const sessions = db.prepare(`
-    SELECT s.*, u.email as user_email
+    SELECT s.*, u.email as user_email,
+      (SELECT SUBSTR(sm.content, 1, 60) FROM session_messages sm
+       WHERE sm.session_id = s.id AND sm.role = 'user'
+       ORDER BY sm.created_at ASC LIMIT 1) as title
     FROM sessions s
     LEFT JOIN users u ON s.user_id = u.id
     WHERE s.status != 'closed'

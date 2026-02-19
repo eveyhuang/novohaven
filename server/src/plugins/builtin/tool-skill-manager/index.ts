@@ -48,25 +48,27 @@ class SkillManagerPlugin implements ToolPlugin {
       },
       {
         name: 'skill_execute',
-        description: 'Execute a skill or workflow by ID with given inputs',
+        description: 'Execute a skill or workflow by ID with given inputs. For image inputs, map the variable name to the attachment index (0-based) from the user\'s uploaded images using imageInputs.',
         parameters: {
           type: 'object',
           properties: {
             skillId: { type: 'number', description: 'Skill or workflow ID' },
             skillType: { type: 'string', enum: ['skill', 'workflow'] },
-            inputs: { type: 'object', description: 'Input variables' },
+            inputs: { type: 'object', description: 'Text input variables (key=variable name, value=text)' },
+            imageInputs: { type: 'object', description: 'Image input variables. Map variable name to attachment index (e.g., {"reference_image": 0, "product_images": 1}). Index refers to the user\'s uploaded images in order.' },
           },
           required: ['skillId', 'skillType'],
         },
       },
       {
         name: 'skill_test',
-        description: 'Test a skill with inputs without saving results',
+        description: 'Test a skill with inputs without saving results. For image inputs, use imageInputs to map variable names to attachment indices.',
         parameters: {
           type: 'object',
           properties: {
             skillId: { type: 'number', description: 'Skill ID to test' },
-            inputs: { type: 'object', description: 'Test inputs' },
+            inputs: { type: 'object', description: 'Text input variables' },
+            imageInputs: { type: 'object', description: 'Image input variables mapped to attachment indices (e.g., {"reference_image": 0})' },
           },
           required: ['skillId'],
         },
@@ -122,7 +124,7 @@ class SkillManagerPlugin implements ToolPlugin {
     switch (toolName) {
       case 'skill_search': return this.search(args);
       case 'skill_execute': return this.executeSkill(args, context);
-      case 'skill_test': return this.testSkill(args);
+      case 'skill_test': return this.testSkill(args, context);
       case 'skill_edit': return this.editSkill(args, context);
       case 'skill_create': return this.createSkill(args, context);
       case 'skill_validate': return this.validateSkill(args);
@@ -170,17 +172,48 @@ class SkillManagerPlugin implements ToolPlugin {
 
     const formatted = results.map((r: any) => {
       const steps = this.db!.prepare(
-        'SELECT step_name, step_type FROM skill_steps WHERE parent_id = ? AND parent_type = ? ORDER BY step_order'
+        'SELECT step_name, step_type, input_config, prompt_template FROM skill_steps WHERE parent_id = ? AND parent_type = ? ORDER BY step_order'
       ).all(r.id, r.type) as any[];
       const stepSummary = steps.map((s: any) => `${s.step_name} (${s.step_type})`).join(' → ');
-      return `[${r.type} #${r.id}] ${r.name}: ${r.description || 'No description'}\n  Steps: ${stepSummary || 'none'}`;
+
+      // Extract required inputs from input_config and prompt template variables
+      const inputs: string[] = [];
+      for (const step of steps) {
+        // Parse input_config for typed variables
+        try {
+          const config = JSON.parse(step.input_config || '{}');
+          if (config.variables) {
+            for (const [varName, varDef] of Object.entries(config.variables) as any[]) {
+              const typeLabel = varDef.type || 'text';
+              const desc = varDef.description || varDef.label || '';
+              inputs.push(`{{${varName}}} (${typeLabel})${desc ? ': ' + desc : ''}`);
+            }
+          }
+        } catch {}
+        // Also extract {{variable}} patterns from prompt template
+        if (step.prompt_template) {
+          const vars = step.prompt_template.match(/\{\{([^}]+)\}\}/g) || [];
+          for (const v of vars) {
+            const name = v.replace(/\{\{|\}\}/g, '');
+            if (!inputs.some(i => i.includes(`{{${name}}}`)) && !name.startsWith('step_')) {
+              inputs.push(`{{${name}}} (text)`);
+            }
+          }
+        }
+      }
+
+      let result = `[${r.type} #${r.id}] ${r.name}: ${r.description || 'No description'}\n  Steps: ${stepSummary || 'none'}`;
+      if (inputs.length > 0) {
+        result += `\n  Required inputs: ${inputs.join(', ')}`;
+      }
+      return result;
     });
 
     return { success: true, output: formatted.join('\n\n') };
   }
 
   private async executeSkill(args: Record<string, any>, context: ToolContext): Promise<ToolResult> {
-    const { skillId, skillType, inputs = {} } = args;
+    const { skillId, skillType, inputs = {}, imageInputs = {} } = args;
 
     // Verify the skill exists
     const table = skillType === 'skill' ? 'skills' : 'workflows';
@@ -198,11 +231,23 @@ class SkillManagerPlugin implements ToolPlugin {
       return { success: false, output: `${skillType} #${skillId} has no steps` };
     }
 
+    // Resolve image inputs from conversation attachments
+    const resolvedInputs = { ...inputs };
+    const attachments = context.attachments || [];
+    for (const [varName, idx] of Object.entries(imageInputs)) {
+      const attachIdx = typeof idx === 'number' ? idx : parseInt(idx as string, 10);
+      if (attachments[attachIdx]) {
+        resolvedInputs[varName] = `[image:attachment_${attachIdx}]`;
+      } else {
+        resolvedInputs[varName] = `[image:missing_attachment_${attachIdx}]`;
+      }
+    }
+
     // Create an execution record
     const result = this.db!.prepare(`
       INSERT INTO workflow_executions (recipe_id, user_id, input_data, status, started_at)
       VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
-    `).run(skillId, context.userId, JSON.stringify(inputs));
+    `).run(skillId, context.userId, JSON.stringify(resolvedInputs));
 
     const executionId = Number(result.lastInsertRowid);
 
@@ -214,15 +259,20 @@ class SkillManagerPlugin implements ToolPlugin {
       `).run(executionId, step.id, step.step_order);
     }
 
+    const imageCount = Object.keys(imageInputs).length;
+    const inputSummary = Object.keys(resolvedInputs).length > 0
+      ? `\nInputs: ${Object.entries(resolvedInputs).map(([k, v]) => `${k}=${typeof v === 'string' && v.length > 50 ? v.substring(0, 50) + '...' : v}`).join(', ')}`
+      : '';
+
     return {
       success: true,
-      output: `Created execution #${executionId} for ${skillType} "${skill.name}" with ${steps.length} steps. The workflow engine will process it.`,
+      output: `Created execution #${executionId} for ${skillType} "${skill.name}" with ${steps.length} steps${imageCount > 0 ? ` and ${imageCount} image(s)` : ''}.${inputSummary}\nThe workflow engine will process it.`,
       metadata: { executionId },
     };
   }
 
-  private async testSkill(args: Record<string, any>): Promise<ToolResult> {
-    const { skillId, inputs = {} } = args;
+  private async testSkill(args: Record<string, any>, context?: ToolContext): Promise<ToolResult> {
+    const { skillId, inputs = {}, imageInputs = {} } = args;
 
     // Get the skill and its steps
     let skill = this.db!.prepare('SELECT * FROM skills WHERE id = ?').get(skillId) as any;
@@ -239,12 +289,25 @@ class SkillManagerPlugin implements ToolPlugin {
       'SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = ? ORDER BY step_order'
     ).all(skillId, skillType) as any[];
 
+    // Resolve image inputs
+    const attachments = context?.attachments || [];
+    const resolvedInputs = { ...inputs };
+    for (const [varName, idx] of Object.entries(imageInputs)) {
+      const attachIdx = typeof idx === 'number' ? idx : parseInt(idx as string, 10);
+      resolvedInputs[varName] = attachments[attachIdx]
+        ? `[image: user attachment #${attachIdx + 1}]`
+        : `[image: missing attachment #${attachIdx + 1}]`;
+    }
+
     // Build a preview of what would happen
     const preview: string[] = [`Test preview for "${skill.name}" (${skillType} #${skillId}):`];
+    if (attachments.length > 0) {
+      preview.push(`  Available attachments: ${attachments.length} image(s) from conversation`);
+    }
     for (const step of steps) {
       let prompt = step.prompt_template || '';
       // Replace variables with test inputs
-      for (const [key, value] of Object.entries(inputs)) {
+      for (const [key, value] of Object.entries(resolvedInputs)) {
         prompt = prompt.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), String(value));
       }
       // Check for unresolved variables
