@@ -14,6 +14,7 @@ export function ExecutionList() {
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<WorkflowExecution | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -87,6 +88,19 @@ export function ExecutionList() {
     }
   };
 
+  const handleDeleteAll = async () => {
+    if (deletingAll) return;
+    setDeletingAll(true);
+    try {
+      await api.deleteAllExecutions();
+      setExecutions([]);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setDeletingAll(false);
+    }
+  };
+
   const canCancel = (status: string) => ['running', 'paused', 'pending'].includes(status);
 
   if (isLoading) {
@@ -116,9 +130,19 @@ export function ExecutionList() {
             View and manage your workflow executions
           </p>
         </div>
-        <Button onClick={() => navigate('/')}>
-          Start New Workflow
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="danger"
+            isLoading={deletingAll}
+            disabled={deletingAll || executions.length === 0}
+            onClick={handleDeleteAll}
+          >
+            Delete All
+          </Button>
+          <Button onClick={() => navigate('/')}>
+            Start New Workflow
+          </Button>
+        </div>
       </div>
 
       {error && (
