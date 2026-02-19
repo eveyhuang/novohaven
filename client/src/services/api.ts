@@ -465,6 +465,10 @@ class ApiClient {
     return this.request('/sessions', { method: 'DELETE' });
   }
 
+  async closeAllSessions(): Promise<{ success: boolean; closed: number }> {
+    return this.request('/sessions/close-all', { method: 'POST' });
+  }
+
   // Plugin endpoints
   async getPlugins(): Promise<any[]> {
     return this.request('/plugins');
