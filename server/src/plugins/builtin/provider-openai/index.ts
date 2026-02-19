@@ -60,6 +60,12 @@ class OpenAIProvider implements ProviderPlugin {
       return;
     }
 
+    const toolLoopError = this.validateToolLoop(request);
+    if (toolLoopError) {
+      yield { type: 'error', error: toolLoopError };
+      return;
+    }
+
     // Build messages
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
 
@@ -74,6 +80,19 @@ class OpenAIProvider implements ProviderPlugin {
           content: msg.content,
           tool_call_id: msg.toolCallId,
         });
+      } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        messages.push({
+          role: 'assistant',
+          content: msg.content || null,
+          tool_calls: msg.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.args || {}),
+            },
+          })),
+        } as any);
       } else if (msg.role === 'user' && msg.attachments?.length) {
         const contentParts: OpenAI.Chat.ChatCompletionContentPart[] = [
           { type: 'text', text: msg.content },
@@ -113,10 +132,12 @@ class OpenAIProvider implements ProviderPlugin {
 
       // Track tool calls being assembled across deltas
       const toolCallAccum: Map<number, { id: string; name: string; args: string }> = new Map();
+      let doneEmitted = false;
 
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta;
-        if (!delta) continue;
+        const choice = chunk.choices[0];
+        if (!choice) continue;
+        const delta = choice.delta || {};
 
         // Text content
         if (delta.content) {
@@ -138,18 +159,30 @@ class OpenAIProvider implements ProviderPlugin {
         }
 
         // Check for finish
-        if (chunk.choices[0]?.finish_reason) {
+        if (choice.finish_reason) {
           // Emit any accumulated tool calls
           for (const [, tc] of toolCallAccum) {
             let args: Record<string, any> = {};
-            try { args = JSON.parse(tc.args); } catch {}
+            if (tc.args && tc.args.trim().length > 0) {
+              try {
+                args = JSON.parse(tc.args);
+              } catch {
+                yield { type: 'error', error: `OpenAI returned invalid JSON arguments for tool "${tc.name || tc.id}"` };
+                return;
+              }
+            }
             yield {
               type: 'tool_call',
               toolCall: { id: tc.id, name: tc.name, args },
             };
           }
+          doneEmitted = true;
           yield { type: 'done' };
+          break;
         }
+      }
+      if (!doneEmitted) {
+        yield { type: 'done' };
       }
     } catch (err: any) {
       yield { type: 'error', error: err.message || 'OpenAI streaming failed' };
@@ -167,6 +200,32 @@ class OpenAIProvider implements ProviderPlugin {
     });
 
     return response.data.map(d => d.embedding);
+  }
+
+  private validateToolLoop(request: CompletionRequest): string | null {
+    const declaredToolCalls = new Set<string>();
+
+    for (const msg of request.messages) {
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        for (const tc of msg.toolCalls) {
+          if (!tc.id || !tc.name) {
+            return 'Invalid assistant tool call: each tool call must include both id and name.';
+          }
+          declaredToolCalls.add(tc.id);
+        }
+      }
+
+      if (msg.role === 'tool') {
+        if (!msg.toolCallId) {
+          return 'Invalid tool message: toolCallId is required for tool result messages.';
+        }
+        if (!declaredToolCalls.has(msg.toolCallId)) {
+          return `Invalid tool message: toolCallId "${msg.toolCallId}" was not declared by a prior assistant tool call.`;
+        }
+      }
+    }
+
+    return null;
   }
 }
 

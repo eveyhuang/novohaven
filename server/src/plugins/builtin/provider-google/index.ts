@@ -68,6 +68,12 @@ class GoogleProvider implements ProviderPlugin {
       return;
     }
 
+    const toolLoopError = this.validateToolLoop(request);
+    if (toolLoopError) {
+      yield { type: 'error', error: toolLoopError };
+      return;
+    }
+
     try {
       const modelOptions: any = {
         model: request.model,
@@ -93,32 +99,14 @@ class GoogleProvider implements ProviderPlugin {
       }
 
       const model = this.client.getGenerativeModel(modelOptions);
-
-      // Build chat history (all messages except last)
-      const history = request.messages.slice(0, -1).map(msg => ({
-        role: msg.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: msg.content }],
-      }));
-
-      const lastMessage = request.messages[request.messages.length - 1];
-      if (!lastMessage) {
+      const contents = this.buildContents(request.messages);
+      if (contents.length === 0) {
         yield { type: 'error', error: 'No messages provided' };
         return;
       }
 
-      const chat = model.startChat({ history });
-
-      // Build message parts (text + optional images)
-      const messageParts: any[] = [{ text: lastMessage.content }];
-      if (lastMessage.attachments?.length) {
-        for (const a of lastMessage.attachments) {
-          messageParts.push({
-            inlineData: { mimeType: a.mimeType, data: a.data },
-          });
-        }
-      }
-
-      const result = await chat.sendMessageStream(messageParts);
+      const result = await model.generateContentStream({ contents });
+      let toolCallCount = 0;
 
       for await (const chunk of result.stream) {
         const text = chunk.text();
@@ -135,7 +123,7 @@ class GoogleProvider implements ProviderPlugin {
               yield {
                 type: 'tool_call',
                 toolCall: {
-                  id: `google-fc-${Date.now()}`,
+                  id: fc.id || `google-fc-${++toolCallCount}`,
                   name: fc.name,
                   args: fc.args || {},
                 },
@@ -149,6 +137,116 @@ class GoogleProvider implements ProviderPlugin {
     } catch (err: any) {
       yield { type: 'error', error: err.message || 'Google Gemini streaming failed' };
     }
+  }
+
+  private buildContents(messages: CompletionRequest['messages']): Array<{ role: 'user' | 'model'; parts: any[] }> {
+    const toolNameById = new Map<string, string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        for (const tc of msg.toolCalls) {
+          toolNameById.set(tc.id, tc.name);
+        }
+      }
+    }
+
+    const contents: Array<{ role: 'user' | 'model'; parts: any[] }> = [];
+
+    const pushParts = (role: 'user' | 'model', parts: any[]) => {
+      if (parts.length === 0) return;
+      const prev = contents[contents.length - 1];
+      if (prev && prev.role === role) {
+        prev.parts.push(...parts);
+      } else {
+        contents.push({ role, parts });
+      }
+    };
+
+    for (const msg of messages) {
+      if (msg.role === 'system') continue;
+
+      const role: 'user' | 'model' = msg.role === 'assistant' ? 'model' : 'user';
+      const parts: any[] = [];
+
+      if (msg.role === 'tool') {
+        const toolName = msg.toolCallId ? toolNameById.get(msg.toolCallId) : undefined;
+        if (toolName) {
+          let resultPayload: any = msg.content;
+          try {
+            resultPayload = JSON.parse(msg.content);
+          } catch {
+            // Keep raw string if tool output is plain text.
+          }
+          parts.push({
+            functionResponse: {
+              name: toolName,
+              response: {
+                name: toolName,
+                content: resultPayload,
+              },
+            },
+          });
+        } else {
+          parts.push({ text: msg.content || '' });
+        }
+      } else {
+        if (msg.content) {
+          parts.push({ text: msg.content });
+        }
+
+        if (msg.role === 'user' && msg.attachments?.length) {
+          for (const a of msg.attachments) {
+            parts.push({
+              inlineData: { mimeType: a.mimeType, data: a.data },
+            });
+          }
+        }
+
+        if (msg.role === 'assistant' && msg.toolCalls?.length) {
+          for (const tc of msg.toolCalls) {
+            parts.push({
+              functionCall: {
+                name: tc.name,
+                args: tc.args || {},
+              },
+            });
+          }
+        }
+      }
+
+      if (parts.length === 0) {
+        parts.push({ text: '' });
+      }
+
+      pushParts(role, parts);
+    }
+
+    return contents;
+  }
+
+  private validateToolLoop(request: CompletionRequest): string | null {
+    const declaredToolCalls = new Set<string>();
+
+    for (const msg of request.messages) {
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        for (const tc of msg.toolCalls) {
+          if (!tc.id || !tc.name) {
+            return 'Invalid assistant tool call: each tool call must include both id and name.';
+          }
+          declaredToolCalls.add(tc.id);
+        }
+      }
+
+      if (msg.role === 'tool') {
+        if (!msg.toolCallId) {
+          return 'Invalid tool message: toolCallId is required for tool result messages.';
+        }
+        if (!declaredToolCalls.has(msg.toolCallId)) {
+          return `Invalid tool message: toolCallId "${msg.toolCallId}" was not declared by a prior assistant tool call.`;
+        }
+      }
+    }
+
+    return null;
   }
 
   async embed(texts: string[]): Promise<number[][]> {

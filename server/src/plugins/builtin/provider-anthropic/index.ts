@@ -60,6 +60,12 @@ class AnthropicProvider implements ProviderPlugin {
       return;
     }
 
+    const toolLoopError = this.validateToolLoop(request);
+    if (toolLoopError) {
+      yield { type: 'error', error: toolLoopError };
+      return;
+    }
+
     // Build Anthropic messages.
     // Anthropic does not support a "tool" role directly; tool results must be sent
     // as user content blocks of type "tool_result".
@@ -77,9 +83,14 @@ class AnthropicProvider implements ProviderPlugin {
 
     for (const m of request.messages) {
       if (m.role === 'tool') {
+        const toolUseId = m.toolCallId;
+        if (!toolUseId) {
+          yield { type: 'error', error: 'Invalid tool message: toolCallId is required for Anthropic tool results.' };
+          return;
+        }
         pendingToolResults.push({
           type: 'tool_result',
-          tool_use_id: m.toolCallId || `tool-${Date.now()}`,
+          tool_use_id: toolUseId,
           content: m.content || '',
           is_error: /^tool error:/i.test(m.content || ''),
         });
@@ -181,6 +192,32 @@ class AnthropicProvider implements ProviderPlugin {
     } catch (err: any) {
       yield { type: 'error', error: err.message || 'Anthropic streaming failed' };
     }
+  }
+
+  private validateToolLoop(request: CompletionRequest): string | null {
+    const declaredToolCalls = new Set<string>();
+
+    for (const msg of request.messages) {
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        for (const tc of msg.toolCalls) {
+          if (!tc.id || !tc.name) {
+            return 'Invalid assistant tool call: each tool call must include both id and name.';
+          }
+          declaredToolCalls.add(tc.id);
+        }
+      }
+
+      if (msg.role === 'tool') {
+        if (!msg.toolCallId) {
+          return 'Invalid tool message: toolCallId is required for tool result messages.';
+        }
+        if (!declaredToolCalls.has(msg.toolCallId)) {
+          return `Invalid tool message: toolCallId "${msg.toolCallId}" was not declared by a prior assistant tool call.`;
+        }
+      }
+    }
+
+    return null;
   }
 
   // Anthropic doesn't offer embeddings
