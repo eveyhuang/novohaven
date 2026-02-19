@@ -1,162 +1,57 @@
 {
-  "generatedAt": "2026-02-19T16:34:48.968Z",
+  "generatedAt": "2026-02-19T16:52:42.420Z",
   "baseUrl": "http://localhost:3000",
   "stories": [
-    {
-      "id": "HP-01",
-      "title": "Auto-auth dashboard loads",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:31:46.368Z",
-      "finishedAt": "2026-02-19T16:31:46.452Z",
-      "detail": "Sidebar brand and demo user were visible; no login form shown."
-    },
-    {
-      "id": "HP-02",
-      "title": "Language toggle persistence",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:31:46.452Z",
-      "finishedAt": "2026-02-19T16:31:48.984Z",
-      "detail": "Language badge changed from \"LanguageEN\" to \"语言中文\" and persisted after reload."
-    },
-    {
-      "id": "HP-03",
-      "title": "Dashboard Build with AI navigation",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:31:48.985Z",
-      "finishedAt": "2026-02-19T16:31:49.681Z",
-      "detail": "Clicking Build with AI navigated to /workflows/ai-builder."
-    },
-    {
-      "id": "HP-04",
-      "title": "Create new AI skill via UI",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:31:49.681Z",
-      "finishedAt": "2026-02-19T16:31:50.840Z",
-      "detail": "Created QA Listing Writer and resolved recipe id 15."
-    },
     {
       "id": "HP-05",
       "title": "Configure input variables in skill editor",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:31:50.841Z",
-      "finishedAt": "2026-02-19T16:32:21.131Z",
-      "detail": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('code:has-text(\"product_name\")').first()\u001b[22m\n\u001b[2m    - locator resolved to <code class=\"font-semibold text-secondary-900\">product_name</code>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div class=\"fixed inset-0 bg-black/50 transition-opacity\"></div> from <div class=\"fixed inset-0 z-50 overflow-y-auto\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div class=\"fixed inset-0 bg-black/50 transition-opacity\"></div> from <div class=\"fixed inset-0 z-50 overflow-y-auto\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    57 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div class=\"fixed inset-0 bg-black/50 transition-opacity\"></div> from <div class=\"fixed inset-0 z-50 overflow-y-auto\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n",
+      "startedAt": "2026-02-19T16:50:24.336Z",
+      "finishedAt": "2026-02-19T16:50:24.435Z",
+      "detail": "Missing templateRecipeId precondition.",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-05.png"
     },
     {
       "id": "HP-06",
       "title": "Run skill with required inputs",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:32:21.131Z",
-      "finishedAt": "2026-02-19T16:32:51.593Z",
-      "detail": "locator.fill: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByLabel('Product Name')\u001b[22m\n",
+      "startedAt": "2026-02-19T16:50:24.435Z",
+      "finishedAt": "2026-02-19T16:50:24.503Z",
+      "detail": "Missing templateRecipeId precondition.",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-06.png"
-    },
-    {
-      "id": "HP-07",
-      "title": "Create workflow and add template step",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:32:51.594Z",
-      "finishedAt": "2026-02-19T16:32:52.451Z",
-      "detail": "Workflow created and opened editor route http://localhost:3000/recipes/16."
-    },
-    {
-      "id": "HP-08",
-      "title": "Edit workflow step and persist changes",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:32:52.451Z",
-      "finishedAt": "2026-02-19T16:32:53.903Z",
-      "detail": "Workflow step name persisted after save + reload."
-    },
-    {
-      "id": "HP-09",
-      "title": "Run workflow from runner page",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:32:53.903Z",
-      "finishedAt": "2026-02-19T16:32:53.987Z",
-      "detail": "Workflow started and redirected to execution 35."
-    },
-    {
-      "id": "HP-10",
-      "title": "Execution list row opens detail",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:32:53.987Z",
-      "finishedAt": "2026-02-19T16:32:54.062Z",
-      "detail": "Execution row opened /executions/35."
-    },
-    {
-      "id": "HP-11",
-      "title": "Cancel running execution",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:32:54.063Z",
-      "finishedAt": "2026-02-19T16:32:55.944Z",
-      "detail": "Cancel action was available and cancelled status was observed."
-    },
-    {
-      "id": "HP-12",
-      "title": "Delete execution from list",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:32:55.944Z",
-      "finishedAt": "2026-02-19T16:32:57.255Z",
-      "detail": "Execution row count decreased from 2 to 1."
     },
     {
       "id": "HP-13",
       "title": "Execution chat output copy behavior",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:32:57.255Z",
-      "finishedAt": "2026-02-19T16:32:57.333Z",
+      "startedAt": "2026-02-19T16:50:24.504Z",
+      "finishedAt": "2026-02-19T16:50:24.640Z",
       "detail": "No output \"Copy\" button was found in execution chat (no output message rendered).",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-13.png"
-    },
-    {
-      "id": "HP-14",
-      "title": "Agent chat new session and response/error",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:32:57.333Z",
-      "finishedAt": "2026-02-19T16:33:00.145Z",
-      "detail": "Chat session title and user message appeared; assistant feedback observed: \"Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Pl\""
     },
     {
       "id": "HP-15",
       "title": "Agent chat attachment send",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:00.146Z",
-      "finishedAt": "2026-02-19T16:33:02.259Z",
-      "detail": "Agent did not provide multimodal acknowledgement. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkR3eZiad9Y2mkJBKd8\"}10:33 AM",
+      "startedAt": "2026-02-19T16:50:24.641Z",
+      "finishedAt": "2026-02-19T16:50:27.706Z",
+      "detail": "Agent did not provide multimodal acknowledgement. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Could not process image\"},\"request_id\":\"req_011CYHmk5f1YhT3TK66Y1GpC\"}10:50 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-15.png"
-    },
-    {
-      "id": "HP-16",
-      "title": "Clear all chats",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:33:02.259Z",
-      "finishedAt": "2026-02-19T16:33:02.376Z",
-      "detail": "Clear all chats removed sidebar sessions and showed empty state."
     },
     {
       "id": "HP-16b",
       "title": "Chat history persists after navigation",
-      "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:02.377Z",
-      "finishedAt": "2026-02-19T16:33:12.894Z",
-      "detail": "locator.waitFor: Timeout 10000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('Session persistence check for HP-16b').first() to be visible\u001b[22m\n",
-      "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-16b.png"
-    },
-    {
-      "id": "HP-17",
-      "title": "Session monitor expand transcript and close",
       "status": "PASS",
-      "startedAt": "2026-02-19T16:33:12.895Z",
-      "finishedAt": "2026-02-19T16:33:16.051Z",
-      "detail": "Session row expanded and Close action was invoked."
+      "startedAt": "2026-02-19T16:50:27.707Z",
+      "finishedAt": "2026-02-19T16:50:28.268Z",
+      "detail": "Session remained in sidebar after route change and prior user message was restored."
     },
     {
       "id": "HP-18",
       "title": "Plugin manager update Browser Automation config",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:16.051Z",
-      "finishedAt": "2026-02-19T16:33:16.276Z",
+      "startedAt": "2026-02-19T16:50:28.268Z",
+      "finishedAt": "2026-02-19T16:50:28.462Z",
       "detail": "Browser Automation timeout input was not visible after expanding the plugin.",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-18.png"
     },
@@ -164,8 +59,8 @@
       "id": "HP-19",
       "title": "Skill draft review approve flow",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:16.276Z",
-      "finishedAt": "2026-02-19T16:33:16.366Z",
+      "startedAt": "2026-02-19T16:50:28.462Z",
+      "finishedAt": "2026-02-19T16:50:28.547Z",
       "detail": "Draft list is empty; no pending draft was available to expand/approve.",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-19.png"
     },
@@ -173,219 +68,168 @@
       "id": "HP-20",
       "title": "Outputs gallery tabs and detail modal",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:16.366Z",
-      "finishedAt": "2026-02-19T16:33:16.469Z",
+      "startedAt": "2026-02-19T16:50:28.547Z",
+      "finishedAt": "2026-02-19T16:50:28.683Z",
       "detail": "No output cards available, so modal/download flow could not be exercised.",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-20.png"
     },
     {
-      "id": "HP-21",
-      "title": "Company standards CRUD via UI",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:33:16.469Z",
-      "finishedAt": "2026-02-19T16:33:18.511Z",
-      "detail": "Standard was created, edited (tone), and deleted successfully."
-    },
-    {
-      "id": "HP-22",
-      "title": "Usage dashboard tabs",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:33:18.511Z",
-      "finishedAt": "2026-02-19T16:33:18.645Z",
-      "detail": "Overview and History tabs opened; history table headers rendered."
-    },
-    {
-      "id": "HP-23",
-      "title": "AI workflow builder generation",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:33:18.645Z",
-      "finishedAt": "2026-02-19T16:33:23.262Z",
-      "detail": "Workflow preview rendered with 2 step card(s)."
-    },
-    {
       "id": "HP-24",
       "title": "Agent model switching in chat",
-      "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:23.262Z",
-      "finishedAt": "2026-02-19T16:33:23.426Z",
-      "detail": "Model selector was not visible in chat header.",
-      "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-24.png"
+      "status": "PASS",
+      "startedAt": "2026-02-19T16:50:28.683Z",
+      "finishedAt": "2026-02-19T16:50:34.059Z",
+      "detail": "Switched model from claude-sonnet-4-5-20250929 to claude-opus-4-6; new session created and assistant replied."
     },
     {
       "id": "HP-25",
       "title": "Agent suggests relevant existing assets",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:23.426Z",
-      "finishedAt": "2026-02-19T16:33:27.223Z",
-      "detail": "Assistant did not reference expected existing assets. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkSrcbPRd49Ce7a7fhx\"}10:33 AM",
+      "startedAt": "2026-02-19T16:50:34.059Z",
+      "finishedAt": "2026-02-19T16:50:37.753Z",
+      "detail": "Assistant did not reference expected existing assets. Last response: I'd be happy to help you analyze customer reviews for your kettle listing!10:50 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-25.png"
     },
     {
       "id": "HP-26",
       "title": "Agent asks required inputs and executes suggested skill",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:27.223Z",
-      "finishedAt": "2026-02-19T16:33:27.735Z",
-      "detail": "Assistant did not ask for required inputs. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkSrcbPRd49Ce7a7fhx\"}04:33 PM",
+      "startedAt": "2026-02-19T16:50:37.753Z",
+      "finishedAt": "2026-02-19T16:50:47.314Z",
+      "detail": "No new execution detected after required file upload. before=2, after=2, latestReply=Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"This model does not support assistant message prefill. The conversation must end with a user message.\"},\"request_id\":\"req_011CYHmmGLERc9RYnNtFStJT\"}10:50 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-26.png"
     },
     {
       "id": "HP-26b",
       "title": "Agent maps image attachments into skill execution",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:27.735Z",
-      "finishedAt": "2026-02-19T16:33:30.975Z",
-      "detail": "Agent did not indicate image-skill execution behavior. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkTAbaGukaVb5Eyc4Nb\"}10:33 AM",
+      "startedAt": "2026-02-19T16:50:47.314Z",
+      "finishedAt": "2026-02-19T16:50:50.344Z",
+      "detail": "Agent did not indicate image-skill execution behavior. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Could not process image\"},\"request_id\":\"req_011CYHmmjkVLUov7VuYxARsP\"}10:50 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-26b.png"
     },
     {
       "id": "HP-27",
       "title": "Agent self-heals broken skill with review draft",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:30.977Z",
-      "finishedAt": "2026-02-19T16:33:38.011Z",
-      "detail": "No new draft detected after self-heal request. Drafts before=0, after=0. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkTNRUjrFfhhVF32LU5\"}10:33 AM",
+      "startedAt": "2026-02-19T16:50:50.344Z",
+      "finishedAt": "2026-02-19T16:50:59.635Z",
+      "detail": "No new draft detected after self-heal request. Drafts before=0, after=0. Last response: I10:50 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-27.png"
     },
     {
       "id": "HP-28",
       "title": "Agent self-heals broken workflow with review draft",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:33:38.012Z",
-      "finishedAt": "2026-02-19T16:33:48.366Z",
-      "detail": "No new workflow draft detected. Drafts before=0, after=0. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkU5V2bBN9PwQowbCMh\"}10:33 AM",
+      "startedAt": "2026-02-19T16:50:59.636Z",
+      "finishedAt": "2026-02-19T16:51:08.775Z",
+      "detail": "No new workflow draft detected. Drafts before=0, after=0. Last response: I'll start by examining the Broken Pipeline workflow to understand what's wrong with it. Let me validate10:51 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-28.png"
-    },
-    {
-      "id": "HP-29",
-      "title": "AI workflow builder self-healing iteration",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:33:48.366Z",
-      "finishedAt": "2026-02-19T16:34:01.312Z",
-      "detail": "Workflow preview remained available with 4 step card(s) after iterative correction request."
     },
     {
       "id": "HP-30",
       "title": "Agent uses browser tools on provided URL",
-      "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:01.312Z",
-      "finishedAt": "2026-02-19T16:34:05.343Z",
-      "detail": "Response did not include URL-specific browser-derived content. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkVhzWt8RyssHgwME5M\"}10:34 AM",
-      "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-30.png"
+      "status": "PASS",
+      "startedAt": "2026-02-19T16:51:08.775Z",
+      "finishedAt": "2026-02-19T16:51:14.157Z",
+      "detail": "Agent returned URL-related content: \"I appreciate your request, but I don't have the ability to browse the internet or visit websites. I can't access URLs like `https://www.exam\""
     },
     {
       "id": "HP-31",
       "title": "Agent extracts structured site data and proposes skill draft",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:05.343Z",
-      "finishedAt": "2026-02-19T16:34:10.360Z",
-      "detail": "No CSV/file output reference detected in response. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkVuhU3DkR8P4K1VSWh\"}10:34 AM",
+      "startedAt": "2026-02-19T16:51:14.158Z",
+      "finishedAt": "2026-02-19T16:51:20.713Z",
+      "detail": "No CSV/file output reference detected in response. Last response: I appreciate your request! Let me first search for any skills or workflows that10:51 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-31.png"
     },
     {
       "id": "HP-32",
       "title": "Agent executes ad-hoc task without existing skill",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:10.361Z",
-      "finishedAt": "2026-02-19T16:34:13.358Z",
-      "detail": "Ad-hoc tool task response did not include heading counts and file output. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkWHmGaPSkqu2ZocRGX\"}10:34 AM",
+      "startedAt": "2026-02-19T16:51:20.713Z",
+      "finishedAt": "2026-02-19T16:51:24.412Z",
+      "detail": "Ad-hoc tool task response did not include heading counts and file output. Last response: I'll help10:51 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-32.png"
     },
     {
       "id": "HP-33",
       "title": "Agent returns downloadable file from tool execution",
-      "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:13.358Z",
-      "finishedAt": "2026-02-19T16:34:13.961Z",
-      "detail": "Response did not include JSON file output details. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkWHmGaPSkqu2ZocRGX\"}04:34 PM",
-      "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-33.png"
+      "status": "PASS",
+      "startedAt": "2026-02-19T16:51:24.412Z",
+      "finishedAt": "2026-02-19T16:51:29.896Z",
+      "detail": "Agent returned JSON-file-related output: \"I can help you create a JSON file with 5 sample product entries right away! Here it is:\n\n```json\n{\n  \"products\": [\n    {\n      \"name\": \"Wire\""
     },
     {
       "id": "HP-34",
       "title": "Agent handles mixed browser + file multi-step task",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:13.961Z",
-      "finishedAt": "2026-02-19T16:34:16.873Z",
-      "detail": "Response did not show expected multi-step browser + markdown outcome. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkWWmcJL3FazL64iSEy\"}10:34 AM",
+      "startedAt": "2026-02-19T16:51:29.896Z",
+      "finishedAt": "2026-02-19T16:51:33.584Z",
+      "detail": "Response did not show expected multi-step browser + markdown outcome. Last response: I'll start by searching for relevant skills that can help with each part10:51 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-34.png"
     },
     {
       "id": "HP-35",
       "title": "Manus configured flow",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:16.873Z",
-      "finishedAt": "2026-02-19T16:34:37.046Z",
+      "startedAt": "2026-02-19T16:51:33.584Z",
+      "finishedAt": "2026-02-19T16:51:53.738Z",
       "detail": "page.waitForURL: Timeout 20000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-35.png"
-    },
-    {
-      "id": "EE-01",
-      "title": "Skill run modal missing required inputs",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:34:37.046Z",
-      "finishedAt": "2026-02-19T16:34:37.211Z",
-      "detail": "Missing-input validation message appeared in run modal."
     },
     {
       "id": "EE-02",
       "title": "Manus not-configured guardrail",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:37.211Z",
-      "finishedAt": "2026-02-19T16:34:37.305Z",
+      "startedAt": "2026-02-19T16:51:53.738Z",
+      "finishedAt": "2026-02-19T16:51:53.835Z",
       "detail": "Manus page did not show not-configured warning; expected this environment to be unconfigured.",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/EE-02.png"
-    },
-    {
-      "id": "EE-03",
-      "title": "404 route fallback",
-      "status": "PASS",
-      "startedAt": "2026-02-19T16:34:37.305Z",
-      "finishedAt": "2026-02-19T16:34:37.341Z",
-      "detail": "404 page heading and message were displayed."
     },
     {
       "id": "EE-04",
       "title": "No provider configured should return explicit error",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:37.341Z",
-      "finishedAt": "2026-02-19T16:34:40.266Z",
-      "detail": "Expected explicit no-provider message; got: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkYEvv2F3qnvLmLLxVg\"}10:34 AM",
+      "startedAt": "2026-02-19T16:51:53.835Z",
+      "finishedAt": "2026-02-19T16:51:58.385Z",
+      "detail": "Expected explicit no-provider message; got: Hello! 👋 How can I help you today? Whether you need to10:51 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/EE-04.png"
     },
     {
       "id": "EE-05",
       "title": "Long message handling in chat",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:40.266Z",
-      "finishedAt": "2026-02-19T16:34:43.220Z",
-      "detail": "Long message did not process normally. Last response: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkYUU18ypXQywfRSVsW\"}10:34 AM",
+      "startedAt": "2026-02-19T16:51:58.385Z",
+      "finishedAt": "2026-02-19T16:52:29.526Z",
+      "detail": "No assistant/error response appeared in chat within timeout.",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/EE-05.png"
     },
     {
       "id": "EE-06",
       "title": "Max tool execution rounds graceful stop",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:43.220Z",
-      "finishedAt": "2026-02-19T16:34:45.430Z",
-      "detail": "Expected max-tool-rounds guardrail message; got: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkYf4Egv7cuESJeLHFJ\"}10:34 AM",
+      "startedAt": "2026-02-19T16:52:29.527Z",
+      "finishedAt": "2026-02-19T16:52:34.046Z",
+      "detail": "Expected max-tool-rounds guardrail message; got: I appreciate the creative request, but I'm not going to do that! Here10:52 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/EE-06.png"
     },
     {
       "id": "EE-07",
       "title": "Browser tool failure should be graceful",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:45.431Z",
-      "finishedAt": "2026-02-19T16:34:45.977Z",
-      "detail": "Expected graceful browser failure details; got: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkYf4Egv7cuESJeLHFJ\"}04:34 PM",
+      "startedAt": "2026-02-19T16:52:34.046Z",
+      "finishedAt": "2026-02-19T16:52:38.626Z",
+      "detail": "Expected graceful browser failure details; got: I'm sorry, but I'm not10:52 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/EE-07.png"
     },
     {
       "id": "EE-08",
       "title": "Disabled browser plugin tool unavailability",
       "status": "FAIL",
-      "startedAt": "2026-02-19T16:34:45.977Z",
-      "finishedAt": "2026-02-19T16:34:48.888Z",
-      "detail": "Expected explicit disabled-tool response; got: Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"},\"request_id\":\"req_011CYHkYt3LZqkybfyYY7SkM\"}10:34 AM",
+      "startedAt": "2026-02-19T16:52:38.626Z",
+      "finishedAt": "2026-02-19T16:52:42.370Z",
+      "detail": "Expected explicit disabled-tool response; got: Let me search for a10:52 AM",
       "screenshot": "/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/EE-08.png"
     }
   ]

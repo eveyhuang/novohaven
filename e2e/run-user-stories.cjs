@@ -10,6 +10,14 @@ const RESULTS_PATH = path.join(process.cwd(), 'e2e', 'story-results.json');
 const DOC_PATH = path.join(process.cwd(), 'docs', 'user-stories-web-tests.md');
 const ARTIFACT_DIR = path.join(process.cwd(), 'e2e', 'artifacts');
 const FIXTURE_DIR = path.join(process.cwd(), 'e2e', 'fixtures');
+const selectedIds = (() => {
+  const raw = process.env.STORY_IDS || '';
+  const ids = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.length ? new Set(ids) : null;
+})();
 
 const state = {
   templateRecipeId: null,
@@ -77,6 +85,9 @@ async function waitForUrlHealth(url, timeoutMs = 120000) {
 }
 
 async function runStory(page, id, title, fn) {
+  if (selectedIds && !selectedIds.has(id)) {
+    return;
+  }
   const startedAt = new Date().toISOString();
   try {
     const detail = await fn();
@@ -1059,7 +1070,9 @@ async function main() {
   }
 
   const expectedIds = await expectedStoryIdsFromDoc();
-  addMissingResultEntries(expectedIds);
+  if (!selectedIds) {
+    addMissingResultEntries(expectedIds);
+  }
   const idOrder = new Map(expectedIds.map((id, idx) => [id, idx]));
   results.sort((a, b) => (idOrder.get(a.id) ?? 9999) - (idOrder.get(b.id) ?? 9999));
 

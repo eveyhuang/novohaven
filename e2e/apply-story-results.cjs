@@ -43,7 +43,7 @@ async function main() {
 
     const markerRegex = new RegExp(
       `\\n<!-- TEST_RESULT_START:${escapeRegExp(id)} -->[\\s\\S]*?<!-- TEST_RESULT_END:${escapeRegExp(id)} -->\\n?`,
-      'm'
+      'gm'
     );
     section = section.replace(markerRegex, '\n').trimEnd();
 
