@@ -321,8 +321,10 @@ In `/chat`, user sends a message like `Go to https://www.wayfair.com/furniture/p
 
 <!-- TEST_RESULT_START:HP-31b -->
 **Automated Test Result (2026-02-19):** FAIL
-**Observed:** Agent found the skill and started execution (`execution #49`) but did not return any CSV path or inline CSV content in chat. Latest response only promised future completion: "The system is working on this now and will provide the CSV file when the extraction is complete."
-**Diagnosis:** `skill_execute` currently creates execution + pending step rows but does not dispatch execution to the workflow engine, so execution remains `status=running`, `current_step=0`, step `status=pending`, and no output is generated/returned.
+**Observed:** Agent did not issue a real tool call in this run; it returned pseudo markup (`<skill:execute>...</skill:execute>`) in plain chat text, so no CSV file was produced in chat.
+**Diagnosis:** Backend `skill_execute` has been fixed to run actual executions and return settled result/error, but HP-31b still fails for two reasons:  
+1. This turn's model response did not emit a `tool_call` (session recorded only user + assistant text, no `tool` message).  
+2. When `skill_execute` is invoked directly, the Wayfair scraping execution now runs but fails to launch Chrome in this environment (`crashpad ... Permission denied`), so no CSV can be generated here.
 **Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-31b.png`
 <!-- TEST_RESULT_END:HP-31b -->
 

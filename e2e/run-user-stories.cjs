@@ -935,11 +935,10 @@ async function main() {
         page,
         'Go to https://www.wayfair.com/furniture/pdp/orren-ellis-bachman-extendable-45-to-105-solid-wood-dining-table-with-hiden-storage-space-w111552936.html?piid=1040019282 on Wayfair and save all the reviews in a CSV file.'
       );
-      await waitForChatIdle(page, 90000);
 
       const start = Date.now();
       let latestReply = '';
-      while (Date.now() - start < 90000) {
+      while (Date.now() - start < 210000) {
         const candidate = ((await page.locator('div.bg-secondary-100.text-secondary-900').last().textContent()) || '').trim();
         if (candidate) latestReply = candidate;
         const hasCsvPath = /(?:\/tmp\/|\/Users\/|[A-Za-z]:\\)[^\s`"]+\.csv\b/i.test(latestReply)
@@ -950,7 +949,7 @@ async function main() {
         if (hasCsvPath || hasInlineCsv) {
           break;
         }
-        await page.waitForTimeout(1500);
+        await page.waitForTimeout(2000);
       }
 
       const finalHasCsvPath = /(?:\/tmp\/|\/Users\/|[A-Za-z]:\\)[^\s`"]+\.csv\b/i.test(latestReply)

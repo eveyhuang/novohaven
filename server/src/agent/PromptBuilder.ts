@@ -54,6 +54,15 @@ export class PromptBuilder {
     if (tools.length > 0) {
       const toolSummary = tools.map(t => `- **${t.name}**: ${t.description}`).join('\n');
       systemParts.push(`\n## Available Tools\nYou have access to the following tools:\n${toolSummary}`);
+      const toolNames = tools.map(t => `\`${t.name}\``).join(', ');
+      systemParts.push(
+        [
+          '\n## Tool Call Rules',
+          `When a tool is needed, call the tool function directly using its exact name: ${toolNames}.`,
+          'Do not output pseudo tool markup or examples such as `<skill:execute>...</skill:execute>`, `skill:execute`, `tool: ...`, or code blocks that describe tool calls.',
+          'If execution is needed, perform the actual tool call first, then report concrete results from the tool output.',
+        ].join('\n')
+      );
     }
 
     // Layer 3: Relevant skills (keyword search)
@@ -126,7 +135,7 @@ export class PromptBuilder {
       `- **${s.name}** (${s.type} #${s.id}): ${s.description || 'No description'}`
     );
 
-    return `The following skills/workflows may be relevant. Use \`skill:search\` or \`skill:execute\` to work with them:\n${lines.join('\n')}`;
+    return `The following skills/workflows may be relevant. Use \`skill_search\` or \`skill_execute\` to work with them:\n${lines.join('\n')}`;
   }
 
   /**

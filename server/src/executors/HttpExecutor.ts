@@ -114,6 +114,10 @@ export class HttpExecutor implements StepExecutor {
       clearTimeout(timeoutId);
 
       const responseText = await response.text();
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
 
       if (!response.ok) {
         return {
@@ -123,7 +127,7 @@ export class HttpExecutor implements StepExecutor {
           metadata: {
             statusCode: response.status,
             statusText: response.statusText,
-            headers: Object.fromEntries(response.headers.entries()),
+            headers: responseHeaders,
           },
           promptUsed: `${config.method} ${url}`,
           modelUsed: 'http',

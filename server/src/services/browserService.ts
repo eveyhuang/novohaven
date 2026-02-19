@@ -1,5 +1,8 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
 // Patterns matched against VISIBLE page text (not full HTML) to detect active CAPTCHA challenges
@@ -40,7 +43,9 @@ export interface BrowserProgressEvent {
 const BROWSER_TIMEOUT = parseInt(process.env.BROWSER_TIMEOUT || '900000', 10); // 15 min
 const BROWSER_MAX_CONCURRENT = parseInt(process.env.BROWSER_MAX_CONCURRENT || '5', 10); // Increased from 2 to 5
 const BROWSER_DEBUG_PORT = parseInt(process.env.BROWSER_DEBUG_PORT || '9222', 10);
-const BROWSER_HEADLESS = process.env.BROWSER_HEADLESS === 'true';
+const BROWSER_HEADLESS = process.env.BROWSER_HEADLESS !== 'false';
+const BROWSER_USER_DATA_ROOT = process.env.BROWSER_USER_DATA_DIR
+  || path.join(os.tmpdir(), 'novohaven-browser-profiles');
 
 class BrowserService {
   private tasks = new Map<string, BrowserTask>();
@@ -84,12 +89,37 @@ class BrowserService {
     this.emit(task, 'status', { status: 'launching', message: 'Launching browser...' });
 
     try {
+      const taskUserDataDir = path.join(BROWSER_USER_DATA_ROOT, taskId);
+      const taskHomeDir = path.join(BROWSER_USER_DATA_ROOT, `${taskId}-home`);
+      const taskConfigDir = path.join(taskHomeDir, '.config');
+      const taskCacheDir = path.join(taskHomeDir, '.cache');
+      const taskCrashDir = path.join(taskUserDataDir, 'crash-dumps');
+      fs.mkdirSync(taskUserDataDir, { recursive: true });
+      fs.mkdirSync(taskHomeDir, { recursive: true });
+      fs.mkdirSync(taskConfigDir, { recursive: true });
+      fs.mkdirSync(taskCacheDir, { recursive: true });
+      fs.mkdirSync(taskCrashDir, { recursive: true });
+      fs.mkdirSync(path.join(taskHomeDir, 'Library', 'Application Support'), { recursive: true });
+
       const launchOptions: any = {
         headless: BROWSER_HEADLESS,
+        userDataDir: taskUserDataDir,
+        env: {
+          ...process.env,
+          HOME: taskHomeDir,
+          XDG_CONFIG_HOME: taskConfigDir,
+          XDG_CACHE_HOME: taskCacheDir,
+        },
         args: [
           `--remote-debugging-port=${BROWSER_DEBUG_PORT}`,
           '--no-sandbox',
           '--disable-setuid-sandbox',
+          '--disable-crash-reporter',
+          '--disable-breakpad',
+          `--crash-dumps-dir=${taskCrashDir}`,
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-dev-shm-usage',
           '--disable-blink-features=AutomationControlled',
           '--window-size=1920,1080',
         ],
@@ -268,6 +298,13 @@ class BrowserService {
       }
     } catch (err: any) {
       console.error(`[BrowserService] Error closing browser for task ${taskId}:`, err.message);
+    }
+
+    try {
+      fs.rmSync(path.join(BROWSER_USER_DATA_ROOT, taskId), { recursive: true, force: true });
+      fs.rmSync(path.join(BROWSER_USER_DATA_ROOT, `${taskId}-home`), { recursive: true, force: true });
+    } catch (err: any) {
+      console.warn(`[BrowserService] Failed to clean user data dir for task ${taskId}:`, err.message);
     }
 
     this.tasks.delete(taskId);

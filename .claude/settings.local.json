@@ -62,7 +62,18 @@
       "Bash(git -C /Users/eveyhuang/Documents/novohaven-app rm -r --cached:*)",
       "Bash(git -C /Users/eveyhuang/Documents/novohaven-app status --short)",
       "Bash(/Users/eveyhuang/Documents/novohaven-app/server/src/__tests__/routes/sessions.closeAll.test.ts:*)",
-      "Bash(/Users/eveyhuang/Documents/novohaven-app/server/src/routes/sessions.ts:*)"
+      "Bash(/Users/eveyhuang/Documents/novohaven-app/server/src/routes/sessions.ts:*)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app log --oneline -3)",
+      "Bash(npm run type-check:*)",
+      "Bash(npm run:*)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app log --oneline -6)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app log --oneline --all)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app show 0b4b9e49 --stat)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app stash list:*)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app show 94042e82 --stat)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app diff 94042e82 HEAD -- server/src/__tests__/executors/ server/src/__tests__/routes/)",
+      "Bash(git stash:*)",
+      "Bash(/Users/eveyhuang/Documents/novohaven-app/server/src/__tests__/routes/executions.deleteAll.test.ts:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

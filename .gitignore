@@ -9,6 +9,7 @@ server/node_modules/
 
 # testing
 coverage/
+**/__tests__/
 
 # build outputs
 /build

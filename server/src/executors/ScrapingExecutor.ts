@@ -208,6 +208,43 @@ export class ScrapingExecutor implements StepExecutor {
       }
 
       const output = JSON.stringify(result.data, null, 2);
+      const extractedRows = this.countExtractedReviewRows(result.data);
+      const isWayfair = platform === 'wayfair';
+      const hasAnyData = result.data !== null && result.data !== undefined;
+
+      // Strict success criteria for review extraction:
+      // - Wayfair: must contain at least one extracted review row
+      // - Other platforms: allow executor-indicated success or concrete rows
+      const treatAsSuccess = isWayfair
+        ? extractedRows > 0
+        : result.success || extractedRows > 0;
+
+      if (!treatAsSuccess) {
+        const reason = result.error
+          || (isWayfair
+            ? 'Wayfair extraction returned zero review rows.'
+            : 'Extraction returned no usable rows.');
+        onProgress(`Extraction failed: ${reason}`);
+        browserService.emit(task, 'error', { error: reason });
+        return {
+          success: false,
+          content: hasAnyData ? output : '',
+          error: reason,
+          metadata: {
+            service: 'browser',
+            browserTaskId,
+            platform,
+            reviewCount: result.reviewCount || 0,
+            extractedRows,
+            stepType: 'scraping',
+          },
+          modelUsed: 'browser:scrape',
+        };
+      }
+
+      if (!result.success && extractedRows > 0) {
+        onProgress('Extraction returned partial/error data; preserving extracted rows.');
+      }
 
       // Emit completion event
       browserService.emit(task, 'complete', {
@@ -221,13 +258,15 @@ export class ScrapingExecutor implements StepExecutor {
       });
 
       return {
-        success: result.success,
+        success: treatAsSuccess,
         content: output,
         metadata: {
           service: 'browser',
           browserTaskId,
           platform,
           reviewCount: result.reviewCount,
+          extractedRows,
+          extractionSuccess: result.success,
           stepType: 'scraping',
         },
         modelUsed: 'browser:scrape',
@@ -290,5 +329,19 @@ export class ScrapingExecutor implements StepExecutor {
     if (lower.includes('amazon.com')) return 'amazon';
     if (lower.includes('walmart.com')) return 'walmart';
     return null;
+  }
+
+  private countExtractedReviewRows(data: any): number {
+    if (!data) return 0;
+    if (Array.isArray(data)) {
+      return data.reduce((sum, item) => sum + this.countExtractedReviewRows(item), 0);
+    }
+    if (Array.isArray(data.reviews)) {
+      return data.reviews.length;
+    }
+    if (Array.isArray(data.data)) {
+      return data.data.reduce((sum: number, item: any) => sum + this.countExtractedReviewRows(item), 0);
+    }
+    return 0;
   }
 }

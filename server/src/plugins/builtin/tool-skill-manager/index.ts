@@ -5,7 +5,11 @@
  *           skill_create, skill_validate
  */
 import Database from 'better-sqlite3';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { getDatabase, initializeDatabase } from '../../../models/database';
+import { approveStep, startExecution } from '../../../services/workflowEngine';
 import {
   ToolPlugin, PluginManifest, ToolDefinition, ToolContext, ToolResult,
 } from '../../types';
@@ -21,6 +25,13 @@ class SkillManagerPlugin implements ToolPlugin {
   }
 
   async initialize(): Promise<void> {
+    try {
+      getDatabase();
+    } catch {
+      // Agent child processes do not run server bootstrap, so initialize query DB here.
+      initializeDatabase();
+    }
+
     // Open DB connection (may run in child process)
     this.db = new Database(DB_PATH, { readonly: false });
     this.db.pragma('journal_mode = WAL');
@@ -255,6 +266,24 @@ class SkillManagerPlugin implements ToolPlugin {
       resolvedInputs[imageVars[0]] = '[image:attachment_0]';
     }
 
+    // Keep file inputs from blocking execution when file content is attached or implied.
+    for (const [name, spec] of inputSpecs.entries()) {
+      if (spec.type === 'file' && (resolvedInputs[name] == null || String(resolvedInputs[name]).trim() === '')) {
+        resolvedInputs[name] = '[file:provided_by_user]';
+      }
+    }
+
+    // Scraping executor accepts urls/product_urls/product_url; normalize common aliases.
+    const hasScrapingStep = steps.some((s) => (s.step_type || '').toLowerCase() === 'scraping');
+    if (hasScrapingStep) {
+      const candidateUrl = resolvedInputs.product_url || resolvedInputs.product_urls || resolvedInputs.urls || resolvedInputs.url;
+      if (candidateUrl) {
+        if (!resolvedInputs.product_url) resolvedInputs.product_url = candidateUrl;
+        if (!resolvedInputs.product_urls) resolvedInputs.product_urls = candidateUrl;
+        if (!resolvedInputs.urls) resolvedInputs.urls = candidateUrl;
+      }
+    }
+
     const missingRequired = Array.from(inputSpecs.entries())
       .filter(([, spec]) => !spec.optional)
       .map(([name, spec]) => ({ name, spec }))
@@ -287,34 +316,63 @@ class SkillManagerPlugin implements ToolPlugin {
       };
     }
 
-    const { recipeId, recipeStepIdByOrder } = this.ensureExecutionRecipe(skill, parentType, steps);
+    const { recipeId } = this.ensureExecutionRecipe(skill, parentType, steps);
 
-    // Create an execution record
-    const result = this.db!.prepare(`
-      INSERT INTO workflow_executions (recipe_id, user_id, input_data, status, started_at)
-      VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
-    `).run(recipeId, context.userId, JSON.stringify(resolvedInputs));
-
-    const executionId = Number(result.lastInsertRowid);
-
-    // Create step execution records
-    for (const step of steps) {
-      const recipeStepId = recipeStepIdByOrder.get(step.step_order) ?? null;
-      this.db!.prepare(`
-        INSERT INTO step_executions (execution_id, step_id, step_order, status)
-        VALUES (?, ?, ?, 'pending')
-      `).run(executionId, recipeStepId, step.step_order);
+    const startResult = await startExecution(recipeId, context.userId, resolvedInputs);
+    if (!startResult.success || !startResult.executionId) {
+      return {
+        success: false,
+        output: `Failed to start execution for ${parentType} "${skill.name}": ${startResult.error || 'unknown error'}`,
+      };
     }
 
+    const executionId = startResult.executionId;
+    const settled = await this.waitForExecutionToSettle(executionId, context.userId, 120000);
     const imageCount = Object.keys(imageInputs).length;
     const inputSummary = Object.keys(resolvedInputs).length > 0
-      ? `\nInputs: ${Object.entries(resolvedInputs).map(([k, v]) => `${k}=${typeof v === 'string' && v.length > 50 ? v.substring(0, 50) + '...' : v}`).join(', ')}`
+      ? `\nInputs: ${Object.entries(resolvedInputs).map(([k, v]) => `${k}=${typeof v === 'string' && v.length > 60 ? v.substring(0, 60) + '...' : v}`).join(', ')}`
       : '';
 
+    if (settled.timedOut) {
+      return {
+        success: true,
+        output: `Started execution #${executionId} for ${parentType} "${skill.name}" with ${steps.length} steps${imageCount > 0 ? ` and ${imageCount} image(s)` : ''}.${inputSummary}\nExecution is still running. Check /executions/${executionId} for progress.`,
+        metadata: { executionId, status: 'running' },
+      };
+    }
+
+    if (settled.status !== 'completed') {
+      const err = settled.errorMessage || `Execution ended with status "${settled.status}"`;
+      return {
+        success: false,
+        output: `Execution #${executionId} for ${parentType} "${skill.name}" did not complete successfully: ${err}`,
+        metadata: { executionId, status: settled.status },
+      };
+    }
+
+    const latestContent = this.extractLatestContent(settled.stepExecutions);
+    if (!latestContent) {
+      return {
+        success: true,
+        output: `Execution #${executionId} for ${parentType} "${skill.name}" completed successfully but returned no textual output.`,
+        metadata: { executionId, status: settled.status },
+      };
+    }
+
+    const csv = this.tryWriteCsvFromOutput(latestContent, executionId, skill.name || `skill-${skillId}`);
+    if (csv) {
+      return {
+        success: true,
+        output: `Execution #${executionId} for ${parentType} "${skill.name}" completed.\nCSV file: ${csv.path}\n\nPreview:\n\`\`\`csv\n${csv.preview}\n\`\`\``,
+        metadata: { executionId, status: settled.status, csvPath: csv.path },
+      };
+    }
+
+    const truncated = latestContent.length > 4000 ? `${latestContent.slice(0, 4000)}...` : latestContent;
     return {
       success: true,
-      output: `Created execution #${executionId} for ${parentType} "${skill.name}" with ${steps.length} steps${imageCount > 0 ? ` and ${imageCount} image(s)` : ''}.${inputSummary}\nThe workflow engine will process it.`,
-      metadata: { executionId },
+      output: `Execution #${executionId} for ${parentType} "${skill.name}" completed.\nResult:\n${truncated}`,
+      metadata: { executionId, status: settled.status },
     };
   }
 
@@ -611,6 +669,157 @@ class SkillManagerPlugin implements ToolPlugin {
     }
 
     return { recipeId, recipeStepIdByOrder };
+  }
+
+  private async waitForExecutionToSettle(
+    executionId: number,
+    userId: number,
+    timeoutMs: number
+  ): Promise<{ status: string; stepExecutions: any[]; timedOut: boolean; errorMessage?: string }> {
+    const started = Date.now();
+    const approvedSteps = new Set<number>();
+    let lastStatus = 'running';
+    let lastSteps: any[] = [];
+
+    while (Date.now() - started < timeoutMs) {
+      const execution = this.db!.prepare(
+        'SELECT status FROM workflow_executions WHERE id = ?'
+      ).get(executionId) as { status: string } | undefined;
+      if (!execution) {
+        return { status: 'failed', stepExecutions: [], timedOut: false, errorMessage: 'Execution record not found' };
+      }
+
+      lastStatus = execution.status;
+      lastSteps = this.db!.prepare(
+        'SELECT * FROM step_executions WHERE execution_id = ? ORDER BY step_order'
+      ).all(executionId) as any[];
+
+      const awaiting = lastSteps.find((s) => s.status === 'awaiting_review' && !approvedSteps.has(s.id));
+      if (awaiting) {
+        approvedSteps.add(awaiting.id);
+        try {
+          await approveStep(executionId, awaiting.id, userId);
+        } catch (error: any) {
+          return {
+            status: 'failed',
+            stepExecutions: lastSteps,
+            timedOut: false,
+            errorMessage: `Failed to auto-approve step #${awaiting.step_order}: ${error?.message || String(error)}`,
+          };
+        }
+        await this.sleep(500);
+        continue;
+      }
+
+      if (['completed', 'failed', 'cancelled', 'paused'].includes(lastStatus)) {
+        const firstError = lastSteps.find((s) => s.error_message)?.error_message as string | undefined;
+        return { status: lastStatus, stepExecutions: lastSteps, timedOut: false, errorMessage: firstError };
+      }
+
+      await this.sleep(1000);
+    }
+
+    return { status: lastStatus, stepExecutions: lastSteps, timedOut: true };
+  }
+
+  private extractLatestContent(stepExecutions: any[]): string | null {
+    const withOutput = [...stepExecutions].reverse().find((s) => s.output_data);
+    if (!withOutput?.output_data) return null;
+    try {
+      const parsed = JSON.parse(withOutput.output_data);
+      if (typeof parsed?.content === 'string') return parsed.content;
+      if (parsed?.content != null) return JSON.stringify(parsed.content, null, 2);
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      return String(withOutput.output_data);
+    }
+  }
+
+  private tryWriteCsvFromOutput(
+    content: string,
+    executionId: number,
+    skillName: string
+  ): { path: string; preview: string } | null {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return null;
+    }
+
+    const rows = this.extractRowsForCsv(parsed);
+    if (rows.length === 0) return null;
+
+    const headerSet = new Set<string>();
+    for (const row of rows) {
+      Object.keys(row).forEach((k) => headerSet.add(k));
+    }
+    const headers = Array.from(headerSet);
+
+    const csv = [
+      headers.join(','),
+      ...rows.map((row) => headers.map((h) => this.escapeCsvValue(row[h])).join(',')),
+    ].join('\n');
+
+    const safeSkill = String(skillName || 'skill')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'skill';
+    const csvPath = path.join(os.tmpdir(), `${safeSkill}-execution-${executionId}-${Date.now()}.csv`);
+    fs.writeFileSync(csvPath, csv, 'utf8');
+
+    const preview = csv.split('\n').slice(0, 8).join('\n');
+    return { path: csvPath, preview };
+  }
+
+  private extractRowsForCsv(data: any): Array<Record<string, any>> {
+    const rows: Array<Record<string, any>> = [];
+
+    const pushReviewRows = (container: any) => {
+      const reviews = Array.isArray(container?.reviews) ? container.reviews : null;
+      if (!reviews) return false;
+      for (const review of reviews) {
+        if (!review || typeof review !== 'object') continue;
+        rows.push({
+          url: container.url || container.productUrl || '',
+          totalCount: container.totalCount ?? '',
+          averageRating: container.averageRating ?? '',
+          ...review,
+        });
+      }
+      return true;
+    };
+
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (pushReviewRows(item)) continue;
+        if (item && typeof item === 'object') rows.push(item);
+      }
+      return rows;
+    }
+
+    if (data && typeof data === 'object') {
+      if (!pushReviewRows(data)) {
+        if (Array.isArray(data.data)) {
+          return this.extractRowsForCsv(data.data);
+        }
+        rows.push(data);
+      }
+    }
+
+    return rows;
+  }
+
+  private escapeCsvValue(value: any): string {
+    if (value == null) return '';
+    const text = String(value).replace(/\r?\n/g, ' ').replace(/"/g, '""');
+    if (/[",]/.test(text)) return `"${text}"`;
+    return text;
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 

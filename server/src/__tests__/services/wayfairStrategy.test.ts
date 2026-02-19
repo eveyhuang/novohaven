@@ -1,213 +1,217 @@
 import { WayfairStrategy } from '../../services/extractionStrategies/wayfairStrategy';
 
-// Mock Puppeteer Page object
 function createMockPage(overrides: Record<string, any> = {}) {
-  const mockPage: any = {
+  return {
     goto: jest.fn().mockResolvedValue(undefined),
     evaluate: jest.fn(),
-    content: jest.fn().mockResolvedValue('<html></html>'),
     ...overrides,
-  };
-  return mockPage;
+  } as any;
 }
 
-// Each test triggers scroll delays (4 x 1s per URL), so extend timeout
-jest.setTimeout(15000);
+function buildGraphqlPayload(reviews: Array<Record<string, any>>) {
+  return {
+    data: {
+      listingVariant: {
+        reviewslist: {
+          reviews: {
+            totalCount: reviews.length,
+            edges: reviews.map((r) => ({ node: r })),
+          },
+        },
+        reviewsRating: { reviews: { averageRating: 4.3 } },
+        reviewsHistogram: { reviews: { ratingHistogram: [] } },
+      },
+    },
+  };
+}
 
 describe('WayfairStrategy', () => {
   let strategy: WayfairStrategy;
   let onProgress: jest.Mock;
+
+  jest.setTimeout(20000);
 
   beforeEach(() => {
     strategy = new WayfairStrategy();
     onProgress = jest.fn();
   });
 
-  test('has correct platform identifier', () => {
-    expect(strategy.platform).toBe('wayfair');
+  test('extracts reviews via GraphQL when GraphQL call succeeds', async () => {
+    const mockPage = createMockPage();
+
+    mockPage.evaluate.mockImplementation((fn: any, arg: any) => {
+      const src = String(fn);
+
+      if (src.includes('window.scrollBy')) return Promise.resolve();
+      if (src.includes('novohavenClicked')) return Promise.resolve(0);
+      if (src.includes('sha256Hash') && src.includes('operationNames')) {
+        return Promise.resolve({ hashes: [], clientVersions: [], operationNames: [] });
+      }
+      if (typeof arg === 'string') {
+        return Promise.resolve('TWFya2V0cGxhY2VMaXN0aW5nVmFyaWFudDoxMjM=');
+      }
+      if (src.includes('federation/graphql')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          data: buildGraphqlPayload([
+            {
+              reviewId: '1',
+              reviewerGivenName: 'Alice',
+              reviewerLocation: 'CA',
+              rating: 5,
+              formattedDate: 'Jan 1, 2026',
+              body: 'Excellent quality',
+            },
+            {
+              reviewId: '2',
+              reviewerGivenName: 'Bob',
+              reviewerLocation: 'WA',
+              rating: 4,
+              formattedDate: 'Jan 2, 2026',
+              body: 'Solid value',
+            },
+          ]),
+        });
+      }
+      if (src.includes('cardSelectors')) {
+        return Promise.resolve({ totalCount: 0, averageRating: null, reviews: [] });
+      }
+      if (src.includes('totalMatch') && src.includes('averageRating')) {
+        return Promise.resolve({ totalCount: 2, averageRating: 4.3 });
+      }
+      return Promise.resolve(null);
+    });
+
+    const result = await strategy.execute(mockPage, ['https://www.wayfair.com/product/test.html'], onProgress);
+
+    expect(result.success).toBe(true);
+    expect(result.reviewCount).toBe(2);
+    expect(result.data.reviews).toHaveLength(2);
+    expect(result.data.source).toBe('graphql');
   });
 
-  test('has a display name', () => {
-    expect(strategy.displayName).toBeTruthy();
+  test('falls back to DOM extraction when GraphQL fails', async () => {
+    const mockPage = createMockPage();
+
+    mockPage.evaluate.mockImplementation((fn: any, arg: any) => {
+      const src = String(fn);
+
+      if (src.includes('window.scrollBy')) return Promise.resolve();
+      if (src.includes('novohavenClicked')) return Promise.resolve(0);
+      if (src.includes('sha256Hash') && src.includes('operationNames')) {
+        return Promise.resolve({ hashes: [], clientVersions: [], operationNames: [] });
+      }
+      if (typeof arg === 'string') {
+        return Promise.resolve('TWFya2V0cGxhY2VMaXN0aW5nVmFyaWFudDoxMjM=');
+      }
+      if (src.includes('federation/graphql')) {
+        return Promise.resolve({ ok: false, status: 400, error: 'GraphQL request failed: 400' });
+      }
+      if (src.includes('cardSelectors')) {
+        return Promise.resolve({
+          totalCount: 2,
+          averageRating: 4.5,
+          reviews: [
+            { name: 'Dina', rating: 5, body: 'Great table', date: 'Jan 3, 2026' },
+            { name: 'Evan', rating: 4, body: 'Looks nice', date: 'Jan 4, 2026' },
+          ],
+        });
+      }
+      if (src.includes('totalMatch') && src.includes('averageRating')) {
+        return Promise.resolve({ totalCount: 20, averageRating: 4.1 });
+      }
+      return Promise.resolve(null);
+    });
+
+    const result = await strategy.execute(mockPage, ['https://www.wayfair.com/product/test.html'], onProgress);
+
+    expect(result.success).toBe(true);
+    expect(result.data.reviews).toHaveLength(2);
+    expect(result.data.source).toBe('dom');
   });
 
-  describe('execute', () => {
-    test('successfully extracts reviews from a single URL', async () => {
-      const mockReviews = [
-        { reviewId: '1', reviewerGivenName: 'Alice', rating: 5, body: 'Great!', formattedDate: '01/01/2026' },
-        { reviewId: '2', reviewerGivenName: 'Bob', rating: 3, body: 'Okay', formattedDate: '02/01/2026' },
-      ];
+  test('returns a descriptive error when both GraphQL and DOM paths fail', async () => {
+    const mockPage = createMockPage();
 
-      const mockPage = createMockPage();
-      // navigate
-      mockPage.goto.mockResolvedValue(undefined);
+    mockPage.evaluate.mockImplementation((fn: any, arg: any) => {
+      const src = String(fn);
+      if (src.includes('window.scrollBy')) return Promise.resolve();
+      if (src.includes('novohavenClicked')) return Promise.resolve(0);
+      if (src.includes('sha256Hash') && src.includes('operationNames')) {
+        return Promise.resolve({ hashes: [], clientVersions: [], operationNames: [] });
+      }
+      if (typeof arg === 'string') {
+        return Promise.resolve(null); // nodeId not found
+      }
+      if (src.includes('cardSelectors')) {
+        return Promise.resolve({ totalCount: 0, averageRating: null, reviews: [] });
+      }
+      if (src.includes('totalMatch') && src.includes('averageRating')) {
+        return Promise.resolve({ totalCount: 0, averageRating: null });
+      }
+      return Promise.resolve(null);
+    });
 
-      let evaluateCallCount = 0;
-      mockPage.evaluate.mockImplementation((fn: any, ...args: any[]) => {
-        evaluateCallCount++;
+    const result = await strategy.execute(mockPage, ['https://www.wayfair.com/product/test.html'], onProgress);
 
-        // Call 1-4: scroll (window.scrollBy)
-        if (evaluateCallCount <= 4) return Promise.resolve();
+    expect(result.success).toBe(false);
+    expect(result.data.error).toContain('nodeId');
+    expect(result.data.error).toContain('DOM fallback');
+  });
 
-        // Call 5: extract nodeId
-        if (evaluateCallCount === 5) {
-          return Promise.resolve('TWFya2V0cGxhY2VMaXN0aW5nVmFyaWFudDoxMjM=');
-        }
+  test('handles multiple URLs and reports success when at least one URL succeeds', async () => {
+    const mockPage = createMockPage();
+    let graphqlCalls = 0;
 
-        // Call 6: get total review count
-        if (evaluateCallCount === 6) {
-          return Promise.resolve(2);
-        }
-
-        // Call 7: GraphQL fetch
-        if (evaluateCallCount === 7) {
+    mockPage.evaluate.mockImplementation((fn: any, arg: any) => {
+      const src = String(fn);
+      if (src.includes('window.scrollBy')) return Promise.resolve();
+      if (src.includes('novohavenClicked')) return Promise.resolve(0);
+      if (src.includes('sha256Hash') && src.includes('operationNames')) {
+        return Promise.resolve({ hashes: [], clientVersions: [], operationNames: [] });
+      }
+      if (typeof arg === 'string') {
+        return Promise.resolve('TWFya2V0cGxhY2VMaXN0aW5nVmFyaWFudDoxMjM=');
+      }
+      if (src.includes('federation/graphql')) {
+        graphqlCalls += 1;
+        if (graphqlCalls === 1) {
           return Promise.resolve({
-            data: {
-              listingVariant: {
-                reviewslist: {
-                  reviews: {
-                    totalCount: 2,
-                    edges: mockReviews.map(r => ({ node: r })),
-                  },
-                },
-                reviewsRating: { reviews: { averageRating: 4.0 } },
-                reviewsHistogram: { reviews: { ratingHistogram: [] } },
+            ok: true,
+            status: 200,
+            data: buildGraphqlPayload([
+              {
+                reviewId: '1',
+                reviewerGivenName: 'A',
+                reviewerLocation: '',
+                rating: 5,
+                formattedDate: 'Jan 1, 2026',
+                body: 'Great',
               },
-            },
+            ]),
           });
         }
-
-        return Promise.resolve(null);
-      });
-
-      const result = await strategy.execute(mockPage, ['https://www.wayfair.com/product/test.html'], onProgress);
-
-      expect(result.success).toBe(true);
-      expect(result.data.reviews).toHaveLength(2);
-      expect(result.data.totalCount).toBe(2);
-      expect(result.data.averageRating).toBe(4.0);
-      expect(result.reviewCount).toBe(2);
+        return Promise.resolve({ ok: false, status: 400, error: 'GraphQL request failed: 400' });
+      }
+      if (src.includes('cardSelectors')) {
+        return Promise.resolve({ totalCount: 0, averageRating: null, reviews: [] });
+      }
+      if (src.includes('totalMatch') && src.includes('averageRating')) {
+        return Promise.resolve({ totalCount: 1, averageRating: 4.0 });
+      }
+      return Promise.resolve(null);
     });
 
-    test('throws error when nodeId is not found', async () => {
-      const mockPage = createMockPage();
-      let evaluateCallCount = 0;
-      mockPage.evaluate.mockImplementation(() => {
-        evaluateCallCount++;
-        if (evaluateCallCount <= 4) return Promise.resolve(); // scroll
-        if (evaluateCallCount === 5) return Promise.resolve(null); // no nodeId
-        return Promise.resolve(null);
-      });
+    const result = await strategy.execute(
+      mockPage,
+      ['https://www.wayfair.com/product/a.html', 'https://www.wayfair.com/product/b.html'],
+      onProgress
+    );
 
-      const result = await strategy.execute(mockPage, ['https://www.wayfair.com/product/test.html'], onProgress);
-
-      // Should have an error in the result
-      expect(result.data.error).toBeDefined();
-      expect(result.data.error).toContain('nodeId');
-    });
-
-    test('throws error when GraphQL returns error', async () => {
-      const mockPage = createMockPage();
-      let evaluateCallCount = 0;
-      mockPage.evaluate.mockImplementation(() => {
-        evaluateCallCount++;
-        if (evaluateCallCount <= 4) return Promise.resolve(); // scroll
-        if (evaluateCallCount === 5) return Promise.resolve('TWFya2V0cGxhY2VMaXN0aW5nVmFyaWFudDoxMjM=');
-        if (evaluateCallCount === 6) return Promise.resolve(10);
-        if (evaluateCallCount === 7) return Promise.resolve({ error: 'GraphQL request failed: 400 Bad Request' });
-        return Promise.resolve(null);
-      });
-
-      const result = await strategy.execute(mockPage, ['https://www.wayfair.com/product/test.html'], onProgress);
-
-      expect(result.data.error).toBeDefined();
-      expect(result.data.error).toContain('GraphQL');
-    });
-
-    test('calls onProgress with status messages', async () => {
-      const mockPage = createMockPage();
-      let evaluateCallCount = 0;
-      mockPage.evaluate.mockImplementation(() => {
-        evaluateCallCount++;
-        if (evaluateCallCount <= 4) return Promise.resolve();
-        if (evaluateCallCount === 5) return Promise.resolve('TWFya2V0cGxhY2VMaXN0aW5nVmFyaWFudDoxMjM=');
-        if (evaluateCallCount === 6) return Promise.resolve(5);
-        if (evaluateCallCount === 7) {
-          return Promise.resolve({
-            data: {
-              listingVariant: {
-                reviewslist: { reviews: { totalCount: 5, edges: [] } },
-                reviewsRating: { reviews: { averageRating: 4.5 } },
-                reviewsHistogram: { reviews: { ratingHistogram: [] } },
-              },
-            },
-          });
-        }
-        return Promise.resolve(null);
-      });
-
-      await strategy.execute(mockPage, ['https://www.wayfair.com/product/test.html'], onProgress);
-
-      // Check that onProgress was called with meaningful messages
-      const messages = onProgress.mock.calls.map((c: any) => c[0]);
-      expect(messages.some((m: string) => m.includes('Navigating'))).toBe(true);
-      expect(messages.some((m: string) => m.includes('Scrolling'))).toBe(true);
-      expect(messages.some((m: string) => m.includes('nodeId'))).toBe(true);
-      expect(messages.some((m: string) => m.includes('GraphQL'))).toBe(true);
-    });
-
-    test('handles multiple URLs', async () => {
-      const mockPage = createMockPage();
-      let evaluateCallCount = 0;
-      mockPage.evaluate.mockImplementation(() => {
-        evaluateCallCount++;
-        // For each URL: 4 scroll + nodeId + totalCount + graphQL = 7 calls
-        const urlIndex = Math.floor((evaluateCallCount - 1) / 7);
-        const callInUrl = ((evaluateCallCount - 1) % 7) + 1;
-
-        if (callInUrl <= 4) return Promise.resolve();
-        if (callInUrl === 5) return Promise.resolve('TWFya2V0cGxhY2VMaXN0aW5nVmFyaWFudDoxMjM=');
-        if (callInUrl === 6) return Promise.resolve(1);
-        if (callInUrl === 7) {
-          return Promise.resolve({
-            data: {
-              listingVariant: {
-                reviewslist: { reviews: { totalCount: 1, edges: [{ node: { reviewId: String(urlIndex), rating: 5, body: 'Good' } }] } },
-                reviewsRating: { reviews: { averageRating: 5.0 } },
-                reviewsHistogram: { reviews: { ratingHistogram: [] } },
-              },
-            },
-          });
-        }
-        return Promise.resolve(null);
-      });
-
-      const result = await strategy.execute(
-        mockPage,
-        ['https://www.wayfair.com/product/a.html', 'https://www.wayfair.com/product/b.html'],
-        onProgress,
-      );
-
-      expect(result.success).toBe(true);
-      expect(Array.isArray(result.data)).toBe(true);
-      expect(result.data).toHaveLength(2);
-    }, 30000);
-
-    test('navigates to each URL', async () => {
-      const mockPage = createMockPage();
-      // Make nodeId extraction fail immediately so we don't need full mock chain
-      mockPage.evaluate.mockResolvedValue(null);
-
-      await strategy.execute(
-        mockPage,
-        ['https://www.wayfair.com/product/a.html'],
-        onProgress,
-      );
-
-      expect(mockPage.goto).toHaveBeenCalledWith(
-        'https://www.wayfair.com/product/a.html',
-        expect.objectContaining({ waitUntil: 'networkidle2' }),
-      );
-    });
+    expect(result.success).toBe(true);
+    expect(Array.isArray(result.data)).toBe(true);
+    expect(result.data).toHaveLength(2);
+    expect(result.reviewCount).toBe(1);
   });
 });

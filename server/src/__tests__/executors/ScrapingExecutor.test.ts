@@ -4,7 +4,13 @@ import { StepExecutorContext } from '../../executors/StepExecutor';
 
 // Mock dependencies
 jest.mock('../../services/browserService', () => {
-  const mockEmitter = { on: jest.fn(), once: jest.fn(), emit: jest.fn(), removeListener: jest.fn() };
+  const mockEmitter = {
+    on: jest.fn(),
+    once: jest.fn(),
+    emit: jest.fn(),
+    removeListener: jest.fn(),
+    listenerCount: jest.fn().mockReturnValue(0),
+  };
   return {
     browserService: {
       createTask: jest.fn().mockReturnValue('browser-task-123'),
@@ -125,7 +131,7 @@ describe('ScrapingExecutor', () => {
         displayName: 'Wayfair Reviews',
         execute: jest.fn().mockResolvedValue({
           success: true,
-          data: { reviews: [{ name: 'Test', rating: 5 }], totalCount: 1 },
+          data: { reviews: [{ name: 'Test', rating: 5, body: 'Great table' }], totalCount: 1 },
           reviewCount: 1,
         }),
       };
@@ -167,8 +173,8 @@ describe('ScrapingExecutor', () => {
         displayName: 'Wayfair Reviews',
         execute: jest.fn().mockResolvedValue({
           success: true,
-          data: { reviews: [] },
-          reviewCount: 0,
+          data: { reviews: [{ name: 'A', rating: 4, body: 'Good value' }] },
+          reviewCount: 1,
         }),
       };
       mockGetStrategy.mockReturnValue(mockStrategy);
@@ -214,8 +220,8 @@ describe('ScrapingExecutor', () => {
         displayName: 'Wayfair Reviews',
         execute: jest.fn().mockResolvedValue({
           success: true,
-          data: [],
-          reviewCount: 0,
+          data: [{ reviews: [{ name: 'A', rating: 4, body: 'Solid' }] }],
+          reviewCount: 1,
         }),
       };
       mockGetStrategy.mockReturnValue(mockStrategy);
@@ -235,8 +241,8 @@ describe('ScrapingExecutor', () => {
         displayName: 'Wayfair Reviews',
         execute: jest.fn().mockResolvedValue({
           success: true,
-          data: [],
-          reviewCount: 0,
+          data: [{ reviews: [{ name: 'A', rating: 4, body: 'Solid' }] }],
+          reviewCount: 1,
         }),
       };
       mockGetStrategy.mockReturnValue(mockStrategy);
@@ -253,7 +259,7 @@ describe('ScrapingExecutor', () => {
         displayName: 'Wayfair Reviews',
         execute: jest.fn().mockResolvedValue({
           success: true,
-          data: { reviews: [] },
+          data: { reviews: [{ name: 'A', rating: 5, body: 'Great' }] },
           reviewCount: 5,
         }),
       };
@@ -272,16 +278,24 @@ describe('ScrapingExecutor', () => {
     });
 
     test('always destroys browser task in finally block', async () => {
+      const timeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation(((fn: any) => {
+        fn();
+        return 0 as any;
+      }) as any);
       const mockStrategy = {
         platform: 'wayfair',
         displayName: 'Wayfair Reviews',
-        execute: jest.fn().mockRejectedValue(new Error('test error')),
+        execute: jest.fn().mockResolvedValue({
+          success: true,
+          data: { reviews: [{ name: 'A', rating: 4, body: 'Great' }] },
+          reviewCount: 1,
+        }),
       };
       mockGetStrategy.mockReturnValue(mockStrategy);
 
       await executor.execute(mockStep, mockContext);
-
       expect(mockBrowserService.destroyTask).toHaveBeenCalledWith('browser-task-123');
+      timeoutSpy.mockRestore();
     });
   });
 
