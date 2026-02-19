@@ -205,6 +205,10 @@ class ApiClient {
     });
   }
 
+  async deleteAllExecutions(): Promise<{ success: boolean; deleted: number }> {
+    return this.request('/executions', { method: 'DELETE' });
+  }
+
   // Standards endpoints
   async getStandards(): Promise<CompanyStandard[]> {
     return this.request<CompanyStandard[]>('/standards');
