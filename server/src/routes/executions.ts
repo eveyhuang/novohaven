@@ -312,6 +312,17 @@ router.post('/:id/cancel', (req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/executions — Delete all executions for the current user
+router.delete('/', (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const result = queries.deleteAllExecutionsByUser(userId);
+    res.json({ success: true, deleted: result.changes });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // DELETE /api/executions/:id - Delete an execution
 router.delete('/:id', (req: Request, res: Response) => {
   try {
