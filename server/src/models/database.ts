@@ -871,6 +871,13 @@ export const queries = {
     run('DELETE FROM step_executions WHERE execution_id = ?', [id]);
     return run('DELETE FROM workflow_executions WHERE id = ?', [id]);
   },
+  deleteAllExecutionsByUser: (userId: number) => {
+    run(
+      'DELETE FROM step_executions WHERE execution_id IN (SELECT id FROM workflow_executions WHERE user_id = ?)',
+      [userId]
+    );
+    return run('DELETE FROM workflow_executions WHERE user_id = ?', [userId]);
+  },
 
   // Step Executions
   getStepExecutionsByExecutionId: (executionId: number) =>
