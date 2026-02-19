@@ -86,18 +86,6 @@ app.use('/api/skills/drafts', skillDraftsRouter);
 app.use('/api/skills', skillsRouter);
 app.use('/api/workflows', workflowsRouter);
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
-
-// Error handler
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Error:', err.message);
-  console.error(err.stack);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
 // Initialize database and start server
 async function start() {
   try {
@@ -123,10 +111,7 @@ async function start() {
           return;
         }
 
-        // Persist assistant message
-        sessionManager.appendMessage(sessionId, 'assistant', response.text || '');
-
-        // Route response back to the originating channel
+        // Route response back to the originating channel (AgentRunner persists messages itself)
         for (const [name, channel] of pluginRegistry.getAllChannels()) {
           if (name.includes(session.channel_type) || session.channel_type === name.replace('channel-', '')) {
             try {
@@ -145,18 +130,29 @@ async function start() {
     const channelRouter = createChannelRouter(async (message) => {
       console.log(`[Gateway] Routing message from ${message.channelType}: ${message.content.text?.substring(0, 50)}`);
 
-      // Persist user message
-      const session = sessionManager.resolveSession(
+      // Ensure session exists (AgentRunner persists messages itself)
+      sessionManager.resolveSession(
         message.channelType, message.channelId,
         message.userId, message.threadId
       );
-      sessionManager.appendMessage(session.id, 'user', message.content.text || '');
 
       // Route to agent
       await agentSupervisor.routeMessage(message);
     });
     app.use('/channels', channelRouter);
     console.log('Gateway initialized successfully');
+
+    // 404 handler — must be registered AFTER all routes (including async channel routes)
+    app.use((req, res) => {
+      res.status(404).json({ error: 'Not found' });
+    });
+
+    // Error handler
+    app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+      console.error('Error:', err.message);
+      console.error(err.stack);
+      res.status(500).json({ error: 'Internal server error' });
+    });
 
     app.listen(PORT, () => {
       console.log(`\nServer running on http://localhost:${PORT}`);

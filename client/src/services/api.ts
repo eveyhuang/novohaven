@@ -457,6 +457,14 @@ class ApiClient {
     return this.request(`/sessions/${id}/close`, { method: 'POST' });
   }
 
+  async deleteSession(id: string): Promise<{ success: boolean }> {
+    return this.request(`/sessions/${id}`, { method: 'DELETE' });
+  }
+
+  async deleteAllSessions(): Promise<{ success: boolean }> {
+    return this.request('/sessions', { method: 'DELETE' });
+  }
+
   // Plugin endpoints
   async getPlugins(): Promise<any[]> {
     return this.request('/plugins');
@@ -464,6 +472,10 @@ class ApiClient {
 
   async updatePlugin(name: string, data: { enabled: boolean; config?: any }): Promise<{ success: boolean }> {
     return this.request(`/plugins/${name}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; provider: string }>> {
+    return this.request('/plugins/models');
   }
 
   // Agent config endpoints
@@ -505,7 +517,11 @@ class ApiClient {
   }
 
   // Web channel endpoints (for AgentChat)
-  async sendAgentMessage(sessionId: string, text: string): Promise<any> {
+  async sendAgentMessage(
+    sessionId: string,
+    text: string,
+    attachments?: Array<{ type: string; data: string; name: string; mimeType: string }>
+  ): Promise<any> {
     const channelBase = API_BASE_URL.replace('/api', '');
     const response = await fetch(`${channelBase}/channels/channel-web/message`, {
       method: 'POST',
@@ -513,7 +529,7 @@ class ApiClient {
         'Content-Type': 'application/json',
         ...(this.getToken() ? { Authorization: `Bearer ${this.getToken()}` } : {}),
       },
-      body: JSON.stringify({ sessionId, text }),
+      body: JSON.stringify({ sessionId, text, attachments }),
     });
     return response.json();
   }

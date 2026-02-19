@@ -74,6 +74,15 @@ class OpenAIProvider implements ProviderPlugin {
           content: msg.content,
           tool_call_id: msg.toolCallId,
         });
+      } else if (msg.role === 'user' && msg.attachments?.length) {
+        const contentParts: OpenAI.Chat.ChatCompletionContentPart[] = [
+          { type: 'text', text: msg.content },
+          ...msg.attachments.map(a => ({
+            type: 'image_url' as const,
+            image_url: { url: `data:${a.mimeType};base64,${a.data}` },
+          })),
+        ];
+        messages.push({ role: 'user', content: contentParts });
       } else {
         messages.push({
           role: msg.role as 'user' | 'assistant' | 'system',

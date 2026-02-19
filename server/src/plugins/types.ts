@@ -88,12 +88,19 @@ export interface ModelInfo {
   contextWindow?: number;
 }
 
+export interface MessageAttachment {
+  type: 'image';
+  mimeType: string;
+  data: string; // base64 encoded
+}
+
 export interface CompletionRequest {
   model: string;
   systemPrompt?: string;
   messages: Array<{
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
+    attachments?: MessageAttachment[];
     toolCallId?: string;
   }>;
   tools?: ToolDefinition[];
@@ -135,6 +142,7 @@ export interface ChannelPlugin extends Plugin {
   sendOutbound(channelId: string, response: AgentResponse): Promise<void>;
   verifyAuth(req: Request): boolean;
   registerRoutes(router: Router): void;
+  setMessageHandler(handler: (message: ChannelMessage) => Promise<void>): void;
 }
 
 // ---- Tool Plugin ----

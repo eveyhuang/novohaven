@@ -34,6 +34,28 @@ router.get('/:id', (req, res) => {
   res.json({ session, messages: messages.reverse() });
 });
 
+// Delete a session and its messages
+router.delete('/:id', (req, res) => {
+  const db = getDatabase();
+  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  db.prepare('DELETE FROM session_messages WHERE session_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM sessions WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// Delete all sessions and their messages
+router.delete('/', (req, res) => {
+  const db = getDatabase();
+  db.prepare('DELETE FROM session_messages').run();
+  db.prepare('DELETE FROM sessions').run();
+  res.json({ success: true });
+});
+
 // Close a session
 router.post('/:id/close', (req, res) => {
   const db = getDatabase();

@@ -30,6 +30,30 @@ router.get('/', (req, res) => {
   res.json(plugins);
 });
 
+// List all available models from provider plugins
+router.get('/models', (req, res) => {
+  const providers = pluginRegistry.getAllProviders();
+  const db = getDatabase();
+  const models: Array<{ id: string; name: string; provider: string }> = [];
+
+  for (const [name, provider] of providers) {
+    // Check if plugin is enabled
+    const dbConfig = db.prepare('SELECT enabled FROM plugin_configs WHERE plugin_name = ?').get(name) as any;
+    if (dbConfig && !dbConfig.enabled) continue;
+
+    try {
+      const providerModels = provider.listModels();
+      for (const m of providerModels) {
+        models.push({ id: m.id, name: m.name, provider: m.provider });
+      }
+    } catch {
+      // Skip providers that fail to list models
+    }
+  }
+
+  res.json(models);
+});
+
 // Update plugin config
 router.put('/:name', (req, res) => {
   const { name } = req.params;

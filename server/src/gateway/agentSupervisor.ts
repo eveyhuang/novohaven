@@ -67,8 +67,12 @@ export class AgentSupervisor {
     this.sessionManager.setAgentPid(sessionId, child.pid || null);
 
     child.on('message', (msg: any) => {
-      if (msg.type === 'response_complete' || msg.type === 'stream_chunk') {
+      if (msg.type === 'response_complete') {
         this.onResponse(msg.sessionId, { text: msg.content });
+      } else if (msg.type === 'stream_chunk') {
+        this.onResponse(msg.sessionId, { text: msg.content, isChunk: true, messageId: msg.messageId } as any);
+      } else if (msg.type === 'stream_done') {
+        this.onResponse(msg.sessionId, { text: '', isDone: true, messageId: msg.messageId } as any);
       }
       // Handle other IPC message types (approval_request, execution_event, etc.)
     });

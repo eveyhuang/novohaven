@@ -41,9 +41,10 @@ export class ToolExecutor {
    * Execute a tool call by name.
    */
   async execute(toolName: string, args: Record<string, any>): Promise<ToolResult> {
-    // Check built-in tools first
-    if (toolName.startsWith('skill:') || toolName.startsWith('approval:')) {
-      return this.executeBuiltIn(toolName, args);
+    // Check built-in tools first (names use _ but accept : for back-compat)
+    const normalized = toolName.replace(':', '_');
+    if (normalized.startsWith('skill_') || normalized.startsWith('approval_')) {
+      return this.executeBuiltIn(normalized, args);
     }
 
     // Find the plugin that owns this tool
@@ -64,7 +65,7 @@ export class ToolExecutor {
    * tool-skill-manager plugin (Task 6.1).
    */
   private async executeBuiltIn(toolName: string, args: Record<string, any>): Promise<ToolResult> {
-    // Delegate skill:* tools to the skill manager plugin if registered
+    // Delegate skill_* tools to the skill manager plugin if registered
     const skillManager = this.toolPlugins.get('tool-skill-manager');
     if (skillManager) {
       const tools = skillManager.getTools();
@@ -73,8 +74,8 @@ export class ToolExecutor {
       }
     }
 
-    // Handle approval:request internally
-    if (toolName === 'approval:request') {
+    // Handle approval_request internally
+    if (toolName === 'approval_request') {
       return this.handleApprovalRequest(args);
     }
 
@@ -109,7 +110,7 @@ export class ToolExecutor {
   private getBuiltInToolDefinitions(): ToolDefinition[] {
     return [
       {
-        name: 'skill:search',
+        name: 'skill_search',
         description: 'Search for skills and workflows by name or description. Returns matching skills with IDs.',
         parameters: {
           type: 'object',
@@ -122,7 +123,7 @@ export class ToolExecutor {
         },
       },
       {
-        name: 'skill:execute',
+        name: 'skill_execute',
         description: 'Execute a skill or workflow by ID with the given inputs. Creates a workflow execution.',
         parameters: {
           type: 'object',
@@ -135,7 +136,7 @@ export class ToolExecutor {
         },
       },
       {
-        name: 'skill:test',
+        name: 'skill_test',
         description: 'Test a skill with inputs without saving results. Returns the output for preview.',
         parameters: {
           type: 'object',
@@ -147,7 +148,7 @@ export class ToolExecutor {
         },
       },
       {
-        name: 'skill:edit',
+        name: 'skill_edit',
         description: 'Propose edits to an existing skill. Creates a draft requiring human approval.',
         parameters: {
           type: 'object',
@@ -174,7 +175,7 @@ export class ToolExecutor {
         },
       },
       {
-        name: 'skill:create',
+        name: 'skill_create',
         description: 'Create a new skill draft. Requires human approval before becoming active.',
         parameters: {
           type: 'object',
@@ -201,7 +202,7 @@ export class ToolExecutor {
         },
       },
       {
-        name: 'skill:validate',
+        name: 'skill_validate',
         description: 'Validate a skill for missing variables, invalid configs, or other issues.',
         parameters: {
           type: 'object',
@@ -212,7 +213,7 @@ export class ToolExecutor {
         },
       },
       {
-        name: 'approval:request',
+        name: 'approval_request',
         description: 'Request human approval for an action. The agent will pause until the human responds.',
         parameters: {
           type: 'object',

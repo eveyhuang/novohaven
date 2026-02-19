@@ -1,8 +1,8 @@
 /**
  * tool-skill-manager — Agent tools for skill/workflow management.
  *
- * Provides: skill:search, skill:execute, skill:test, skill:edit,
- *           skill:create, skill:validate
+ * Provides: skill_search, skill_execute, skill_test, skill_edit,
+ *           skill_create, skill_validate
  */
 import Database from 'better-sqlite3';
 import path from 'path';
@@ -34,7 +34,7 @@ class SkillManagerPlugin implements ToolPlugin {
   getTools(): ToolDefinition[] {
     return [
       {
-        name: 'skill:search',
+        name: 'skill_search',
         description: 'Search for skills and workflows by name or description',
         parameters: {
           type: 'object',
@@ -47,7 +47,7 @@ class SkillManagerPlugin implements ToolPlugin {
         },
       },
       {
-        name: 'skill:execute',
+        name: 'skill_execute',
         description: 'Execute a skill or workflow by ID with given inputs',
         parameters: {
           type: 'object',
@@ -60,7 +60,7 @@ class SkillManagerPlugin implements ToolPlugin {
         },
       },
       {
-        name: 'skill:test',
+        name: 'skill_test',
         description: 'Test a skill with inputs without saving results',
         parameters: {
           type: 'object',
@@ -72,7 +72,7 @@ class SkillManagerPlugin implements ToolPlugin {
         },
       },
       {
-        name: 'skill:edit',
+        name: 'skill_edit',
         description: 'Propose edits to a skill (creates a draft for human approval)',
         parameters: {
           type: 'object',
@@ -87,7 +87,7 @@ class SkillManagerPlugin implements ToolPlugin {
         },
       },
       {
-        name: 'skill:create',
+        name: 'skill_create',
         description: 'Create a new skill draft (requires human approval)',
         parameters: {
           type: 'object',
@@ -101,7 +101,7 @@ class SkillManagerPlugin implements ToolPlugin {
         },
       },
       {
-        name: 'skill:validate',
+        name: 'skill_validate',
         description: 'Validate a skill for missing variables or invalid configs',
         parameters: {
           type: 'object',
@@ -120,12 +120,12 @@ class SkillManagerPlugin implements ToolPlugin {
     }
 
     switch (toolName) {
-      case 'skill:search': return this.search(args);
-      case 'skill:execute': return this.executeSkill(args, context);
-      case 'skill:test': return this.testSkill(args);
-      case 'skill:edit': return this.editSkill(args, context);
-      case 'skill:create': return this.createSkill(args, context);
-      case 'skill:validate': return this.validateSkill(args);
+      case 'skill_search': return this.search(args);
+      case 'skill_execute': return this.executeSkill(args, context);
+      case 'skill_test': return this.testSkill(args);
+      case 'skill_edit': return this.editSkill(args, context);
+      case 'skill_create': return this.createSkill(args, context);
+      case 'skill_validate': return this.validateSkill(args);
       default: return { success: false, output: `Unknown tool: ${toolName}` };
     }
   }

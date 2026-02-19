@@ -277,7 +277,7 @@ export function initializeDatabase(): void {
     run(`INSERT INTO agent_configs (name, description, default_model, system_prompt, allowed_tools, allowed_channels)
       VALUES (?, ?, ?, ?, ?, ?)`,
       ['Default Agent', 'Default agent configuration',
-       'claude-sonnet-4-5-20250929',
+       'kimi-k2-0711-chat',
        'You are a helpful AI assistant with access to skills and workflows. When a user asks you to do something, search for relevant skills first. If a skill exists, use it. If not, help the user directly or propose creating a new skill.',
        '["tool-browser","tool-bash","tool-fileops","tool-skill-manager"]',
        '["channel-web","channel-lark"]']);
@@ -285,6 +285,13 @@ export function initializeDatabase(): void {
 
   // Run migrations (recipes → skills/workflows)
   runMigrations();
+
+  // Update default agent config to use Kimi if still on old default
+  const currentDefault = getOne('SELECT default_model FROM agent_configs WHERE name = ?', ['Default Agent']);
+  if (currentDefault && currentDefault.default_model === 'claude-sonnet-4-5-20250929') {
+    run('UPDATE agent_configs SET default_model = ? WHERE name = ?', ['kimi-k2-0711-chat', 'Default Agent']);
+    console.log('[Database] Updated default agent model to kimi-k2-0711-chat');
+  }
 }
 
 function runMigrations(): void {

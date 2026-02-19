@@ -150,6 +150,10 @@ class LarkChannelPlugin implements ChannelPlugin {
     }
   }
 
+  setMessageHandler(handler: (message: ChannelMessage) => Promise<void>): void {
+    messageHandler = handler;
+  }
+
   registerRoutes(router: Router): void {
     // Webhook endpoint for Lark events
     router.post('/webhook', async (req: Request, res: Response) => {

@@ -5,6 +5,12 @@
  * Hosts an AgentRunner instance and communicates with the
  * gateway via IPC (process.send / process.on('message')).
  */
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load .env in the child process (parent's dotenv doesn't carry over via fork)
+dotenv.config({ path: path.join(__dirname, '../../.env') });
+
 import { AgentRunner } from './AgentRunner';
 
 const sessionId = process.env.SESSION_ID!;

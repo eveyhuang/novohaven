@@ -10,7 +10,7 @@
  * 6. Session history (last N turns from session_messages)
  */
 import Database from 'better-sqlite3';
-import { ToolDefinition } from '../plugins/types';
+import { MessageAttachment, ToolDefinition } from '../plugins/types';
 import { AgentConfig } from '../types';
 
 export interface BuiltPrompt {
@@ -18,6 +18,7 @@ export interface BuiltPrompt {
   messages: Array<{
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
+    attachments?: MessageAttachment[];
     toolCallId?: string;
   }>;
 }

@@ -7,8 +7,9 @@ export type MessageHandler = (message: ChannelMessage) => Promise<void>;
 export function createChannelRouter(onMessage: MessageHandler): Router {
   const router = Router();
 
-  // Register routes for each channel plugin
+  // Register routes for each channel plugin and wire the message handler
   for (const [name, channel] of pluginRegistry.getAllChannels()) {
+    channel.setMessageHandler(onMessage);
     const channelRouter = Router();
     channel.registerRoutes(channelRouter);
     router.use(`/${name}`, channelRouter);

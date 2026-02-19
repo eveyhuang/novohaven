@@ -36,8 +36,8 @@ class GoogleProvider implements ProviderPlugin {
         contextWindow: 1000000,
       },
       {
-        id: 'gemini-3-pro-preview',
-        name: 'Gemini 3 Pro',
+        id: 'gemini-2.5-flash-lite',
+        name: 'Gemini 2.5 Flash Lite',
         provider: 'google',
         supportsStreaming: true,
         supportsTools: true,
@@ -54,14 +54,6 @@ class GoogleProvider implements ProviderPlugin {
       {
         id: 'gemini-3-pro-image-preview',
         name: 'Gemini 3 Pro Image',
-        provider: 'google',
-        supportsStreaming: true,
-        supportsTools: false,
-        contextWindow: 1000000,
-      },
-      {
-        id: 'gemini-2.5-flash-image',
-        name: 'Gemini 2.5 Flash Image',
         provider: 'google',
         supportsStreaming: true,
         supportsTools: false,
@@ -115,7 +107,18 @@ class GoogleProvider implements ProviderPlugin {
       }
 
       const chat = model.startChat({ history });
-      const result = await chat.sendMessageStream(lastMessage.content);
+
+      // Build message parts (text + optional images)
+      const messageParts: any[] = [{ text: lastMessage.content }];
+      if (lastMessage.attachments?.length) {
+        for (const a of lastMessage.attachments) {
+          messageParts.push({
+            inlineData: { mimeType: a.mimeType, data: a.data },
+          });
+        }
+      }
+
+      const result = await chat.sendMessageStream(messageParts);
 
       for await (const chunk of result.stream) {
         const text = chunk.text();

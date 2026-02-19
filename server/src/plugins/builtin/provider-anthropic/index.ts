@@ -60,13 +60,26 @@ class AnthropicProvider implements ProviderPlugin {
       return;
     }
 
-    // Build Anthropic messages
+    // Build Anthropic messages (with optional image support)
     const messages: Anthropic.MessageParam[] = request.messages
       .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }));
+      .map(m => {
+        if (m.role === 'user' && m.attachments?.length) {
+          const content: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = [
+            { type: 'text', text: m.content },
+            ...m.attachments.map(a => ({
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: a.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+                data: a.data,
+              },
+            })),
+          ];
+          return { role: 'user' as const, content };
+        }
+        return { role: m.role as 'user' | 'assistant', content: m.content };
+      });
 
     // Build tools if provided
     const tools: Anthropic.Tool[] | undefined = request.tools?.map(t => ({

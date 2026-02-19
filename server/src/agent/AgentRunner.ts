@@ -12,7 +12,7 @@
  */
 import Database from 'better-sqlite3';
 import path from 'path';
-import { ChannelMessage, CompletionRequest, ProviderPlugin, ToolPlugin } from '../plugins/types';
+import { ChannelMessage, CompletionRequest, MessageAttachment, ProviderPlugin, ToolPlugin } from '../plugins/types';
 import { Session, AgentConfig } from '../types';
 import { PromptBuilder } from './PromptBuilder';
 import { ToolExecutor } from './ToolExecutor';
@@ -32,6 +32,7 @@ export class AgentRunner {
   private toolExecutor: ToolExecutor | null = null;
   private pendingApprovals = new Map<string, PendingApproval>();
   private maxToolRounds = 10;
+  private ready: Promise<void>;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -42,15 +43,21 @@ export class AgentRunner {
     this.db.pragma('foreign_keys = ON');
 
     this.promptBuilder = new PromptBuilder(this.db);
-    this.initializeProvider();
-    this.initializeToolPlugins();
+    this.ready = this.initializeAll();
+  }
+
+  private async initializeAll(): Promise<void> {
+    await Promise.all([
+      this.initializeProvider(),
+      this.initializeToolPlugins(),
+    ]);
   }
 
   /**
    * Initialize the provider plugin in the child process.
    * Loads provider based on the session's agent config.
    */
-  private initializeProvider(): void {
+  private async initializeProvider(): Promise<void> {
     // Get agent config for this session
     const session = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(this.sessionId) as Session | undefined;
     const configId = session?.agent_config_id || 1;
@@ -79,13 +86,9 @@ export class AgentRunner {
       ).get(providerName) as any;
       const config = dbConfig ? JSON.parse(dbConfig.config) : {};
 
-      // Initialize synchronously-ish (we'll await in handleTurn if needed)
-      provider.initialize(config).then(() => {
-        this.provider = provider;
-        console.log(`[AgentRunner] Provider ${providerName} initialized for session ${this.sessionId}`);
-      }).catch((err: any) => {
-        console.error(`[AgentRunner] Failed to initialize provider ${providerName}:`, err);
-      });
+      await provider.initialize(config);
+      this.provider = provider;
+      console.log(`[AgentRunner] Provider ${providerName} initialized for session ${this.sessionId}`);
     } catch (err: any) {
       console.error(`[AgentRunner] Failed to load provider ${providerName}:`, err.message);
     }
@@ -94,7 +97,7 @@ export class AgentRunner {
   /**
    * Initialize tool plugins in the child process.
    */
-  private initializeToolPlugins(): void {
+  private async initializeToolPlugins(): Promise<void> {
     // Load tool-skill-manager plugin
     try {
       const pluginDir = path.join(__dirname, '../plugins/builtin/tool-skill-manager');
@@ -102,13 +105,10 @@ export class AgentRunner {
       const PluginClass = require(path.join(pluginDir, 'index.ts')).default
         || require(path.join(pluginDir, 'index.ts'));
       const plugin = new PluginClass(manifest);
-      plugin.initialize({}).then(() => {
-        this.tools.set('tool-skill-manager', plugin);
-        this.rebuildToolExecutor();
-        console.log(`[AgentRunner] Tool plugin tool-skill-manager loaded`);
-      }).catch((err: any) => {
-        console.error(`[AgentRunner] Failed to init tool-skill-manager:`, err);
-      });
+      await plugin.initialize({});
+      this.tools.set('tool-skill-manager', plugin);
+      this.rebuildToolExecutor();
+      console.log(`[AgentRunner] Tool plugin tool-skill-manager loaded`);
     } catch (err: any) {
       console.error(`[AgentRunner] Failed to load tool-skill-manager:`, err.message);
     }
@@ -129,6 +129,7 @@ export class AgentRunner {
     if (model.startsWith('claude') || model.startsWith('anthropic')) return 'provider-anthropic';
     if (model.startsWith('gpt') || model.startsWith('o1') || model.startsWith('o3')) return 'provider-openai';
     if (model.startsWith('gemini')) return 'provider-google';
+    if (model.startsWith('kimi') || model.startsWith('moonshot')) return 'provider-kimi';
     return 'provider-anthropic'; // default
   }
 
@@ -136,6 +137,9 @@ export class AgentRunner {
    * Handle an inbound user message — the main agentic loop.
    */
   async handleTurn(message: ChannelMessage): Promise<void> {
+    // Wait for provider and tools to finish initializing
+    await this.ready;
+
     // Step 1: Load session state
     const session = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(this.sessionId) as Session;
     const agentConfig = this.db.prepare(
@@ -143,10 +147,14 @@ export class AgentRunner {
     ).get(session.agent_config_id || 1) as AgentConfig;
 
     // Step 2: Persist user message
+    const inboundAttachments = message.content.attachments;
     this.db.prepare(`
       INSERT INTO session_messages (session_id, role, content, metadata)
       VALUES (?, 'user', ?, ?)
-    `).run(this.sessionId, message.content.text, JSON.stringify(message.metadata || {}));
+    `).run(this.sessionId, message.content.text, JSON.stringify({
+      ...message.metadata,
+      ...(inboundAttachments?.length ? { attachmentCount: inboundAttachments.length } : {}),
+    }));
 
     // Update session last_active_at
     this.db.prepare('UPDATE sessions SET last_active_at = CURRENT_TIMESTAMP WHERE id = ?')
@@ -160,6 +168,25 @@ export class AgentRunner {
       tools: toolDefs,
     });
     const { systemPrompt, messages } = built;
+
+    // Attach images to the last user message so the LLM can see them
+    if (inboundAttachments?.length && messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === 'user') {
+        lastMsg.attachments = inboundAttachments
+          .filter(a => a.type === 'image')
+          .map(a => {
+            // Extract base64 from data URL (e.g., "data:image/png;base64,...")
+            const dataUrl = a.url || '';
+            const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+            return {
+              type: 'image' as const,
+              mimeType: match ? match[1] : (a.mimeType || 'image/png'),
+              data: match ? match[2] : dataUrl,
+            };
+          });
+      }
+    }
 
     // Step 4: Stream LLM response with tool call loop
     if (!this.provider) {
@@ -185,6 +212,7 @@ export class AgentRunner {
 
       let fullText = '';
       let toolCalls: Array<{ id: string; name: string; args: Record<string, any> }> = [];
+      const messageId = `msg-${Date.now()}-${round}`;
 
       // Stream the response
       for await (const event of this.provider.stream(request)) {
@@ -195,6 +223,7 @@ export class AgentRunner {
             process.send!({
               type: 'stream_chunk',
               sessionId: this.sessionId,
+              messageId,
               content: event.text,
             });
             break;
@@ -216,10 +245,14 @@ export class AgentRunner {
         }
       }
 
-      // If no tool calls, we're done — send final response
+      // If no tool calls, we're done — signal stream complete (no need to re-send full text)
       if (toolCalls.length === 0) {
         if (fullText) {
-          this.sendResponse(fullText);
+          process.send!({
+            type: 'stream_done',
+            sessionId: this.sessionId,
+            messageId,
+          });
           this.persistAssistantMessage(fullText);
         }
         return;

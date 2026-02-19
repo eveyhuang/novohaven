@@ -37,14 +37,22 @@ class WebChannelPlugin implements ChannelPlugin {
   }
 
   parseInbound(req: Request): ChannelMessage | null {
-    const { text, sessionId } = req.body;
-    if (!text) return null;
+    const { text, sessionId, attachments } = req.body;
+    if (!text && (!attachments || attachments.length === 0)) return null;
 
     return {
       channelType: 'web',
       channelId: sessionId || 'web-default',
       userId: (req as any).userId?.toString() || '1',
-      content: { text },
+      content: {
+        text,
+        attachments: attachments?.map((a: any) => ({
+          type: a.type || 'image',
+          url: a.data, // base64 data URL
+          name: a.name,
+          mimeType: a.mimeType,
+        })),
+      },
       metadata: { sessionId },
       timestamp: new Date(),
     };
@@ -57,8 +65,15 @@ class WebChannelPlugin implements ChannelPlugin {
       return;
     }
 
+    // Determine event type: chunk, done, or complete message
+    const isChunk = (response as any).isChunk === true;
+    const isDone = (response as any).isDone === true;
+    const messageId = (response as any).messageId;
+
     const event = JSON.stringify({
-      type: response.text ? 'message' : 'attachment',
+      type: isDone ? 'done' : isChunk ? 'chunk' : 'message',
+      messageId,
+      content: response.text,
       text: response.text,
       attachments: response.attachments?.map(a => ({
         type: a.type,
@@ -77,6 +92,10 @@ class WebChannelPlugin implements ChannelPlugin {
         // Connection closed, will be cleaned up
       }
     }
+  }
+
+  setMessageHandler(handler: (message: ChannelMessage) => Promise<void>): void {
+    messageHandler = handler;
   }
 
   registerRoutes(router: Router): void {
