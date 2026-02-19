@@ -20,6 +20,7 @@ export interface BuiltPrompt {
     content: string;
     attachments?: MessageAttachment[];
     toolCallId?: string;
+    toolCalls?: Array<{ id: string; name: string; args: Record<string, any> }>;
   }>;
 }
 

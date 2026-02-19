@@ -1,15 +1,29 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
-/node_modules
-/.pnp
+node_modules/
+client/node_modules/
+server/node_modules/
+.pnp
 .pnp.js
 
 # testing
-/coverage
+coverage/
 
-# production
+# build outputs
 /build
+client/build/
+server/dist/
+
+# database files
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+
+# e2e test artifacts & results
+e2e/artifacts/
+e2e/fixtures/
+e2e/story-results.json
 
 # misc
 .DS_Store
@@ -30,5 +44,3 @@ yarn-error.log*
 .rts2_cache_es/
 .rts2_cache_umd/
 .cache
-client/node_modules/ 
-server/node_modules/ 

@@ -60,13 +60,38 @@ class AnthropicProvider implements ProviderPlugin {
       return;
     }
 
-    // Build Anthropic messages (with optional image support)
-    const messages: Anthropic.MessageParam[] = request.messages
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map(m => {
-        if (m.role === 'user' && m.attachments?.length) {
+    // Build Anthropic messages.
+    // Anthropic does not support a "tool" role directly; tool results must be sent
+    // as user content blocks of type "tool_result".
+    const messages: Anthropic.MessageParam[] = [];
+    let pendingToolResults: any[] = [];
+
+    const flushToolResults = () => {
+      if (pendingToolResults.length === 0) return;
+      messages.push({
+        role: 'user',
+        content: pendingToolResults,
+      } as Anthropic.MessageParam);
+      pendingToolResults = [];
+    };
+
+    for (const m of request.messages) {
+      if (m.role === 'tool') {
+        pendingToolResults.push({
+          type: 'tool_result',
+          tool_use_id: m.toolCallId || `tool-${Date.now()}`,
+          content: m.content || '',
+          is_error: /^tool error:/i.test(m.content || ''),
+        });
+        continue;
+      }
+
+      flushToolResults();
+
+      if (m.role === 'user') {
+        if (m.attachments?.length) {
           const content: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = [
-            { type: 'text', text: m.content },
+            { type: 'text', text: m.content || 'Analyze this image.' },
             ...m.attachments.map(a => ({
               type: 'image' as const,
               source: {
@@ -76,10 +101,32 @@ class AnthropicProvider implements ProviderPlugin {
               },
             })),
           ];
-          return { role: 'user' as const, content };
+          messages.push({ role: 'user', content });
+        } else {
+          messages.push({ role: 'user', content: m.content });
         }
-        return { role: m.role as 'user' | 'assistant', content: m.content };
-      });
+      } else if (m.role === 'assistant') {
+        if (m.toolCalls?.length) {
+          const contentBlocks: any[] = [];
+          if (m.content) {
+            contentBlocks.push({ type: 'text', text: m.content });
+          }
+          for (const tc of m.toolCalls) {
+            contentBlocks.push({
+              type: 'tool_use',
+              id: tc.id,
+              name: tc.name,
+              input: tc.args || {},
+            });
+          }
+          messages.push({ role: 'assistant', content: contentBlocks } as Anthropic.MessageParam);
+        } else {
+          messages.push({ role: 'assistant', content: m.content });
+        }
+      }
+    }
+
+    flushToolResults();
 
     // Build tools if provided
     const tools: Anthropic.Tool[] | undefined = request.tools?.map(t => ({

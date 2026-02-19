@@ -56,7 +56,11 @@
       "WebFetch(domain:docs.litellm.ai)",
       "WebFetch(domain:www.codecademy.com)",
       "Bash(./node_modules/.bin/tsc:*)",
-      "WebFetch(domain:ai.google.dev)"
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app ls-files --others --exclude-standard)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app ls-files:*)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app rm -r --cached:*)",
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app status --short)"
     ]
   },
   "enableAllProjectMcpServers": true,

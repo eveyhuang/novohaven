@@ -247,17 +247,15 @@ User verifies relevant existing-skill/workflow recommendation in `/chat`. Precon
 User verifies required-input collection and execution after skill suggestion in `/chat`. Preconditions: `Product Review Analyzer` has required inputs `review_data` (type: file) and optional `analysis_focus` (type: text). User sends `Run Product Review Analyzer`. Agent should ask only for the required input `review_data` and indicate that `analysis_focus` is optional (can be skipped). User replies with `review_data.csv` attachment only (no analysis_focus provided). Agent should proceed to execute the skill via `skill_execute` without re-asking for the optional input. User should see execution confirmation in chat and a new execution created in `/executions`.
 
 <!-- TEST_RESULT_START:HP-26 -->
-**Automated Test Result (2026-02-19):** FAIL
-**Observed:** No new execution detected after required file upload. before=2, after=2, latestReply=Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"This model does not support assistant message prefill. The conversation must end with a user message."},"request_id":"req_011CYHmmGLERc9RYnNtFStJT"}10:50 AM
-**Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-26.png`
+**Automated Test Result (2026-02-19):** PASS
+**Observed:** Assistant requested required input and execution count increased from 9 to 10.
 <!-- TEST_RESULT_END:HP-26 -->
 ### HP-26b — Agent passes image attachments to skill execution
 Preconditions: a skill named `Image Style Analyzer` exists with required input `reference_image` (type: image). In `/chat`, user uploads a product image and sends `Analyze the style of this image`. Agent should use `skill_search` to find `Image Style Analyzer`, recognize that the uploaded image maps to the `reference_image` input, and call `skill_execute` with `imageInputs: {"reference_image": 0}` (mapping the variable to the first attachment). Agent should NOT ask the user to re-upload the image.
 
 <!-- TEST_RESULT_START:HP-26b -->
-**Automated Test Result (2026-02-19):** FAIL
-**Observed:** Agent did not indicate image-skill execution behavior. Last response: Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Could not process image"},"request_id":"req_011CYHmmjkVLUov7VuYxARsP"}10:50 AM
-**Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-26b.png`
+**Automated Test Result (2026-02-19):** PASS
+**Observed:** Agent processed image attachment path without re-upload prompt and acknowledged running the Image Style Analyzer skill.
 <!-- TEST_RESULT_END:HP-26b -->
 ### HP-27 — Agent self-heals a broken skill
 User verifies agent self-heals a broken skill and submits draft for review. Preconditions: create a broken skill named `Broken Sentiment Skill` with unresolved variable like `{{missing_column}}` in prompt. In `/chat`, user asks `Run Broken Sentiment Skill and fix it if it fails.` Agent should first use `skill_validate` or `skill_test` to diagnose the issue, then use `skill_edit` to propose a fix (creating a draft with a clear `changeSummary`). Agent response should mention the draft was created. In `/drafts`, user should see a new pending draft for that skill with change summary explaining the fix.

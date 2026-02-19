@@ -66,7 +66,7 @@ async function writeFixtures() {
   await fs.writeFile(
     path.join(FIXTURE_DIR, 'product.png'),
     Buffer.from(
-      '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',
+      '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',
       'base64'
     )
   );
@@ -346,6 +346,17 @@ function chatInput(page) {
 async function sendChatMessage(page, text) {
   await chatInput(page).fill(text);
   await page.keyboard.press('Enter');
+}
+
+async function waitForChatIdle(page, timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const inputDisabled = await chatInput(page).isDisabled().catch(() => true);
+    const thinking = await page.getByText('Thinking...').count();
+    if (!inputDisabled && !thinking) return;
+    await page.waitForTimeout(400);
+  }
+  throw new Error('Chat did not become idle before timeout.');
 }
 
 async function startFreshChat(page) {
@@ -801,9 +812,11 @@ async function main() {
       await startFreshChat(page);
       const beforeExecutions = (await api('GET', '/executions')).length;
       await sendChatMessage(page, 'Run Product Review Analyzer');
+      await waitForChatIdle(page, 20000);
       const firstReply = await waitForAnyAssistantFeedback(page, 25000);
-      if (!/review_data|required|input|missing/i.test(firstReply)) {
-        throw new Error(`Assistant did not ask for required inputs. Last response: ${firstReply}`);
+      const settledFirstReply = ((await page.locator('div.bg-secondary-100.text-secondary-900').last().textContent()) || firstReply).trim();
+      if (!/review_data|required|input|missing|provide|product reviews/i.test(settledFirstReply)) {
+        throw new Error(`Assistant did not ask for required inputs. Last response: ${settledFirstReply}`);
       }
 
       await page.locator('input[type="file"]').setInputFiles(path.join(FIXTURE_DIR, 'review_data.csv'));

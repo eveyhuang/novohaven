@@ -214,22 +214,25 @@ class SkillManagerPlugin implements ToolPlugin {
 
   private async executeSkill(args: Record<string, any>, context: ToolContext): Promise<ToolResult> {
     const { skillId, skillType, inputs = {}, imageInputs = {} } = args;
+    const parentType: 'skill' | 'workflow' = skillType === 'workflow' ? 'workflow' : 'skill';
 
     // Verify the skill exists
-    const table = skillType === 'skill' ? 'skills' : 'workflows';
+    const table = parentType === 'skill' ? 'skills' : 'workflows';
     const skill = this.db!.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(skillId) as any;
     if (!skill) {
-      return { success: false, output: `${skillType} #${skillId} not found` };
+      return { success: false, output: `${parentType} #${skillId} not found` };
     }
 
     // Get steps
     const steps = this.db!.prepare(
       'SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = ? ORDER BY step_order'
-    ).all(skillId, skillType) as any[];
+    ).all(skillId, parentType) as any[];
 
     if (steps.length === 0) {
-      return { success: false, output: `${skillType} #${skillId} has no steps` };
+      return { success: false, output: `${parentType} #${skillId} has no steps` };
     }
+
+    const inputSpecs = this.collectInputSpecs(steps);
 
     // Resolve image inputs from conversation attachments
     const resolvedInputs = { ...inputs };
@@ -243,20 +246,64 @@ class SkillManagerPlugin implements ToolPlugin {
       }
     }
 
+    // If there's a single image variable and at least one uploaded image,
+    // auto-map it when the model omits/uses the wrong image input key.
+    const imageVars = Array.from(inputSpecs.entries())
+      .filter(([, spec]) => spec.type === 'image')
+      .map(([name]) => name);
+    if (imageVars.length === 1 && attachments.length > 0 && !resolvedInputs[imageVars[0]]) {
+      resolvedInputs[imageVars[0]] = '[image:attachment_0]';
+    }
+
+    const missingRequired = Array.from(inputSpecs.entries())
+      .filter(([, spec]) => !spec.optional)
+      .map(([name, spec]) => ({ name, spec }))
+      .filter(({ name, spec }) => {
+        if (spec.type === 'file') {
+          // File variables are often satisfied by an uploaded attachment that the model
+          // references implicitly; don't block execution solely on missing structured text.
+          return false;
+        }
+        const v = resolvedInputs[name];
+        if (v == null) return true;
+        if (typeof v === 'string') {
+          if (spec.type === 'image') return v.includes('[image:missing_attachment_');
+          return v.trim().length === 0;
+        }
+        return false;
+      });
+
+    if (missingRequired.length > 0) {
+      const requiredList = missingRequired
+        .map(({ name, spec }) => `{{${name}}} (${spec.type}${spec.label ? `: ${spec.label}` : ''})`)
+        .join(', ');
+      const optionalList = Array.from(inputSpecs.entries())
+        .filter(([, spec]) => spec.optional)
+        .map(([name, spec]) => `{{${name}}} (${spec.type})`)
+        .join(', ');
+      return {
+        success: false,
+        output: `Missing required inputs for ${parentType} "${skill.name}": ${requiredList}.${optionalList ? ` Optional inputs: ${optionalList}.` : ''}`,
+      };
+    }
+
+    const { recipeId, recipeStepIdByOrder } = this.ensureExecutionRecipe(skill, parentType, steps);
+
     // Create an execution record
     const result = this.db!.prepare(`
       INSERT INTO workflow_executions (recipe_id, user_id, input_data, status, started_at)
       VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
-    `).run(skillId, context.userId, JSON.stringify(resolvedInputs));
+    `).run(recipeId, context.userId, JSON.stringify(resolvedInputs));
 
     const executionId = Number(result.lastInsertRowid);
 
     // Create step execution records
     for (const step of steps) {
+      const recipeStepId = recipeStepIdByOrder.get(step.step_order) ?? null;
       this.db!.prepare(`
         INSERT INTO step_executions (execution_id, step_id, step_order, status)
         VALUES (?, ?, ?, 'pending')
-      `).run(executionId, step.id, step.step_order);
+      `).run(executionId, recipeStepId, step.step_order);
     }
 
     const imageCount = Object.keys(imageInputs).length;
@@ -266,7 +313,7 @@ class SkillManagerPlugin implements ToolPlugin {
 
     return {
       success: true,
-      output: `Created execution #${executionId} for ${skillType} "${skill.name}" with ${steps.length} steps${imageCount > 0 ? ` and ${imageCount} image(s)` : ''}.${inputSummary}\nThe workflow engine will process it.`,
+      output: `Created execution #${executionId} for ${parentType} "${skill.name}" with ${steps.length} steps${imageCount > 0 ? ` and ${imageCount} image(s)` : ''}.${inputSummary}\nThe workflow engine will process it.`,
       metadata: { executionId },
     };
   }
@@ -445,14 +492,125 @@ class SkillManagerPlugin implements ToolPlugin {
       issues.push(`Step ordering is non-sequential: [${orders.join(', ')}]`);
     }
 
+    const inputSpecs = this.collectInputSpecs(steps);
+    const requiredInputs = Array.from(inputSpecs.entries())
+      .filter(([, spec]) => !spec.optional)
+      .map(([name, spec]) => `{{${name}}} (${spec.type})`);
+    const optionalInputs = Array.from(inputSpecs.entries())
+      .filter(([, spec]) => spec.optional)
+      .map(([name, spec]) => `{{${name}}} (${spec.type})`);
+
     if (issues.length === 0) {
-      return { success: true, output: `${skillType} "${skill.name}" is valid. ${steps.length} steps, all checks passed.` };
+      const suffix = requiredInputs.length > 0
+        ? ` Required inputs: ${requiredInputs.join(', ')}.${optionalInputs.length > 0 ? ` Optional: ${optionalInputs.join(', ')}.` : ''}`
+        : '';
+      return { success: true, output: `${skillType} "${skill.name}" is valid. ${steps.length} steps, all checks passed.${suffix}` };
     }
 
     return {
       success: true,
       output: `Validation for ${skillType} "${skill.name}" found ${issues.length} issue(s):\n${issues.map(i => `- ${i}`).join('\n')}`,
     };
+  }
+
+  private collectInputSpecs(steps: any[]): Map<string, { type: string; optional: boolean; label?: string }> {
+    const specs = new Map<string, { type: string; optional: boolean; label?: string }>();
+    for (const step of steps) {
+      try {
+        const config = JSON.parse(step.input_config || '{}');
+        if (config.variables) {
+          for (const [varName, varDef] of Object.entries(config.variables) as any[]) {
+            specs.set(varName, {
+              type: varDef?.type || 'text',
+              optional: !!varDef?.optional,
+              label: varDef?.label,
+            });
+          }
+        }
+      } catch {}
+
+      if (step.prompt_template) {
+        const vars = step.prompt_template.match(/\{\{([^}]+)\}\}/g) || [];
+        for (const v of vars) {
+          const name = v.replace(/\{\{|\}\}/g, '').trim();
+          if (!name || name.startsWith('step_')) continue;
+          if (!specs.has(name)) {
+            specs.set(name, { type: 'text', optional: false });
+          }
+        }
+      }
+    }
+    return specs;
+  }
+
+  private ensureExecutionRecipe(
+    skill: any,
+    skillType: 'skill' | 'workflow',
+    steps: any[]
+  ): { recipeId: number; recipeStepIdByOrder: Map<number, number> } {
+    const existingRecipe = this.db!.prepare('SELECT id FROM recipes WHERE id = ?').get(skill.id) as any;
+    let recipeId: number;
+
+    if (existingRecipe) {
+      recipeId = skill.id;
+      this.db!.prepare(
+        'UPDATE recipes SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+      ).run(skill.name, skill.description || null, recipeId);
+    } else {
+      const created = this.db!.prepare(
+        'INSERT INTO recipes (name, description, created_by, is_template) VALUES (?, ?, ?, ?)'
+      ).run(skill.name, skill.description || null, skill.created_by || null, skillType === 'skill' ? 1 : 0);
+      recipeId = Number(created.lastInsertRowid);
+    }
+
+    const recipeStepIdByOrder = new Map<number, number>();
+    const existingSteps = this.db!.prepare(
+      'SELECT id, step_order FROM recipe_steps WHERE recipe_id = ?'
+    ).all(recipeId) as Array<{ id: number; step_order: number }>;
+    const existingByOrder = new Map(existingSteps.map((s) => [s.step_order, s.id]));
+
+    for (const step of steps) {
+      const existingId = existingByOrder.get(step.step_order);
+      if (existingId) {
+        this.db!.prepare(`
+          UPDATE recipe_steps
+          SET step_name = ?, step_type = ?, ai_model = ?, prompt_template = ?, input_config = ?, output_format = ?, model_config = ?, executor_config = ?
+          WHERE id = ?
+        `).run(
+          step.step_name || `Step ${step.step_order}`,
+          step.step_type || 'ai',
+          step.ai_model || null,
+          step.prompt_template || '',
+          step.input_config || '{}',
+          step.output_format || 'text',
+          step.model_config || '{}',
+          step.executor_config || '{}',
+          existingId
+        );
+        recipeStepIdByOrder.set(step.step_order, existingId);
+      } else {
+        const inserted = this.db!.prepare(`
+          INSERT INTO recipe_steps (
+            recipe_id, step_order, step_name, step_type, ai_model, prompt_template, input_config, output_format, model_config, api_config, executor_config
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          recipeId,
+          step.step_order,
+          step.step_name || `Step ${step.step_order}`,
+          step.step_type || 'ai',
+          step.ai_model || null,
+          step.prompt_template || '',
+          step.input_config || '{}',
+          step.output_format || 'text',
+          step.model_config || '{}',
+          null,
+          step.executor_config || '{}'
+        );
+        recipeStepIdByOrder.set(step.step_order, Number(inserted.lastInsertRowid));
+      }
+    }
+
+    return { recipeId, recipeStepIdByOrder };
   }
 }
 

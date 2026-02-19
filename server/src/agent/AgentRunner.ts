@@ -185,6 +185,16 @@ export class AgentRunner {
               data: match ? match[2] : dataUrl,
             };
           });
+
+        const nonImageAttachments = inboundAttachments
+          .filter(a => a.type !== 'image')
+          .map(a => a.name || 'attachment');
+        if (nonImageAttachments.length > 0) {
+          const attachmentHint = `[Attached files: ${nonImageAttachments.join(', ')}]`;
+          lastMsg.content = lastMsg.content
+            ? `${lastMsg.content}\n\n${attachmentHint}`
+            : attachmentHint;
+        }
       }
     }
 
@@ -283,6 +293,7 @@ export class AgentRunner {
       currentMessages.push({
         role: 'assistant' as const,
         content: fullText || 'Calling tools...',
+        toolCalls,
       });
 
       // Execute tool calls via ToolExecutor
