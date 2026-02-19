@@ -31,8 +31,13 @@ export class ToolExecutor {
       defs.push(...plugin.getTools());
     }
 
-    // Add built-in agent tools
-    defs.push(...this.getBuiltInToolDefinitions());
+    // Add built-in agent tools, skipping any already provided by plugins
+    const existingNames = new Set(defs.map(d => d.name));
+    for (const builtin of this.getBuiltInToolDefinitions()) {
+      if (!existingNames.has(builtin.name)) {
+        defs.push(builtin);
+      }
+    }
 
     return defs;
   }
@@ -149,7 +154,7 @@ export class ToolExecutor {
       },
       {
         name: 'skill_edit',
-        description: 'Propose edits to an existing skill. Creates a draft requiring human approval.',
+        description: 'Propose edits to an existing skill. Creates a draft that appears on the Skill Draft Review page for human approval. Use this to fix or improve broken skills.',
         parameters: {
           type: 'object',
           properties: {
@@ -212,18 +217,9 @@ export class ToolExecutor {
           required: ['skillId'],
         },
       },
-      {
-        name: 'approval_request',
-        description: 'Request human approval for an action. The agent will pause until the human responds.',
-        parameters: {
-          type: 'object',
-          properties: {
-            description: { type: 'string', description: 'What the agent wants to do' },
-            data: { type: 'object', description: 'Additional context data' },
-          },
-          required: ['description'],
-        },
-      },
+      // approval_request removed — IPC handler not wired up yet.
+      // Agent should use skill_edit/skill_create which create drafts
+      // that go through the Skill Draft Review page.
     ];
   }
 }

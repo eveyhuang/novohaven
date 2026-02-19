@@ -73,7 +73,7 @@ class SkillManagerPlugin implements ToolPlugin {
       },
       {
         name: 'skill_edit',
-        description: 'Propose edits to a skill (creates a draft for human approval)',
+        description: 'Propose edits to a skill. Creates a draft on the Skill Draft Review page for human approval. Use this to fix or improve broken skills.',
         parameters: {
           type: 'object',
           properties: {
@@ -200,8 +200,8 @@ class SkillManagerPlugin implements ToolPlugin {
 
     // Create an execution record
     const result = this.db!.prepare(`
-      INSERT INTO executions (recipe_id, user_id, input_data, status)
-      VALUES (?, ?, ?, 'running')
+      INSERT INTO workflow_executions (recipe_id, user_id, input_data, status, started_at)
+      VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
     `).run(skillId, context.userId, JSON.stringify(inputs));
 
     const executionId = Number(result.lastInsertRowid);
@@ -209,9 +209,9 @@ class SkillManagerPlugin implements ToolPlugin {
     // Create step execution records
     for (const step of steps) {
       this.db!.prepare(`
-        INSERT INTO step_executions (execution_id, step_id, step_order, step_name, step_type, status)
-        VALUES (?, ?, ?, ?, ?, 'pending')
-      `).run(executionId, step.id, step.step_order, step.step_name, step.step_type);
+        INSERT INTO step_executions (execution_id, step_id, step_order, status)
+        VALUES (?, ?, ?, 'pending')
+      `).run(executionId, step.id, step.step_order);
     }
 
     return {

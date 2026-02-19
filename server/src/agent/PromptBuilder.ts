@@ -76,14 +76,17 @@ export class PromptBuilder {
     const systemPrompt = systemParts.join('\n\n');
 
     // Layer 6: Session history
+    // Only include user and final assistant messages (no intermediate tool call/result messages)
+    // Tool call loops are handled in-memory during the current turn by AgentRunner
     const history = this.db.prepare(
-      'SELECT * FROM session_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?'
+      `SELECT * FROM session_messages
+       WHERE session_id = ? AND role IN ('user', 'assistant') AND tool_calls IS NULL
+       ORDER BY created_at ASC LIMIT ?`
     ).all(sessionId, historyLimit) as any[];
 
     const messages = history.map((m: any) => ({
-      role: m.role as 'user' | 'assistant' | 'system' | 'tool',
+      role: m.role as 'user' | 'assistant',
       content: m.content,
-      ...(m.tool_calls ? { toolCallId: m.tool_calls } : {}),
     }));
 
     return { systemPrompt, messages };
