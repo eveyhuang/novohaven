@@ -230,6 +230,8 @@ export function SessionMonitor() {
           </Button>
         </div>
       </div>
+
+      {sessions.length === 0 ? (
         <Card>
           <CardBody>
             <p className="text-secondary-400 text-center py-8">No active sessions.</p>
