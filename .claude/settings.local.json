@@ -60,7 +60,9 @@
       "Bash(git -C /Users/eveyhuang/Documents/novohaven-app ls-files --others --exclude-standard)",
       "Bash(git -C /Users/eveyhuang/Documents/novohaven-app ls-files:*)",
       "Bash(git -C /Users/eveyhuang/Documents/novohaven-app rm -r --cached:*)",
-      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app status --short)"
+      "Bash(git -C /Users/eveyhuang/Documents/novohaven-app status --short)",
+      "Bash(/Users/eveyhuang/Documents/novohaven-app/server/src/__tests__/routes/sessions.closeAll.test.ts:*)",
+      "Bash(/Users/eveyhuang/Documents/novohaven-app/server/src/routes/sessions.ts:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

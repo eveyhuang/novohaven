@@ -126,6 +126,7 @@ export function SessionMonitor() {
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [closingIds, setClosingIds] = useState<Set<string>>(new Set());
+  const [closingAll, setClosingAll] = useState(false);
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -167,6 +168,22 @@ export function SessionMonitor() {
     }
   };
 
+  const handleCloseAll = async () => {
+    if (closingAll) return;
+    setClosingAll(true);
+    try {
+      await api.closeAllSessions();
+      setSessions((prev) =>
+        prev.map((s) => (s.status !== 'closed' ? { ...s, status: 'closed' } : s))
+      );
+      setExpandedId(null);
+    } catch (err: any) {
+      console.error('Failed to close all sessions:', err);
+    } finally {
+      setClosingAll(false);
+    }
+  };
+
   const toggleExpand = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
   };
@@ -198,12 +215,21 @@ export function SessionMonitor() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold text-secondary-800">Session Monitor</h2>
-        <Button variant="secondary" size="sm" onClick={fetchSessions}>
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="danger"
+            size="sm"
+            isLoading={closingAll}
+            disabled={closingAll || sessions.every((s) => s.status === 'closed')}
+            onClick={handleCloseAll}
+          >
+            Close All
+          </Button>
+          <Button variant="secondary" size="sm" onClick={fetchSessions}>
+            Refresh
+          </Button>
+        </div>
       </div>
-
-      {sessions.length === 0 ? (
         <Card>
           <CardBody>
             <p className="text-secondary-400 text-center py-8">No active sessions.</p>

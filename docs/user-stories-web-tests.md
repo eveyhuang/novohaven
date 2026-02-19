@@ -257,19 +257,21 @@ Preconditions: a skill named `Image Style Analyzer` exists with required input `
 **Automated Test Result (2026-02-19):** PASS
 **Observed:** Agent processed image attachment path without re-upload prompt and acknowledged running the Image Style Analyzer skill.
 <!-- TEST_RESULT_END:HP-26b -->
+
+
 ### HP-27 — Agent self-heals a broken skill
-User verifies agent self-heals a broken skill and submits draft for review. Preconditions: create a broken skill named `Broken Sentiment Skill` with unresolved variable like `{{missing_column}}` in prompt. In `/chat`, user asks `Run Broken Sentiment Skill and fix it if it fails.` Agent should first use `skill_validate` or `skill_test` to diagnose the issue, then use `skill_edit` to propose a fix (creating a draft with a clear `changeSummary`). Agent response should mention the draft was created. In `/drafts`, user should see a new pending draft for that skill with change summary explaining the fix.
+User verifies agent self-heals a broken skill and submits draft for review. Preconditions: create a broken skill named `Broken Sentiment Skill` with unresolved variable like `{{missing_column}}` in prompt. In `/chat`, user asks `Run Broken Sentiment Skill and fix it if it fails.` Agent should first try to run the `Broken Sentiment Skill`, after it fails, use `skill_validate` or `skill_test` to diagnose the issue, then use `skill_edit` to propose a fix (creating a draft with a clear `changeSummary`). Agent response should mention the draft was created. In `/drafts`, user should see a new pending draft for that skill with change summary explaining the fix.
 
 <!-- TEST_RESULT_START:HP-27 -->
 **Automated Test Result (2026-02-19):** FAIL
 **Observed:** No new draft detected after self-heal request. Drafts before=0, after=0. Last response: I10:50 AM
 **Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-27.png`
 <!-- TEST_RESULT_END:HP-27 -->
-ZPx6uKcsn"}10:14 AM
 **Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-27.png`
 <!-- TEST_RESULT_END:HP-27 -->
+
 ### HP-28 — Agent self-heals a broken workflow
-User verifies agent self-heals a broken workflow and submits draft for review. Preconditions: create workflow `Broken Pipeline` where step 1 references `{{step_2_output}}` (invalid forward reference). In `/chat`, user asks `Use Broken Pipeline and repair it.` Agent should use `skill_validate` to identify the sequencing error, then use `skill_edit` to submit a corrected workflow draft for review, explaining what changed. In `/drafts`, user should see a pending workflow draft. After approve, running the workflow from `/workflows/:id/run` should no longer fail for the original ordering issue.
+User verifies agent self-heals a broken workflow and submits draft for review. Preconditions: create workflow `Broken Pipeline` where step 1 references `{{step_2_output}}` (invalid forward reference). In `/chat`, user asks `Use Broken Pipeline and repair it if it fails.` Agent should use `skill_validate` to identify the sequencing error, then use `skill_edit` to submit a corrected workflow draft for review, explaining what changed. In `/drafts`, user should see a pending workflow draft. After approve, running the workflow from `/workflows/:id/run` should no longer fail for the original ordering issue.
 
 <!-- TEST_RESULT_START:HP-28 -->
 **Automated Test Result (2026-02-19):** FAIL
@@ -290,7 +292,8 @@ In `/chat`, user sends `Go to https://www.amazon.com and search for 'smart furni
 **Automated Test Result (2026-02-19):** PASS
 **Observed:** Agent returned URL-related content: "I appreciate your request, but I don't have the ability to browse the internet or visit websites. I can't access URLs like `https://www.exam"
 <!-- TEST_RESULT_END:HP-30 -->
-### HP-31 — Agent uses browser to extract structured data from a website
+
+### HP-31a — Agent uses browser to extract structured data from a website
 In `/chat`, user sends `Search for 'smart furniture' on Amazon and save the top 10 results in a CSV file with each result's name, price, main features, and review score.` Agent should:
 1. Use `browser:navigate` to go to Amazon and search for the term.
 2. Use `browser:interact` / `browser:extract` to scrape the search results.
@@ -298,11 +301,31 @@ In `/chat`, user sends `Search for 'smart furniture' on Amazon and save the top 
 4. Return the file path or content to the user so they can download the result.
 5. After completing the task, use `skill_create` to propose saving this as a new reusable skill (e.g., "Amazon Product Search Scraper") with parameterized inputs (`search_query`, `result_count`). This draft should appear in `/drafts` for human review.
 
-<!-- TEST_RESULT_START:HP-31 -->
+<!-- TEST_RESULT_START:HP-31a -->
 **Automated Test Result (2026-02-19):** FAIL
 **Observed:** No CSV/file output reference detected in response. Last response: I appreciate your request! Let me first search for any skills or workflows that10:51 AM
 **Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-31.png`
-<!-- TEST_RESULT_END:HP-31 -->
+<!-- TEST_RESULT_END:HP-31a -->
+
+### HP-31b — Agent uses existing 'Wayfair Review Extractor' skill to extract reviews from a Wayfair product URL
+In `/chat`, user sends a message like `Go to https://www.wayfair.com/furniture/pdp/orren-ellis-bachman-extendable-45-to-105-solid-wood-dining-table-with-hiden-storage-space-w111552936.html?piid=1040019282 on Wayfair and save all the reviews in a CSV file.` with a Wayfair product URL. Agent should:
+1. Use `skill_search` to find a matching skill and identify the existing **Wayfair Review Extractor** skill.
+2. Inform the user it found a matching skill and will use it.
+3. Execute the skill with the provided URL as input.
+4. **Happy path — skill succeeds:** Return the resulting CSV file (path or inline content) to the user in chat.
+5. **Self-healing path — skill fails or returns no data:**
+   - Diagnose the failure (e.g., broken selectors, page structure change, authentication wall).
+   - Apply a fix and retry execution, repeating this loop until the skill succeeds and returns data.
+   - Once successful, use `skill_edit` to save the working revised version of **Wayfair Review Extractor** and surface it in `/drafts` for human review.
+   - Return the CSV result to the user.
+
+<!-- TEST_RESULT_START:HP-31b -->
+**Automated Test Result (2026-02-19):** FAIL
+**Observed:** Agent found the skill and started execution (`execution #49`) but did not return any CSV path or inline CSV content in chat. Latest response only promised future completion: "The system is working on this now and will provide the CSV file when the extraction is complete."
+**Diagnosis:** `skill_execute` currently creates execution + pending step rows but does not dispatch execution to the workflow engine, so execution remains `status=running`, `current_step=0`, step `status=pending`, and no output is generated/returned.
+**Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-31b.png`
+<!-- TEST_RESULT_END:HP-31b -->
+
 ### HP-32 — Agent completes ad-hoc task using tools when no skill exists
 In `/chat`, user sends a task for which no existing skill or workflow matches, e.g., `Count the number of H1 and H2 headings on https://www.example.com and write the result to a file.` Agent should:
 1. Use `skill_search` first and find no matching skill.
@@ -321,6 +344,8 @@ ZocRGX"}10:34 AM
 ZocRGX"}10:34 AM
 **Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-32.png`
 <!-- TEST_RESULT_END:HP-32 -->
+
+
 ### HP-33 — Agent returns downloadable file from tool execution
 In `/chat`, user sends `Create a JSON file with 5 sample product entries (name, price, category) and give me the file.` Agent should use `file:write` to create the JSON file, then provide the file path or content in the chat response so the user can access or download it.
 
@@ -334,6 +359,8 @@ ZocRGX"}04:34 PM
 ZocRGX"}04:34 PM
 **Screenshot:** `/Users/eveyhuang/Documents/novohaven-app/e2e/artifacts/HP-33.png`
 <!-- TEST_RESULT_END:HP-33 -->
+
+
 ### HP-34 — Agent handles multi-step workflow with mixed tool usage
 In `/chat`, user sends `Find the top 3 trending articles on Hacker News, summarize each in one sentence, and save the summaries as a markdown file.` Agent should:
 1. Use `browser:navigate` to open Hacker News.

@@ -913,7 +913,7 @@ async function main() {
       return `Agent returned URL-related content: "${reply.slice(0, 140)}"`;
     });
 
-    await runStory(page, 'HP-31', 'Agent extracts structured site data and proposes skill draft', async () => {
+    await runStory(page, 'HP-31a', 'Agent extracts structured site data and proposes skill draft', async () => {
       const draftsBefore = await getDraftCount();
       await startFreshChat(page);
       await sendChatMessage(page, "Search for 'smart furniture' on Amazon and save the top 10 results in a CSV file with each result's name, price, main features, and review score.");
@@ -927,6 +927,42 @@ async function main() {
         throw new Error(`No new draft was created for proposed reusable skill. Drafts before=${draftsBefore}, after=${draftsAfter}. Last response: ${reply}`);
       }
       return `CSV output referenced and draft count increased from ${draftsBefore} to ${draftsAfter}.`;
+    });
+
+    await runStory(page, 'HP-31b', 'Agent uses existing Wayfair Review Extractor skill', async () => {
+      await startFreshChat(page);
+      await sendChatMessage(
+        page,
+        'Go to https://www.wayfair.com/furniture/pdp/orren-ellis-bachman-extendable-45-to-105-solid-wood-dining-table-with-hiden-storage-space-w111552936.html?piid=1040019282 on Wayfair and save all the reviews in a CSV file.'
+      );
+      await waitForChatIdle(page, 90000);
+
+      const start = Date.now();
+      let latestReply = '';
+      while (Date.now() - start < 90000) {
+        const candidate = ((await page.locator('div.bg-secondary-100.text-secondary-900').last().textContent()) || '').trim();
+        if (candidate) latestReply = candidate;
+        const hasCsvPath = /(?:\/tmp\/|\/Users\/|[A-Za-z]:\\)[^\s`"]+\.csv\b/i.test(latestReply)
+          || /(?:^|\s)[\w.-]+\.csv\b/i.test(latestReply);
+        const hasInlineCsv = /```csv[\s\S]*\n[^,\n]+,[^,\n]+,[^,\n]+[\s\S]*```/i.test(latestReply)
+          || /(?:^|\n)[^,\n]+,[^,\n]+,[^,\n]+(?:\n[^,\n]+,[^,\n]+,[^,\n]+){1,}/.test(latestReply);
+
+        if (hasCsvPath || hasInlineCsv) {
+          break;
+        }
+        await page.waitForTimeout(1500);
+      }
+
+      const finalHasCsvPath = /(?:\/tmp\/|\/Users\/|[A-Za-z]:\\)[^\s`"]+\.csv\b/i.test(latestReply)
+        || /(?:^|\s)[\w.-]+\.csv\b/i.test(latestReply);
+      const finalHasInlineCsv = /```csv[\s\S]*\n[^,\n]+,[^,\n]+,[^,\n]+[\s\S]*```/i.test(latestReply)
+        || /(?:^|\n)[^,\n]+,[^,\n]+,[^,\n]+(?:\n[^,\n]+,[^,\n]+,[^,\n]+){1,}/.test(latestReply);
+
+      if (!(finalHasCsvPath || finalHasInlineCsv)) {
+        throw new Error(`No CSV result was returned to chat. Latest assistant response: ${latestReply || 'No assistant response captured.'}`);
+      }
+
+      return `Wayfair extraction flow returned CSV output in chat: "${latestReply.slice(0, 180)}"`;
     });
 
     await runStory(page, 'HP-32', 'Agent executes ad-hoc task without existing skill', async () => {
