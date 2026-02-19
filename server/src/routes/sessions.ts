@@ -21,6 +21,15 @@ router.get('/', (req, res) => {
   res.json(sessions);
 });
 
+// Close all non-closed sessions
+router.post('/close-all', (req, res) => {
+  const db = getDatabase();
+  const result = db.prepare(
+    "UPDATE sessions SET status = 'closed' WHERE status != 'closed'"
+  ).run();
+  res.json({ success: true, closed: result.changes });
+});
+
 // Get session detail with recent messages
 router.get('/:id', (req, res) => {
   const db = getDatabase();
