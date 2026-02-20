@@ -13,6 +13,7 @@ import { approveStep, startExecution } from '../../../services/workflowEngine';
 import {
   ToolPlugin, PluginManifest, ToolDefinition, ToolContext, ToolResult,
 } from '../../types';
+import { saveImageToDisk } from '../../../utils/uploadHelpers';
 
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, '../../../../data/novohaven.db');
 
@@ -352,10 +353,17 @@ class SkillManagerPlugin implements ToolPlugin {
 
     const latestContent = this.extractLatestContent(settled.stepExecutions);
     if (!latestContent) {
+      const imageUrls = this.extractAndSaveGeneratedImages(
+        settled.stepExecutions, executionId, context.sessionId
+      );
       return {
         success: true,
-        output: `Execution #${executionId} for ${parentType} "${skill.name}" completed successfully but returned no textual output.`,
-        metadata: { executionId, status: settled.status },
+        output: `Execution #${executionId} for ${parentType} "${skill.name}" completed successfully${imageUrls.length > 0 ? ` with ${imageUrls.length} image(s)` : ' but returned no textual output'}.`,
+        metadata: {
+          executionId,
+          status: settled.status,
+          ...(imageUrls.length > 0 ? { generatedImageUrls: imageUrls } : {}),
+        },
       };
     }
 
@@ -368,11 +376,20 @@ class SkillManagerPlugin implements ToolPlugin {
       };
     }
 
+    // Extract and save any generated images to disk
+    const generatedImageUrls = this.extractAndSaveGeneratedImages(
+      settled.stepExecutions, executionId, context.sessionId
+    );
+
     const truncated = latestContent.length > 4000 ? `${latestContent.slice(0, 4000)}...` : latestContent;
     return {
       success: true,
       output: `Execution #${executionId} for ${parentType} "${skill.name}" completed.\nResult:\n${truncated}`,
-      metadata: { executionId, status: settled.status },
+      metadata: {
+        executionId,
+        status: settled.status,
+        ...(generatedImageUrls.length > 0 ? { generatedImageUrls } : {}),
+      },
     };
   }
 
@@ -733,6 +750,38 @@ class SkillManagerPlugin implements ToolPlugin {
     } catch {
       return String(withOutput.output_data);
     }
+  }
+
+  private extractAndSaveGeneratedImages(
+    stepExecutions: any[],
+    executionId: number,
+    sessionId: string
+  ): string[] {
+    const urls: string[] = [];
+    for (const step of stepExecutions) {
+      if (!step.output_data) continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(step.output_data);
+      } catch {
+        continue;
+      }
+      const images: Array<{ base64: string; mimeType: string }> = parsed?.generatedImages || [];
+      images.forEach((img, i) => {
+        try {
+          const url = saveImageToDisk(
+            img.base64,
+            img.mimeType || 'image/png',
+            sessionId,
+            `generated-${executionId}-step${step.step_order || 0}-${i}`
+          );
+          urls.push(url);
+        } catch (err) {
+          console.error('[tool-skill-manager] Failed to save generated image:', err);
+        }
+      });
+    }
+    return urls;
   }
 
   private tryWriteCsvFromOutput(
