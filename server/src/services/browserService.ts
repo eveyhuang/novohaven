@@ -29,6 +29,7 @@ export interface BrowserTask {
   id: string;
   browser: Browser | null;
   page: Page | null;
+  debugPort: number | null;
   status: 'created' | 'launching' | 'running' | 'captcha' | 'completed' | 'failed';
   emitter: EventEmitter;
   createdAt: number;
@@ -42,7 +43,8 @@ export interface BrowserProgressEvent {
 
 const BROWSER_TIMEOUT = parseInt(process.env.BROWSER_TIMEOUT || '900000', 10); // 15 min
 const BROWSER_MAX_CONCURRENT = parseInt(process.env.BROWSER_MAX_CONCURRENT || '5', 10); // Increased from 2 to 5
-const BROWSER_DEBUG_PORT = parseInt(process.env.BROWSER_DEBUG_PORT || '9222', 10);
+const BROWSER_DEBUG_PORT = parseInt(process.env.BROWSER_DEBUG_PORT || '0', 10);
+const BROWSER_DEBUG_PORT_FALLBACK = 9222;
 const BROWSER_HEADLESS = process.env.BROWSER_HEADLESS !== 'false';
 const BROWSER_USER_DATA_ROOT = process.env.BROWSER_USER_DATA_DIR
   || path.join(os.tmpdir(), 'novohaven-browser-profiles');
@@ -57,6 +59,7 @@ class BrowserService {
       id: taskId,
       browser: null,
       page: null,
+      debugPort: null,
       status: 'created',
       emitter: new EventEmitter(),
       createdAt: Date.now(),
@@ -132,6 +135,7 @@ class BrowserService {
 
       task.browser = await puppeteer.launch(launchOptions);
       this.activeBrowserCount++;
+      task.debugPort = this.resolveDebugPort(task.browser.wsEndpoint());
 
       const pages = await task.browser.pages();
       task.page = pages[0] || await task.browser.newPage();
@@ -154,6 +158,7 @@ class BrowserService {
     } catch (error: any) {
       task.status = 'failed';
       this.emit(task, 'error', { error: `Failed to launch browser: ${error.message}` });
+      await this.destroyTask(taskId);
       throw error;
     }
   }
@@ -216,7 +221,7 @@ class BrowserService {
       if (hasVisibleCaptchaElement) {
         task.status = 'captcha';
         this.emit(task, 'take_control', {
-          browserUrl: `http://localhost:${BROWSER_DEBUG_PORT}`,
+          browserUrl: `http://localhost:${task.debugPort || BROWSER_DEBUG_PORT_FALLBACK}`,
           message: 'CAPTCHA detected. Please solve it in the browser, then click Resume.',
         });
         return true;
@@ -228,7 +233,7 @@ class BrowserService {
         if (pattern.test(visibleText)) {
           task.status = 'captcha';
           this.emit(task, 'take_control', {
-            browserUrl: `http://localhost:${BROWSER_DEBUG_PORT}`,
+            browserUrl: `http://localhost:${task.debugPort || BROWSER_DEBUG_PORT_FALLBACK}`,
             message: 'CAPTCHA detected. Please solve it in the browser, then click Resume.',
           });
           return true;
@@ -308,6 +313,16 @@ class BrowserService {
     }
 
     this.tasks.delete(taskId);
+  }
+
+  private resolveDebugPort(wsEndpoint: string): number | null {
+    try {
+      const parsed = new URL(wsEndpoint);
+      const port = Number(parsed.port);
+      return Number.isFinite(port) && port > 0 ? port : null;
+    } catch {
+      return null;
+    }
   }
 }
 

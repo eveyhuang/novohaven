@@ -411,7 +411,7 @@ export function OutputsGallery() {
                   {t('viewExecution')}
                 </Button>
               ) : (
-                <span className="text-xs text-secondary-400">Manus AI Agent</span>
+                <span className="text-xs text-secondary-400">{selectedOutput.recipeName}</span>
               )}
               <Button variant="secondary" onClick={() => setShowDetailModal(false)}>
                 {t('close')}

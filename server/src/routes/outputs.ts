@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { queries } from '../models/database';
 import { authMiddleware } from '../middleware/auth';
+import { getDatabase } from '../models/database';
 
 const router = Router();
 
@@ -44,6 +45,13 @@ interface ParsedOutput {
   }>;
   manusFiles?: ManusFileOutput[];
   manusTaskId?: string;
+}
+
+interface AgentFileRecord {
+  id: number;
+  content: string;
+  metadata: string;
+  created_at: string;
 }
 
 // GET /api/outputs - Get all outputs for the current user
@@ -98,7 +106,57 @@ router.get('/', (req: Request, res: Response) => {
       };
     });
 
-    const allOutputs = [...parsedOutputs, ...parsedManusOutputs]
+    // Also fetch Agent Chat file artifacts from assistant message metadata
+    const db = getDatabase();
+    const agentFileRows = db.prepare(`
+      SELECT sm.id, sm.content, sm.metadata, sm.created_at
+      FROM session_messages sm
+      JOIN sessions s ON s.id = sm.session_id
+      WHERE s.user_id = ?
+        AND sm.role = 'assistant'
+        AND sm.metadata IS NOT NULL
+        AND sm.metadata != ''
+        AND sm.metadata != '{}'
+      ORDER BY sm.created_at DESC
+      LIMIT 500
+    `).all(userId) as AgentFileRecord[];
+
+    const parsedAgentFileOutputs: ParsedOutput[] = [];
+    for (const row of agentFileRows) {
+      let metadata: any = {};
+      try {
+        metadata = row.metadata ? JSON.parse(row.metadata) : {};
+      } catch {
+        metadata = {};
+      }
+      const generatedFiles = Array.isArray(metadata.generatedFiles) ? metadata.generatedFiles : [];
+      if (!generatedFiles.length) continue;
+
+      const files: ManusFileOutput[] = generatedFiles
+        .filter((f: any) => f && typeof f.url === 'string' && f.url.length > 0)
+        .map((f: any) => ({
+          name: f.name || (typeof f.url === 'string' ? f.url.split('/').pop() : 'download'),
+          url: f.url,
+          type: f.mimeType || f.type || 'application/octet-stream',
+          size: Number.isFinite(Number(f.size)) ? Number(f.size) : undefined,
+        }));
+      if (!files.length) continue;
+
+      parsedAgentFileOutputs.push({
+        id: 2000000 + row.id,
+        executionId: 0,
+        stepId: 0,
+        recipeName: 'Agent Chat',
+        stepName: files.length === 1 ? files[0].name : `${files.length} generated files`,
+        outputFormat: 'files',
+        aiModel: 'Agent Tool',
+        executedAt: row.created_at,
+        content: row.content || '',
+        manusFiles: files,
+      });
+    }
+
+    const allOutputs = [...parsedOutputs, ...parsedManusOutputs, ...parsedAgentFileOutputs]
       .sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
 
     // Categorize by output type

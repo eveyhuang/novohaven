@@ -339,6 +339,16 @@ async function waitForAnyAssistantFeedback(page, timeoutMs = 25000) {
   throw new Error('No assistant/error response appeared in chat within timeout.');
 }
 
+function hasCsvSignal(text) {
+  if (!text) return false;
+  const hasCsvPath = /(?:\/tmp\/|\/Users\/|[A-Za-z]:\\)[^\s`"]+\.csv\b/i.test(text)
+    || /(?:^|\s)[\w.-]+\.csv\b/i.test(text);
+  const hasInlineCsv = /```csv[\s\S]*\n[^,\n]+,[^,\n]+,[^,\n]+[\s\S]*```/i.test(text)
+    || /(?:^|\n)[^,\n]+,[^,\n]+,[^,\n]+(?:\n[^,\n]+,[^,\n]+,[^,\n]+){1,}/.test(text);
+  const hasCsvPhrase = /\bcsv\b|\bcsv file\b/i.test(text);
+  return hasCsvPath || hasInlineCsv || hasCsvPhrase;
+}
+
 function chatInput(page) {
   return page.getByPlaceholder('Type a message... (Enter to send, Shift+Enter for new line)');
 }
@@ -913,18 +923,146 @@ async function main() {
       return `Agent returned URL-related content: "${reply.slice(0, 140)}"`;
     });
 
+    await runStory(page, 'HP-30b', 'Agent browser action chain (navigate/click/scroll/extract)', async () => {
+      await startFreshChat(page);
+
+      const marker = `HP30B-${Date.now()}`;
+      await sendChatMessage(
+        page,
+        `${marker}: Use browser tools only. Step 1 navigate to https://example.com. Step 2 click the "More information..." link. Step 3 scroll down once. Step 4 extract the current page heading and first paragraph. Reply in this format exactly: Heading: <text> Paragraph: <text>.`
+      );
+
+      await waitForChatIdle(page, 120000).catch(() => {});
+
+      let latestReply = '';
+      const replyDeadline = Date.now() + 120000;
+      while (Date.now() < replyDeadline) {
+        const candidate = ((await page.locator('div.bg-secondary-100.text-secondary-900').last().textContent()) || '').trim();
+        if (candidate) latestReply = candidate;
+        if (/heading:/i.test(latestReply) && /paragraph:/i.test(latestReply)) {
+          break;
+        }
+        await page.waitForTimeout(1000);
+      }
+
+      let sessionId = null;
+      const sessionDeadline = Date.now() + 60000;
+      while (Date.now() < sessionDeadline && !sessionId) {
+        const sessions = await api('GET', '/sessions');
+        const match = sessions.find((s) => String(s.title || '').includes(marker));
+        if (match && match.id) {
+          sessionId = match.id;
+          break;
+        }
+        await page.waitForTimeout(1000);
+      }
+      if (!sessionId) {
+        throw new Error(`Could not resolve session for marker ${marker}.`);
+      }
+
+      const collectToolCalls = (messages) => {
+        const calls = [];
+        for (const msg of messages || []) {
+          if (!msg || !msg.tool_calls) continue;
+          let parsed = [];
+          try {
+            parsed = JSON.parse(msg.tool_calls) || [];
+          } catch {
+            parsed = [];
+          }
+          if (Array.isArray(parsed)) calls.push(...parsed);
+        }
+        return calls;
+      };
+
+      const getArgs = (call) => {
+        if (!call) return {};
+        if (call.args && typeof call.args === 'object') return call.args;
+        if (typeof call.arguments === 'object' && call.arguments) return call.arguments;
+        const raw = call.args || call.arguments;
+        if (typeof raw === 'string') {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            return {};
+          }
+        }
+        return {};
+      };
+
+      let toolCalls = [];
+      let sawNavigate = false;
+      let sawClick = false;
+      let sawScroll = false;
+      let sawExtractOrSnapshot = false;
+
+      const toolDeadline = Date.now() + 90000;
+      while (Date.now() < toolDeadline) {
+        const sessionDetail = await api('GET', `/sessions/${sessionId}`);
+        toolCalls = collectToolCalls(sessionDetail.messages);
+
+        const names = toolCalls.map((c) => String(c.name || '').replace(/:/g, '_').toLowerCase());
+        const actions = toolCalls.map((c) => String(getArgs(c).action || '').toLowerCase());
+
+        sawNavigate = names.some((n) => n === 'browser_navigate');
+        sawClick = names.some((n) => n === 'browser_interact') && actions.includes('click');
+        sawScroll = names.some((n) => n === 'browser_interact') && actions.includes('scroll');
+        sawExtractOrSnapshot =
+          (names.some((n) => n === 'browser_interact') && actions.includes('extract')) ||
+          names.some((n) => n === 'browser_snapshot');
+
+        if (sawNavigate && sawClick && sawScroll && sawExtractOrSnapshot) {
+          break;
+        }
+        await page.waitForTimeout(1000);
+      }
+
+      if (!(sawNavigate && sawClick && sawScroll && sawExtractOrSnapshot)) {
+        const compactCalls = toolCalls.map((c) => {
+          const args = getArgs(c);
+          const action = args.action ? ` action=${args.action}` : '';
+          return `${c.name || 'unknown'}${action}`;
+        }).join(', ');
+        throw new Error(
+          `Missing required browser tool actions. sawNavigate=${sawNavigate}, sawClick=${sawClick}, sawScroll=${sawScroll}, sawExtractOrSnapshot=${sawExtractOrSnapshot}. Calls=[${compactCalls || 'none'}]`
+        );
+      }
+
+      if (!/heading:/i.test(latestReply) || !/paragraph:/i.test(latestReply) || !/iana|reserved domains|illustrative examples/i.test(latestReply)) {
+        throw new Error(`Assistant reply did not include extracted IANA content in required format. Last response: ${latestReply || 'No assistant response captured.'}`);
+      }
+
+      return `Verified real browser tool calls in session ${sessionId}: navigate, click, scroll, extract/snapshot; assistant returned extracted IANA content.`;
+    });
+
     await runStory(page, 'HP-31a', 'Agent extracts structured site data and proposes skill draft', async () => {
       const draftsBefore = await getDraftCount();
       await startFreshChat(page);
       await sendChatMessage(page, "Search for 'smart furniture' on Amazon and save the top 10 results in a CSV file with each result's name, price, main features, and review score.");
-      const reply = await waitForAnyAssistantFeedback(page, 45000);
-      await page.waitForTimeout(2000);
-      const draftsAfter = await getDraftCount();
-      if (!/\.csv|csv file|\/tmp\/|\/Users\//i.test(reply)) {
-        throw new Error(`No CSV/file output reference detected in response. Last response: ${reply}`);
+
+      const start = Date.now();
+      let latestReply = '';
+      let draftsAfter = draftsBefore;
+      let sawCsvOutput = false;
+      let sawDraftIncrease = false;
+
+      while (Date.now() - start < 210000) {
+        const candidate = ((await page.locator('div.bg-secondary-100.text-secondary-900').last().textContent()) || '').trim();
+        if (candidate) latestReply = candidate;
+        if (hasCsvSignal(latestReply)) sawCsvOutput = true;
+
+        draftsAfter = await getDraftCount();
+        if (draftsAfter > draftsBefore) sawDraftIncrease = true;
+
+        if (sawCsvOutput && sawDraftIncrease) break;
+        await page.waitForTimeout(2000);
       }
-      if (draftsAfter <= draftsBefore) {
-        throw new Error(`No new draft was created for proposed reusable skill. Drafts before=${draftsBefore}, after=${draftsAfter}. Last response: ${reply}`);
+
+      if (!sawCsvOutput) {
+        throw new Error(`No CSV/file output reference detected in response. Last response: ${latestReply || 'No assistant response captured.'}`);
+      }
+      if (!sawDraftIncrease) {
+        throw new Error(`No new draft was created for proposed reusable skill. Drafts before=${draftsBefore}, after=${draftsAfter}. Last response: ${latestReply || 'No assistant response captured.'}`);
       }
       return `CSV output referenced and draft count increased from ${draftsBefore} to ${draftsAfter}.`;
     });

@@ -5,7 +5,7 @@ import api from '../../services/api';
 
 interface FileAttachment {
   type: string;
-  data: string; // base64 data URL
+  data: string; // data URL or server URL
   name: string;
   mimeType: string;
 }
@@ -89,6 +89,17 @@ export function AgentChat() {
                   mimeType: url.endsWith('.jpg') || url.endsWith('.jpeg') ? 'image/jpeg'
                             : url.endsWith('.webp') ? 'image/webp'
                             : 'image/png',
+                });
+              });
+            }
+            if (m.role === 'assistant' && Array.isArray(metadata.generatedFiles)) {
+              metadata.generatedFiles.forEach((f: any) => {
+                if (!f?.url) return;
+                attachments.push({
+                  type: 'file',
+                  data: f.url,
+                  name: f.name || (typeof f.url === 'string' ? f.url.split('/').pop() : 'download'),
+                  mimeType: f.mimeType || f.type || 'application/octet-stream',
                 });
               });
             }
@@ -633,12 +644,19 @@ export function AgentChat() {
                       </div>
                     ))}
                     {msg.attachments.filter(a => a.type !== 'image').map((a, i) => (
-                      <span key={i} className="inline-flex items-center gap-1 text-xs bg-white/20 rounded px-2 py-1">
+                      <a
+                        key={i}
+                        href={a.data}
+                        download={a.name || 'download'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs bg-white/20 rounded px-2 py-1 underline"
+                      >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                         </svg>
                         {a.name}
-                      </span>
+                      </a>
                     ))}
                   </div>
                 )}

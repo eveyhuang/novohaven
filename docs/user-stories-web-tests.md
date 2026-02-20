@@ -293,6 +293,20 @@ In `/chat`, user sends `Go to https://www.amazon.com and search for 'smart furni
 **Observed:** Agent returned URL-related content: "I appreciate your request, but I don't have the ability to browse the internet or visit websites. I can't access URLs like `https://www.exam"
 <!-- TEST_RESULT_END:HP-30 -->
 
+### HP-30b — Agent uses browser tools for direct action chain (navigate, click, scroll, extract)
+In `/chat`, user sends a direct browser-actions prompt (no skill/workflow request), for example:
+`Navigate to https://example.com, click "More information...", scroll once, and extract the page heading plus first paragraph.`
+Agent should:
+1. Use `browser:navigate` to load `https://amazon.com`.
+2. Use `browser:interact` with `click` on the `More information...` link.
+3. Use `browser:interact` with `scroll` to move down the page.
+4. Use `browser:interact` with `extract` (or `browser:snapshot`) to capture page content.
+5. Return extracted heading + paragraph in chat, with content matching the actual destination page (IANA reserved domains page), not a generic refusal.
+
+<!-- TEST_RESULT_START:HP-30b -->
+**Automated Test Result (2026-02-20):** PASS
+**Observed:** Verified real browser tool calls in session 646a00c6-0be2-4da6-ae1b-4eaec28fe74a: navigate, click, scroll, extract/snapshot; assistant returned extracted IANA content.
+<!-- TEST_RESULT_END:HP-30b -->
 ### HP-31a — Agent uses browser to extract structured data from a website
 In `/chat`, user sends `Search for 'smart furniture' on Amazon and save the top 10 results in a CSV file with each result's name, price, main features, and review score.` Agent should:
 1. Use `browser:navigate` to go to Amazon and search for the term.
@@ -492,6 +506,7 @@ ZqkybfyYY7SkM"}10:34 AM
 | HP-28 | P1 | Agent self-healing for broken workflow via validate + edit draft |
 | HP-29 | P1 | AI builder iterative self-correction before save/run |
 | HP-30 | P0 | Agent uses browser tools to navigate user-provided URLs |
+| HP-30b | P0 | Agent performs direct browser action chain (navigate/click/scroll/extract) |
 | HP-31 | P0 | Agent scrapes structured data, saves to file, proposes new skill |
 | HP-32 | P1 | Agent completes ad-hoc tasks using tools when no skill matches |
 | HP-33 | P1 | Agent creates and returns downloadable files |

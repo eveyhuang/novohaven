@@ -100,20 +100,38 @@ export class AgentRunner {
    * Initialize tool plugins in the child process.
    */
   private async initializeToolPlugins(): Promise<void> {
-    // Load tool-skill-manager plugin
-    try {
-      const pluginDir = path.join(__dirname, '../plugins/builtin/tool-skill-manager');
-      const manifest = require(path.join(pluginDir, 'manifest.json'));
-      const PluginClass = require(path.join(pluginDir, 'index.ts')).default
-        || require(path.join(pluginDir, 'index.ts'));
-      const plugin = new PluginClass(manifest);
-      await plugin.initialize({});
-      this.tools.set('tool-skill-manager', plugin);
-      this.rebuildToolExecutor();
-      console.log(`[AgentRunner] Tool plugin tool-skill-manager loaded`);
-    } catch (err: any) {
-      console.error(`[AgentRunner] Failed to load tool-skill-manager:`, err.message);
+    const toolPluginNames = [
+      'tool-skill-manager',
+      'tool-browser',
+      'tool-fileops',
+      'tool-bash',
+    ];
+
+    for (const pluginName of toolPluginNames) {
+      try {
+        const dbConfig = this.db.prepare(
+          'SELECT enabled, config FROM plugin_configs WHERE plugin_name = ?'
+        ).get(pluginName) as any;
+        if (dbConfig && !dbConfig.enabled) {
+          console.log(`[AgentRunner] Tool plugin ${pluginName} disabled in config, skipping.`);
+          continue;
+        }
+
+        const pluginDir = path.join(__dirname, '../plugins/builtin', pluginName);
+        const manifest = require(path.join(pluginDir, 'manifest.json'));
+        const PluginClass = require(path.join(pluginDir, 'index.ts')).default
+          || require(path.join(pluginDir, 'index.ts'));
+        const plugin = new PluginClass(manifest);
+        const config = dbConfig?.config ? JSON.parse(dbConfig.config) : {};
+        await plugin.initialize(config);
+        this.tools.set(pluginName, plugin);
+        console.log(`[AgentRunner] Tool plugin ${pluginName} loaded`);
+      } catch (err: any) {
+        console.error(`[AgentRunner] Failed to load ${pluginName}:`, err.message);
+      }
     }
+
+    this.rebuildToolExecutor();
   }
 
   /**
@@ -279,6 +297,7 @@ export class AgentRunner {
     let round = 0;
     let currentMessages = [...messages];
     let pendingImageUrls: string[] = [];
+    let pendingGeneratedFiles: Array<{ name: string; url: string; mimeType?: string; type?: string; size?: number }> = [];
 
     while (round < this.maxToolRounds) {
       round++;
@@ -328,15 +347,17 @@ export class AgentRunner {
 
       // If no tool calls, we're done — signal stream complete (no need to re-send full text)
       if (toolCalls.length === 0) {
-        if (fullText || pendingImageUrls.length > 0) {
+        if (fullText || pendingImageUrls.length > 0 || pendingGeneratedFiles.length > 0) {
           process.send!({
             type: 'stream_done',
             sessionId: this.sessionId,
             messageId,
             ...(pendingImageUrls.length > 0 ? { generatedImageUrls: pendingImageUrls } : {}),
+            ...(pendingGeneratedFiles.length > 0 ? { generatedFiles: pendingGeneratedFiles } : {}),
           });
-          this.persistAssistantMessage(fullText, pendingImageUrls);
+          this.persistAssistantMessage(fullText, pendingImageUrls, pendingGeneratedFiles);
           pendingImageUrls = [];
+          pendingGeneratedFiles = [];
         }
         return;
       }
@@ -362,6 +383,18 @@ export class AgentRunner {
           result = toolResult.output;
           if (toolResult.metadata?.generatedImageUrls?.length) {
             pendingImageUrls.push(...toolResult.metadata.generatedImageUrls);
+          }
+          if (Array.isArray(toolResult.metadata?.generatedFiles) && toolResult.metadata.generatedFiles.length > 0) {
+            for (const f of toolResult.metadata.generatedFiles) {
+              if (!f || !f.url) continue;
+              pendingGeneratedFiles.push({
+                name: f.name || 'download',
+                url: f.url,
+                mimeType: f.type || 'application/octet-stream',
+                type: f.type,
+                size: Number.isFinite(Number(f.size)) ? Number(f.size) : undefined,
+              });
+            }
           }
         } catch (err: any) {
           result = `Tool error: ${err.message}`;
@@ -403,14 +436,22 @@ export class AgentRunner {
   /**
    * Persist an assistant message to the database.
    */
-  private persistAssistantMessage(content: string, imageUrls: string[] = []): void {
+  private persistAssistantMessage(
+    content: string,
+    imageUrls: string[] = [],
+    generatedFiles: Array<{ name: string; url: string; mimeType?: string; type?: string; size?: number }> = []
+  ): void {
+    const metadata: Record<string, any> = {};
+    if (imageUrls.length > 0) metadata.generatedImageUrls = imageUrls;
+    if (generatedFiles.length > 0) metadata.generatedFiles = generatedFiles;
+
     this.db.prepare(`
       INSERT INTO session_messages (session_id, role, content, metadata)
       VALUES (?, 'assistant', ?, ?)
     `).run(
       this.sessionId,
       content,
-      JSON.stringify(imageUrls.length > 0 ? { generatedImageUrls: imageUrls } : {})
+      JSON.stringify(metadata)
     );
   }
 

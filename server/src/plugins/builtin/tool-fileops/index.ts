@@ -3,6 +3,7 @@ import path from 'path';
 import {
   ToolPlugin, PluginManifest, ToolDefinition, ToolContext, ToolResult,
 } from '../../types';
+import { getSessionUploadsDir } from '../../../utils/uploadHelpers';
 
 class FileOpsPlugin implements ToolPlugin {
   manifest: PluginManifest;
@@ -65,7 +66,7 @@ class FileOpsPlugin implements ToolPlugin {
   async execute(toolName: string, args: Record<string, any>, context: ToolContext): Promise<ToolResult> {
     switch (toolName) {
       case 'file:read': return this.readFile(args);
-      case 'file:write': return this.writeFile(args);
+      case 'file:write': return this.writeFile(args, context);
       case 'file:list': return this.listDir(args);
       default: return { success: false, output: `Unknown tool: ${toolName}` };
     }
@@ -95,7 +96,7 @@ class FileOpsPlugin implements ToolPlugin {
     }
   }
 
-  private async writeFile(args: Record<string, any>): Promise<ToolResult> {
+  private async writeFile(args: Record<string, any>, context: ToolContext): Promise<ToolResult> {
     const filePath = args.filePath;
     if (!this.isPathAllowed(filePath)) {
       return { success: false, output: `Access denied: ${filePath} is outside allowed paths` };
@@ -112,7 +113,20 @@ class FileOpsPlugin implements ToolPlugin {
       } else {
         fs.writeFileSync(filePath, args.content);
       }
-      return { success: true, output: `Written to ${filePath} (${args.content.length} chars)` };
+
+      const absolutePath = path.resolve(filePath);
+      const stats = fs.statSync(absolutePath);
+      const generatedFile = this.copyToSessionDownloads(absolutePath, context);
+
+      return {
+        success: true,
+        output: `Written to ${absolutePath} (${args.content.length} chars)`,
+        metadata: {
+          generatedFiles: generatedFile ? [generatedFile] : [],
+          filePath: absolutePath,
+          size: stats.size,
+        },
+      };
     } catch (err: any) {
       return { success: false, output: `Write error: ${err.message}` };
     }
@@ -152,6 +166,56 @@ class FileOpsPlugin implements ToolPlugin {
       }
     }
     return results;
+  }
+
+  private copyToSessionDownloads(filePath: string, context: ToolContext): {
+    name: string;
+    url: string;
+    type: string;
+    size: number;
+    sourcePath: string;
+  } | null {
+    try {
+      const sessionDir = getSessionUploadsDir(context.sessionId);
+      const generatedDir = path.join(sessionDir, 'generated');
+      if (!fs.existsSync(generatedDir)) fs.mkdirSync(generatedDir, { recursive: true });
+
+      const ext = path.extname(filePath);
+      const base = path.basename(filePath, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const fileName = `${base}-${Date.now()}${ext || '.txt'}`;
+      const destPath = path.join(generatedDir, fileName);
+      fs.copyFileSync(filePath, destPath);
+
+      const mimeType = this.mimeTypeFromExtension(ext);
+      const size = fs.statSync(destPath).size;
+      return {
+        name: path.basename(filePath),
+        url: `/uploads/session-${context.sessionId}/generated/${fileName}`,
+        type: mimeType,
+        size,
+        sourcePath: filePath,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private mimeTypeFromExtension(extRaw: string): string {
+    const ext = extRaw.toLowerCase();
+    const map: Record<string, string> = {
+      '.csv': 'text/csv',
+      '.json': 'application/json',
+      '.txt': 'text/plain',
+      '.md': 'text/markdown',
+      '.html': 'text/html',
+      '.pdf': 'application/pdf',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+      '.zip': 'application/zip',
+    };
+    return map[ext] || 'application/octet-stream';
   }
 }
 

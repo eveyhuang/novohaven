@@ -80,11 +80,17 @@ export class AgentSupervisor {
                     : url.endsWith('.webp') ? 'image/webp'
                     : 'image/png',
         }));
+        const fileAttachments = (msg.generatedFiles as Array<any> | undefined)?.map((f: any) => ({
+          type: 'file' as const,
+          data: f.url,
+          name: f.name || (typeof f.url === 'string' ? f.url.split('/').pop() : 'download'),
+          mimeType: f.mimeType || f.type || 'application/octet-stream',
+        }));
         this.onResponse(msg.sessionId, {
           text: '',
           isDone: true,
           messageId: msg.messageId,
-          attachments: imageAttachments,
+          attachments: [...(imageAttachments || []), ...(fileAttachments || [])],
         } as any);
       }
       // Handle other IPC message types (approval_request, execution_event, etc.)

@@ -14,6 +14,7 @@ import { ToolDefinition, ToolPlugin, ToolResult, ToolContext } from '../plugins/
 export class ToolExecutor {
   private toolPlugins: Map<string, ToolPlugin>;
   private context: ToolContext;
+  private toolNameMap = new Map<string, string>(); // model-facing name -> real tool name
 
   constructor(toolPlugins: Map<string, ToolPlugin>, context: ToolContext) {
     this.toolPlugins = toolPlugins;
@@ -29,18 +30,29 @@ export class ToolExecutor {
    * Get all available tool definitions (plugin tools + built-in).
    */
   getToolDefinitions(): ToolDefinition[] {
+    this.toolNameMap.clear();
     const defs: ToolDefinition[] = [];
+    const usedNames = new Set<string>();
+
+    const register = (def: ToolDefinition) => {
+      const modelName = this.toModelToolName(def.name, usedNames);
+      usedNames.add(modelName);
+      this.toolNameMap.set(modelName, def.name);
+      defs.push({ ...def, name: modelName });
+    };
 
     // Gather from all registered tool plugins
     for (const [, plugin] of this.toolPlugins) {
-      defs.push(...plugin.getTools());
+      for (const def of plugin.getTools()) {
+        register(def);
+      }
     }
 
     // Add built-in agent tools, skipping any already provided by plugins
-    const existingNames = new Set(defs.map(d => d.name));
+    const existingRealNames = new Set(this.toolNameMap.values());
     for (const builtin of this.getBuiltInToolDefinitions()) {
-      if (!existingNames.has(builtin.name)) {
-        defs.push(builtin);
+      if (!existingRealNames.has(builtin.name)) {
+        register(builtin);
       }
     }
 
@@ -51,8 +63,10 @@ export class ToolExecutor {
    * Execute a tool call by name.
    */
   async execute(toolName: string, args: Record<string, any>): Promise<ToolResult> {
+    const resolvedToolName = this.toolNameMap.get(toolName) || toolName;
+
     // Check built-in tools first (names use _ but accept : for back-compat)
-    const normalized = toolName.replace(':', '_');
+    const normalized = resolvedToolName.replace(':', '_');
     if (normalized.startsWith('skill_') || normalized.startsWith('approval_')) {
       return this.executeBuiltIn(normalized, args);
     }
@@ -60,8 +74,13 @@ export class ToolExecutor {
     // Find the plugin that owns this tool
     for (const [, plugin] of this.toolPlugins) {
       const tools = plugin.getTools();
-      if (tools.some(t => t.name === toolName)) {
-        return plugin.execute(toolName, args, this.context);
+      const matched = tools.find((t) =>
+        t.name === resolvedToolName
+        || t.name === toolName
+        || this.normalizeComparableName(t.name) === this.normalizeComparableName(resolvedToolName)
+      );
+      if (matched) {
+        return plugin.execute(matched.name, args, this.context);
       }
     }
 
@@ -228,5 +247,30 @@ export class ToolExecutor {
       // Agent should use skill_edit/skill_create which create drafts
       // that go through the Skill Draft Review page.
     ];
+  }
+
+  private toModelToolName(name: string, used: Set<string>): string {
+    let base = String(name || 'tool')
+      .replace(/[^a-zA-Z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+    if (!base) base = 'tool';
+    if (/^\d/.test(base)) base = `tool_${base}`;
+
+    let candidate = base;
+    let suffix = 2;
+    while (used.has(candidate)) {
+      candidate = `${base}_${suffix}`;
+      suffix += 1;
+    }
+    return candidate;
+  }
+
+  private normalizeComparableName(name: string): string {
+    return String(name || '')
+      .replace(/[^a-zA-Z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .toLowerCase();
   }
 }
