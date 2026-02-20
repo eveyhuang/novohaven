@@ -184,13 +184,40 @@ export class AgentRunner {
         lastMsg.attachments = inboundAttachments
           .filter(a => a.type === 'image')
           .map(a => {
-            // Extract base64 from data URL (e.g., "data:image/png;base64,...")
-            const dataUrl = a.url || '';
-            const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+            const url = a.url || '';
+            // Case 1: still a data URL (fallback path or old format)
+            const dataUrlMatch = url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+            if (dataUrlMatch) {
+              return {
+                type: 'image' as const,
+                mimeType: dataUrlMatch[1],
+                data: dataUrlMatch[2],
+              };
+            }
+            // Case 2: file stored on disk at /uploads/session-<id>/...
+            if (url.startsWith('/uploads/')) {
+              try {
+                const fsModule = require('fs') as typeof import('fs');
+                const pathModule = require('path') as typeof import('path');
+                const uploadsRoot = pathModule.join(__dirname, '../../uploads');
+                const relPath = url.replace(/^\/uploads\//, '');
+                const filePath = pathModule.join(uploadsRoot, relPath);
+                const base64Data = fsModule.readFileSync(filePath).toString('base64');
+                return {
+                  type: 'image' as const,
+                  mimeType: a.mimeType || 'image/png',
+                  data: base64Data,
+                };
+              } catch (err) {
+                console.error('[AgentRunner] Failed to read upload file for LLM vision:', err);
+                return { type: 'image' as const, mimeType: a.mimeType || 'image/png', data: '' };
+              }
+            }
+            // Case 3: unknown format — pass as-is
             return {
               type: 'image' as const,
-              mimeType: match ? match[1] : (a.mimeType || 'image/png'),
-              data: match ? match[2] : dataUrl,
+              mimeType: a.mimeType || 'image/png',
+              data: url,
             };
           });
 
