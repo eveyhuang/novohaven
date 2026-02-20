@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth';
 import { getDatabase } from '../models/database';
+import { deleteSessionUploads } from '../utils/uploadHelpers';
 
 const router = Router();
 router.use(authMiddleware);
@@ -57,14 +58,18 @@ router.delete('/:id', (req, res) => {
 
   db.prepare('DELETE FROM session_messages WHERE session_id = ?').run(req.params.id);
   db.prepare('DELETE FROM sessions WHERE id = ?').run(req.params.id);
+  deleteSessionUploads(req.params.id);
   res.json({ success: true });
 });
 
 // Delete all sessions and their messages
 router.delete('/', (req, res) => {
   const db = getDatabase();
+  const sessionIds = (db.prepare('SELECT id FROM sessions').all() as Array<{ id: string }>)
+    .map(s => s.id);
   db.prepare('DELETE FROM session_messages').run();
   db.prepare('DELETE FROM sessions').run();
+  sessionIds.forEach(id => deleteSessionUploads(id));
   res.json({ success: true });
 });
 
