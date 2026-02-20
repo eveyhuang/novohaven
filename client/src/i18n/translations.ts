@@ -57,7 +57,8 @@ export const translations = {
 
     // Recipe Builder
     createNewRecipeTitle: 'Create New Recipe',
-    editRecipe: 'Edit Recipe',
+    editRecipe: 'Edit Workflow',
+    workflowSaved: 'Workflow saved successfully',
     buildWorkflowStep: 'Build your AI workflow step by step',
     recipeDetails: 'Recipe Details',
     recipeName: 'Recipe Name',
@@ -475,6 +476,7 @@ export const translations = {
     // Recipe Builder
     createNewRecipeTitle: '创建新工作流',
     editRecipe: '编辑工作流',
+    workflowSaved: '工作流保存成功',
     buildWorkflowStep: '逐步构建您的AI工作流',
     recipeDetails: '工作流详情',
     recipeName: '工作流名称',

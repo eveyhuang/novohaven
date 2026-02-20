@@ -299,7 +299,7 @@ In `/chat`, user sends `Search for 'smart furniture' on Amazon and save the top 
 2. Use `browser:interact` / `browser:extract` to scrape the search results.
 3. Use `file:write` to create a CSV file with the extracted data.
 4. Return the file path or content to the user so they can download the result.
-5. After completing the task, use `skill_create` to propose saving this as a new reusable skill (e.g., "Amazon Product Search Scraper") with parameterized inputs (`search_query`, `result_count`). This draft should appear in `/drafts` for human review.
+5. After completing the task, use `skill_edit` to propose saving this as a new reusable skill (e.g., "Amazon Product Search Scraper") with parameterized inputs (`search_query`, `result_count`). This draft should appear in `/drafts` for human review.
 
 <!-- TEST_RESULT_START:HP-31a -->
 **Automated Test Result (2026-02-19):** FAIL
@@ -329,7 +329,7 @@ In `/chat`, user sends a message like `Go to https://www.wayfair.com/furniture/p
 <!-- TEST_RESULT_END:HP-31b -->
 
 ### HP-32 — Agent completes ad-hoc task using tools when no skill exists
-In `/chat`, user sends a task for which no existing skill or workflow matches, e.g., `Count the number of H1 and H2 headings on https://www.example.com and write the result to a file.` Agent should:
+In `/chat`, user sends a task for which no 1existing skill or workflow matches, e.g., `Count the number of H1 and H2 headings on https://www.example.com and write the result to a file.` Agent should:
 1. Use `skill_search` first and find no matching skill.
 2. Fall back to using available tools directly (`browser:navigate` to fetch page, `bash:execute` or internal logic to parse headings, `file:write` to save results).
 3. Return the result to the user in chat.

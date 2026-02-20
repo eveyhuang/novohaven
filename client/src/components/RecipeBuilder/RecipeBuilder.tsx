@@ -4,6 +4,7 @@ import { Recipe, RecipeStep, AIModel } from '../../types';
 import api, { ExecutorInfo } from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, ExecutorConfigFields } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
+import { useNotifications } from '../../context/NotificationContext';
 
 // Extract user input variables from a single prompt template (excludes step outputs and company standards)
 function extractInputsFromPrompt(promptTemplate: string | null | undefined): string[] {
@@ -41,6 +42,7 @@ export function RecipeBuilder() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const { addNotification } = useNotifications();
   // Check if this is a new recipe: either no id param or id is 'new'
   const isNew = !id || id === 'new';
 
@@ -157,6 +159,7 @@ export function RecipeBuilder() {
           steps,
           is_template: recipe.is_template || false,
         });
+        addNotification({ type: 'success', title: t('workflowSaved') });
       }
       return true;
     } catch (err: any) {
