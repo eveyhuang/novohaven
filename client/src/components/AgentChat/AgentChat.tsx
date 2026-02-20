@@ -598,14 +598,27 @@ export function AgentChat() {
                 }`}
               >
                 {msg.attachments && msg.attachments.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mb-2">
+                  <div className="flex flex-wrap gap-2 mb-2">
                     {msg.attachments.filter(a => a.type === 'image').map((a, i) => (
-                      <img
-                        key={i}
-                        src={a.data}
-                        alt={a.name}
-                        className="max-w-[200px] max-h-[150px] rounded object-cover"
-                      />
+                      <div key={i} className="relative group">
+                        <img
+                          src={a.data}
+                          alt={a.name}
+                          className="max-w-[300px] max-h-[300px] rounded object-contain border border-white/20 bg-black/10"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                        />
+                        <a
+                          href={a.data}
+                          download={a.name || 'image.png'}
+                          className={`absolute bottom-1.5 right-1.5 flex items-center justify-center w-7 h-7 rounded-full shadow-sm opacity-0 group-hover:opacity-100 transition-opacity ${msg.role === 'user' ? 'bg-primary-800 text-white' : 'bg-white text-secondary-700 border border-secondary-200'}`}
+                          title="Download image"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                        </a>
+                      </div>
                     ))}
                     {msg.attachments.filter(a => a.type !== 'image').map((a, i) => (
                       <span key={i} className="inline-flex items-center gap-1 text-xs bg-white/20 rounded px-2 py-1">
