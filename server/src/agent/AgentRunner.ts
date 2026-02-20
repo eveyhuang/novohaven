@@ -153,7 +153,15 @@ export class AgentRunner {
       VALUES (?, 'user', ?, ?)
     `).run(this.sessionId, message.content.text, JSON.stringify({
       ...message.metadata,
-      ...(inboundAttachments?.length ? { attachmentCount: inboundAttachments.length } : {}),
+      ...(inboundAttachments?.length ? {
+        attachmentCount: inboundAttachments.length,
+        attachments: inboundAttachments.map(a => ({
+          type: a.type,
+          url: a.url,
+          name: a.name,
+          mimeType: a.mimeType,
+        })),
+      } : {}),
     }));
 
     // Update session last_active_at
