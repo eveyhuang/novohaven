@@ -63,12 +63,44 @@ export function AgentChat() {
       if (data.messages && Array.isArray(data.messages)) {
         const loaded: ChatMessage[] = data.messages
           .filter((m: any) => m.role === 'user' || (m.role === 'assistant' && !m.tool_calls))
-          .map((m: any) => ({
-            id: `db-${m.id || m.created_at}`,
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-            timestamp: m.created_at || new Date().toISOString(),
-          }));
+          .map((m: any) => {
+            let metadata: any = {};
+            try { metadata = JSON.parse(m.metadata || '{}'); } catch {}
+
+            const attachments: FileAttachment[] = [];
+
+            if (m.role === 'user' && Array.isArray(metadata.attachments)) {
+              metadata.attachments.forEach((a: any) => {
+                attachments.push({
+                  type: a.type || 'image',
+                  data: a.url,
+                  name: a.name || 'attachment',
+                  mimeType: a.mimeType || 'image/png',
+                });
+              });
+            }
+
+            if (m.role === 'assistant' && Array.isArray(metadata.generatedImageUrls)) {
+              metadata.generatedImageUrls.forEach((url: string) => {
+                attachments.push({
+                  type: 'image',
+                  data: url,
+                  name: url.split('/').pop() || 'generated-image.png',
+                  mimeType: url.endsWith('.jpg') || url.endsWith('.jpeg') ? 'image/jpeg'
+                            : url.endsWith('.webp') ? 'image/webp'
+                            : 'image/png',
+                });
+              });
+            }
+
+            return {
+              id: `db-${m.id || m.created_at}`,
+              role: m.role as 'user' | 'assistant',
+              content: m.content,
+              timestamp: m.created_at || new Date().toISOString(),
+              attachments: attachments.length > 0 ? attachments : undefined,
+            };
+          });
         setMessages(loaded);
       }
     } catch {
