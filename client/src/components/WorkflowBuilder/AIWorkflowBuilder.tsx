@@ -98,15 +98,19 @@ export function AIWorkflowBuilder() {
     inputRef.current?.focus();
   };
 
-  const handleSave = async (asTemplate: boolean) => {
+  const handleSave = async (asSkill: boolean) => {
     if (!currentWorkflow) return;
 
     setIsSaving(true);
     setError(null);
 
     try {
-      const result = await api.assistantSave(currentWorkflow, asTemplate);
-      navigate(`/recipes/${result.recipeId}`);
+      const result = await api.assistantSave(currentWorkflow, asSkill);
+      if (result.entityType === 'skill' && result.skillId) {
+        navigate(`/skills/${result.skillId}`);
+      } else if (result.entityType === 'workflow' && result.workflowId) {
+        navigate(`/workflows/${result.workflowId}`);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to save workflow');
     } finally {
@@ -358,7 +362,7 @@ export function AIWorkflowBuilder() {
                   isLoading={isSaving}
                   disabled={isSaving}
                 >
-                  {t('saveAsRecipe')}
+                  Save As Workflow
                 </Button>
                 <Button
                   variant="secondary"
@@ -367,7 +371,7 @@ export function AIWorkflowBuilder() {
                   isLoading={isSaving}
                   disabled={isSaving}
                 >
-                  {t('saveAsTemplate')}
+                  Save As Skill
                 </Button>
               </div>
             )}

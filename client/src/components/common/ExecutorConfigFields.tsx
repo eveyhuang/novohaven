@@ -4,7 +4,7 @@ import { ExecutorInfo } from '../../services/api';
 
 /**
  * Renders dynamic form fields based on an executor's config schema.
- * Used inline within step editors (RecipeBuilder, RecipeRunner, TemplateEditor)
+ * Used inline within step editors (RecipeBuilder, RecipeRunner, SkillEditor)
  * for non-AI step types like script, http, transform, etc.
  */
 export function ExecutorConfigFields({

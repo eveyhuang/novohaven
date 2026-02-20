@@ -5,23 +5,23 @@ export interface User {
   created_at: string;
 }
 
-// Recipe types
-export interface Recipe {
+// Workflow/Skill graph types
+export interface WorkflowDefinition {
   id: number;
   name: string;
   description?: string;
   created_by: number;
-  is_template: boolean;
+  is_template?: boolean;
   created_at: string;
   updated_at: string;
   step_count?: number;
-  steps?: RecipeStep[];
+  steps?: WorkflowStep[];
   required_inputs?: string[];
 }
 
 export type StepType = 'ai' | 'scraping' | 'manus' | 'script' | 'browser' | 'http' | 'transform' | string;
 
-export interface RecipeStep {
+export interface WorkflowStep {
   id?: number;
   recipe_id?: number;
   step_order: number;
@@ -37,13 +37,17 @@ export interface RecipeStep {
   created_at?: string;
 }
 
+// Backward compatibility aliases (legacy naming)
+export type Recipe = WorkflowDefinition;
+export type RecipeStep = WorkflowStep;
+
 export interface ModelConfig {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
 }
 
-// Input type configurations for template variables
+// Input type configurations for workflow/skill variables
 export type InputType = 'text' | 'textarea' | 'image' | 'url_list' | 'file';
 
 export interface InputTypeConfig {
@@ -196,30 +200,10 @@ export interface AIResponse {
   generatedImages?: GeneratedImage[];
 }
 
-// API Request types
-export interface CreateRecipeRequest {
-  name: string;
-  description?: string;
-  steps?: Omit<RecipeStep, 'id' | 'recipe_id' | 'created_at'>[];
-  is_template?: boolean;
-}
-
-export interface UpdateRecipeRequest {
-  name?: string;
-  description?: string;
-  steps?: Omit<RecipeStep, 'id' | 'recipe_id' | 'created_at'>[];
-  is_template?: boolean;
-}
-
 export interface CreateStandardRequest {
   standard_type: 'voice' | 'platform' | 'image';
   name: string;
   content: any;
-}
-
-export interface StartExecutionRequest {
-  recipe_id: number;
-  input_data: Record<string, any>;
 }
 
 export interface LoginRequest {

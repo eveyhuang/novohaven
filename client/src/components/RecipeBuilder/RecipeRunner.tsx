@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Recipe, RecipeStep, AIModel, InputTypeConfig, TemplateInputConfig } from '../../types';
+import { WorkflowDefinition, WorkflowStep, AIModel, InputTypeConfig, TemplateInputConfig } from '../../types';
 import api, { ExecutorInfo } from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, DynamicInput, TranslatedText, ExecutorConfigFields } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
 
-const DEFAULT_STEP: Omit<RecipeStep, 'id' | 'recipe_id' | 'created_at'> = {
+const DEFAULT_STEP: Omit<WorkflowStep, 'id' | 'recipe_id' | 'created_at'> = {
   step_order: 1,
   step_name: 'New Step',
   ai_model: 'mock',
@@ -19,8 +19,8 @@ export function RecipeRunner() {
   const navigate = useNavigate();
   const { t } = useLanguage();
 
-  const [recipe, setRecipe] = useState<Recipe | null>(null);
-  const [localSteps, setLocalSteps] = useState<RecipeStep[]>([]);
+  const [recipe, setRecipe] = useState<WorkflowDefinition | null>(null);
+  const [localSteps, setLocalSteps] = useState<WorkflowStep[]>([]);
   const [inputValues, setInputValues] = useState<Record<string, any>>({});
   const [inputConfigs, setInputConfigs] = useState<Record<string, InputTypeConfig>>({});
   const [models, setModels] = useState<AIModel[]>([]);
@@ -35,7 +35,7 @@ export function RecipeRunner() {
     loadModels();
     loadExecutors();
     if (id) {
-      loadRecipe(parseInt(id));
+      loadWorkflow(parseInt(id));
     }
   }, [id]);
 
@@ -57,10 +57,10 @@ export function RecipeRunner() {
     }
   };
 
-  const loadRecipe = async (recipeId: number) => {
+  const loadWorkflow = async (workflowId: number) => {
     setIsLoading(true);
     try {
-      const data = await api.getRecipe(recipeId);
+      const data = await api.getWorkflow(workflowId);
       setRecipe(data);
       setLocalSteps(data.steps || []);
 
@@ -286,18 +286,18 @@ export function RecipeRunner() {
     return Array.from(allVars);
   }, [localSteps]);
 
-  const updateStep = (index: number, updates: Partial<RecipeStep>) => {
+  const updateStep = (index: number, updates: Partial<WorkflowStep>) => {
     const newSteps = [...localSteps];
     newSteps[index] = { ...newSteps[index], ...updates };
     setLocalSteps(newSteps);
   };
 
   const addStep = () => {
-    const newStep: RecipeStep = {
+    const newStep: WorkflowStep = {
       ...DEFAULT_STEP,
       step_order: localSteps.length + 1,
       step_name: `Step ${localSteps.length + 1}`,
-    } as RecipeStep;
+    } as WorkflowStep;
     setLocalSteps([...localSteps, newStep]);
     setExpandedSteps(new Set([...expandedSteps, localSteps.length]));
   };
@@ -417,7 +417,7 @@ export function RecipeRunner() {
 
     try {
       // Pass modified steps to the execution with processed inputs
-      const result = await api.startExecution(recipe.id, processedInputs, localSteps);
+      const result = await api.startWorkflowExecution(recipe.id, processedInputs, localSteps);
       console.log('[RecipeRunner] Execution started, executionId:', result.executionId);
       // Navigate directly to the execution chat view
       navigate(`/executions/${result.executionId}`);
@@ -456,11 +456,6 @@ export function RecipeRunner() {
             <h1 className="text-2xl font-bold text-secondary-900">
               <TranslatedText text={recipe.name} />
             </h1>
-            {recipe.is_template && (
-              <span className="px-2 py-0.5 text-xs font-medium bg-primary-100 text-primary-700 rounded">
-                {t('template')}
-              </span>
-            )}
           </div>
           {recipe.description && (
             <p className="text-secondary-600 mt-1">

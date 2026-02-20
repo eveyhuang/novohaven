@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Recipe, RecipeStep, TemplateInputConfig, InputTypeConfig } from '../../types';
+import { WorkflowDefinition, WorkflowStep, TemplateInputConfig, InputTypeConfig } from '../../types';
 import api from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
 
@@ -32,11 +32,11 @@ export function ManusAgentPage() {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Template state
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [templates, setTemplates] = useState<Recipe[]>([]);
-  const [selectedTemplate, setSelectedTemplate] = useState<Recipe | null>(null);
-  const [selectedStep, setSelectedStep] = useState<RecipeStep | null>(null);
+  // Skill state
+  const [showSkills, setShowSkills] = useState(false);
+  const [skills, setSkills] = useState<WorkflowDefinition[]>([]);
+  const [selectedSkill, setSelectedSkill] = useState<WorkflowDefinition | null>(null);
+  const [selectedStep, setSelectedStep] = useState<WorkflowStep | null>(null);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -46,35 +46,34 @@ export function ManusAgentPage() {
   }, []);
 
   useEffect(() => {
-    if (showTemplates && templates.length === 0) {
-      loadTemplates();
+    if (showSkills && skills.length === 0) {
+      loadSkills();
     }
-  }, [showTemplates]);
+  }, [showSkills]);
 
-  const loadTemplates = async () => {
+  const loadSkills = async () => {
     try {
-      const allRecipes = await api.getRecipes();
-      const manusTemplates = allRecipes.filter((r) => r.is_template);
+      const allSkills = await api.getSkills();
       const detailed = await Promise.all(
-        manusTemplates.map(async (r) => {
-          try { return await api.getRecipe(r.id); } catch { return r; }
+        allSkills.map(async (s) => {
+          try { return await api.getSkill(s.id); } catch { return s; }
         })
       );
-      setTemplates(detailed.filter((r) => r.steps?.[0]?.step_type === 'manus'));
+      setSkills(detailed.filter((s) => s.steps?.[0]?.step_type === 'manus'));
     } catch (err) {
-      console.error('Failed to load manus templates:', err);
+      console.error('Failed to load manus skills:', err);
     }
   };
 
-  const selectTemplate = (template: Recipe) => {
-    const step = template.steps?.[0];
-    setSelectedTemplate(template);
+  const selectSkill = (skill: WorkflowDefinition) => {
+    const step = skill.steps?.[0];
+    setSelectedSkill(skill);
     setSelectedStep(step || null);
     setVariableValues({});
     setError(null);
   };
 
-  const templateVariables = useMemo(() => {
+  const skillVariables = useMemo(() => {
     if (!selectedStep?.prompt_template) return [];
     return extractInputsFromPrompt(selectedStep.prompt_template);
   }, [selectedStep]);
@@ -109,11 +108,11 @@ export function ManusAgentPage() {
     }
   };
 
-  // Submit from template -> create execution with template recipe -> redirect
-  const handleRunTemplate = async () => {
-    if (!selectedTemplate || starting) return;
+  // Submit from skill -> create execution and redirect
+  const handleRunSkill = async () => {
+    if (!selectedSkill || starting) return;
 
-    const missing = templateVariables.filter(
+    const missing = skillVariables.filter(
       (v) => !variableValues[v] || !variableValues[v].trim()
     );
     if (missing.length > 0) {
@@ -124,8 +123,8 @@ export function ManusAgentPage() {
     setStarting(true);
     setError(null);
     try {
-      const result = await api.startExecution(
-        selectedTemplate.id,
+      const result = await api.startSkillExecution(
+        selectedSkill.id,
         variableValues
       );
       if (result.executionId) {
@@ -134,7 +133,7 @@ export function ManusAgentPage() {
         setError(result.error || 'Failed to create execution');
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to start template task');
+      setError(err.message || 'Failed to start skill task');
     } finally {
       setStarting(false);
     }
@@ -166,15 +165,15 @@ export function ManusAgentPage() {
         <div className="flex items-center gap-3">
           {configured && (
             <button
-              onClick={() => setShowTemplates(!showTemplates)}
+              onClick={() => setShowSkills(!showSkills)}
               className={`inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                showTemplates
+                showSkills
                   ? 'bg-purple-100 text-purple-700 border border-purple-300'
                   : 'bg-secondary-100 text-secondary-700 border border-secondary-300 hover:bg-secondary-200'
               }`}
             >
-              <TemplateIcon className="w-4 h-4 mr-1.5" />
-              {t('manusTemplate.templates')}
+              <SkillIcon className="w-4 h-4 mr-1.5" />
+              Skills
             </button>
           )}
           <StatusBadge configured={configured} t={t} />
@@ -184,33 +183,33 @@ export function ManusAgentPage() {
       {/* Main content */}
       {configured ? (
         <div className="flex-1 min-h-0 flex gap-4">
-          {/* Template Sidebar */}
-          {showTemplates && (
+          {/* Skill Sidebar */}
+          {showSkills && (
             <div className="w-80 flex-shrink-0 flex flex-col border border-secondary-200 rounded-lg bg-white overflow-hidden">
               <div className="px-4 py-3 border-b border-secondary-200 bg-secondary-50">
-                <h3 className="font-semibold text-secondary-900 text-sm">{t('manusTemplate.savedTemplates')}</h3>
+                <h3 className="font-semibold text-secondary-900 text-sm">Saved Skills</h3>
               </div>
               <div className="flex-1 overflow-y-auto">
-                {templates.length === 0 ? (
+                {skills.length === 0 ? (
                   <div className="p-4 text-center text-secondary-500 text-sm">
-                    <p>{t('manusTemplate.noTemplates')}</p>
-                    <p className="mt-1 text-xs">{t('manusTemplate.createHint')}</p>
+                    <p>No Manus skills yet</p>
+                    <p className="mt-1 text-xs">Create a skill with a Manus step to use it here.</p>
                   </div>
                 ) : (
                   <div className="divide-y divide-secondary-100">
-                    {templates.map((tmpl) => (
+                    {skills.map((skill) => (
                       <button
-                        key={tmpl.id}
-                        onClick={() => selectTemplate(tmpl)}
+                        key={skill.id}
+                        onClick={() => selectSkill(skill)}
                         className={`w-full text-left px-4 py-3 transition-colors ${
-                          selectedTemplate?.id === tmpl.id
+                          selectedSkill?.id === skill.id
                             ? 'bg-purple-50 border-l-2 border-purple-500'
                             : 'hover:bg-secondary-50'
                         }`}
                       >
-                        <div className="font-medium text-sm text-secondary-900">{tmpl.name}</div>
-                        {tmpl.description && (
-                          <div className="text-xs text-secondary-500 mt-0.5 line-clamp-2">{tmpl.description}</div>
+                        <div className="font-medium text-sm text-secondary-900">{skill.name}</div>
+                        {skill.description && (
+                          <div className="text-xs text-secondary-500 mt-0.5 line-clamp-2">{skill.description}</div>
                         )}
                       </button>
                     ))}
@@ -219,13 +218,13 @@ export function ManusAgentPage() {
               </div>
 
               {/* Variable Form */}
-              {selectedTemplate && selectedStep && (
+              {selectedSkill && selectedStep && (
                 <div className="border-t border-secondary-200 bg-secondary-50 p-4 space-y-3 max-h-[50%] overflow-y-auto">
                   <h4 className="font-medium text-sm text-secondary-900">
-                    {selectedTemplate.name}
+                    {selectedSkill.name}
                   </h4>
-                  {templateVariables.length > 0 ? (
-                    templateVariables.map((varName) => {
+                  {skillVariables.length > 0 ? (
+                    skillVariables.map((varName) => {
                       const config = getInputConfig(varName);
                       return (
                         <div key={varName}>
@@ -268,7 +267,7 @@ export function ManusAgentPage() {
                   )}
 
                   <button
-                    onClick={handleRunTemplate}
+                    onClick={handleRunSkill}
                     disabled={starting}
                     className="w-full px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                   >
@@ -280,7 +279,7 @@ export function ManusAgentPage() {
                     ) : (
                       <>
                         <PlayIcon className="w-4 h-4" />
-                        {t('manusTemplate.runWithTemplate')}
+                        Run Skill
                       </>
                     )}
                   </button>
@@ -314,7 +313,7 @@ export function ManusAgentPage() {
                 className="w-full px-4 py-3 text-sm border border-secondary-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none disabled:bg-secondary-50"
               />
 
-              {error && !selectedTemplate && (
+              {error && !selectedSkill && (
                 <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
               )}
 
@@ -367,7 +366,7 @@ function StatusBadge({ configured, t }: { configured: boolean; t: (key: any) => 
   );
 }
 
-function TemplateIcon({ className }: { className?: string }) {
+function SkillIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />

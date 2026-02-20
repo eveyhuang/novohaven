@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Recipe, RecipeStep, AIModel, InputType, InputTypeConfig, TemplateInputConfig, GeneratedImage, StepType } from '../../types';
+import { AIModel, InputType, InputTypeConfig, TemplateInputConfig, GeneratedImage, StepType } from '../../types';
 import api, { ExecutorInfo } from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, DynamicInput } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
@@ -43,7 +43,7 @@ const DEFAULT_INPUT_CONFIG: InputTypeConfig = {
   description: '',
 };
 
-export function TemplateEditor() {
+export function SkillEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t } = useLanguage();
@@ -108,7 +108,7 @@ export function TemplateEditor() {
     loadModels();
     loadExecutors();
     if (!isNew && id) {
-      loadTemplate(parseInt(id));
+      loadSkill(parseInt(id));
     }
   }, [id, isNew]);
 
@@ -130,14 +130,14 @@ export function TemplateEditor() {
     }
   };
 
-  const loadTemplate = async (templateId: number) => {
+  const loadSkill = async (skillId: number) => {
     setIsLoading(true);
     try {
-      const data = await api.getRecipe(templateId);
+      const data = await api.getSkill(skillId);
       const step = data.steps?.[0];
-      console.log('DEBUG TemplateEditor - Full API response:', data);
-      console.log('DEBUG TemplateEditor - First step:', step);
-      console.log('DEBUG TemplateEditor - step_type value:', step?.step_type);
+      console.log('DEBUG SkillEditor - Full API response:', data);
+      console.log('DEBUG SkillEditor - First step:', step);
+      console.log('DEBUG SkillEditor - step_type value:', step?.step_type);
       setTemplate({
         name: data.name,
         description: data.description || '',
@@ -332,7 +332,7 @@ export function TemplateEditor() {
 
     // Non-AI templates can't be tested in the same way
     if (template.step_type !== 'ai') {
-      setTestError('Only AI templates can be tested directly. Please run the template in a workflow to test.');
+      setTestError('Only AI skills can be tested directly. Please run the skill in a workflow to test.');
       return;
     }
 
@@ -464,13 +464,13 @@ export function TemplateEditor() {
     setRunError(null);
 
     try {
-      const recipeId = parseInt(id);
-      const result = await api.startExecution(recipeId, processedInputs);
-      console.log('[TemplateEditor] Execution started, navigating to:', `/executions/${result.executionId}`);
+      const skillId = parseInt(id);
+      const result = await api.startSkillExecution(skillId, processedInputs);
+      console.log('[SkillEditor] Execution started, navigating to:', `/executions/${result.executionId}`);
       setShowRunPanel(false);
       navigate(`/executions/${result.executionId}`);
     } catch (err: any) {
-      console.error('[TemplateEditor] Execution failed:', err);
+      console.error('[SkillEditor] Execution failed:', err);
       setRunError(err.message);
       setIsRunStarting(false);
     }
@@ -512,19 +512,17 @@ export function TemplateEditor() {
       }
 
       if (isNew) {
-        await api.createRecipe({
+        await api.createSkill({
           name: template.name,
           description: template.description,
           steps: [step],
-          is_template: true,
         });
         navigate('/');
       } else if (id) {
-        await api.updateRecipe(parseInt(id), {
+        await api.updateSkill(parseInt(id), {
           name: template.name,
           description: template.description,
           steps: [step],
-          is_template: true,
         });
         navigate('/');
       }
@@ -538,7 +536,7 @@ export function TemplateEditor() {
   const handleDelete = async () => {
     if (!id || !window.confirm(t('confirmDeleteTemplate'))) return;
     try {
-      await api.deleteRecipe(parseInt(id));
+      await api.deleteSkill(parseInt(id));
       navigate('/');
     } catch (err: any) {
       setError(err.message);

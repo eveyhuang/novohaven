@@ -15,7 +15,9 @@ export interface GeneratedStep {
   prompt_template: string;
   output_format: 'text' | 'json' | 'markdown' | 'image';
   executor_config?: Record<string, any>;
-  // Template sourcing
+  // Skill sourcing
+  from_skill_id?: number;
+  // Backward compatibility
   from_template_id?: number;
   from_step_order?: number;
   override_fields?: string[];  // which fields the AI explicitly changed
@@ -32,7 +34,9 @@ export interface AssistantResponse {
   message: string;
   workflow?: GeneratedWorkflow;
   suggestions?: string[];
-  templateRequest?: number[];  // template IDs the AI wants details for
+  skillRequest?: number[];  // skill IDs the AI wants details for
+  // Backward compatibility
+  templateRequest?: number[];
 }
 
 // Preferred models for the assistant (in order of preference)
@@ -61,47 +65,51 @@ function selectAssistantModel(): string {
 }
 
 async function buildSystemPrompt(userId: number): Promise<string> {
-  // Gather available templates
-  const { queries } = await import('../models/database');
-  const allRecipes = queries.getRecipesByUser(userId) as any[];
-  const templates = allRecipes.filter((r: any) => r.is_template);
+  // Gather available skills
+  const { getDatabase } = await import('../models/database');
+  const db = getDatabase();
+  const skills = db.prepare(
+    'SELECT id, name, description FROM skills WHERE created_by = ? ORDER BY updated_at DESC'
+  ).all(userId) as Array<{ id: number; name: string; description?: string | null }>;
 
-  let templateSection = '';
-  if (templates.length > 0) {
-    const templateSummaries = [];
-    for (const t of templates) {
-      const steps = queries.getStepsByRecipeId(t.id) as any[];
-      const stepTypes = steps.map((s: any) => s.step_type);
-      templateSummaries.push(`- ID ${t.id}: "${t.name}" — ${t.description || 'No description'}. Steps: [${stepTypes.join(', ')}]`);
+  let skillSection = '';
+  if (skills.length > 0) {
+    const skillSummaries: string[] = [];
+    for (const skill of skills) {
+      const steps = db.prepare(
+        "SELECT step_type FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' ORDER BY step_order"
+      ).all(skill.id) as Array<{ step_type: string }>;
+      const stepTypes = steps.map((s) => s.step_type);
+      skillSummaries.push(`- ID ${skill.id}: "${skill.name}" — ${skill.description || 'No description'}. Steps: [${stepTypes.join(', ')}]`);
     }
 
-    templateSection = `
-## Available Templates
+    skillSection = `
+## Available Skills
 
-You have access to pre-built templates. When a user's request matches or partially matches a template, reference it instead of generating from scratch.
+You have access to pre-built skills. When a user's request matches or partially matches a skill, reference it instead of generating from scratch.
 
-Templates:
-${templateSummaries.join('\n')}
+Skills:
+${skillSummaries.join('\n')}
 
-### When to use templates:
+### When to use skills:
 - **Exact match**: Recommend as-is, ask if user wants to run it directly
 - **Partial match**: Suggest customizing (add/remove/modify steps)
-- **Building blocks**: Pull specific steps from multiple templates, combine with new ones
+- **Building blocks**: Pull specific steps from multiple skills, combine with new ones
 
-### How to get template details:
-If you need the full configuration of a template before generating the workflow, include a \`\`\`template-request block with template IDs as a JSON array. Example:
-\`\`\`template-request
+### How to get skill details:
+If you need the full configuration of a skill before generating the workflow, include a \`\`\`skill-request block with skill IDs as a JSON array. Example:
+\`\`\`skill-request
 [3, 4]
 \`\`\`
 
-### How to use a template step:
-In your workflow-json, mark the step with "from_template_id" and "from_step_order".
+### How to use a skill step:
+In your workflow-json, mark the step with "from_skill_id" and "from_step_order".
 You can override specific fields by listing them in "override_fields".
 Example:
 {
   "step_name": "Custom Name",
   "step_type": "scraping",
-  "from_template_id": 3,
+  "from_skill_id": 3,
   "from_step_order": 1,
   "override_fields": ["step_name"]
 }
@@ -152,15 +160,15 @@ Workflows support variables for data flow between steps:
 - **Step outputs**: \`{{step_N_output}}\` — references the output of step N (1-indexed)
 - **Company standards**: \`{{company_voice}}\`, \`{{company_platform}}\`, \`{{company_image}}\` — auto-resolved from the user's saved standards
 
-${templateSection}
+${skillSection}
 ## Instructions
 
 1. **Respond in the user's language.** If they write in Chinese, respond in Chinese. If English, respond in English.
 
-2. **ALWAYS check templates first — this is MANDATORY.** Before generating ANY step from scratch, compare the user's request against the Available Templates above. Templates contain carefully configured settings (API endpoints, scripts, model configs) that you CANNOT reliably reproduce.
-   - If ANY template is relevant (even partially), you MUST emit a \`\`\`template-request block with those template IDs and STOP. Do NOT generate a workflow-json in the same response. Wait for the template details to be provided, then use \`from_template_id\` to reference those steps.
-   - Only generate steps from scratch when NO template covers that specific functionality.
-   - NEVER regenerate what a template already provides — always reference it with \`from_template_id\`.
+2. **ALWAYS check skills first — this is MANDATORY.** Before generating ANY step from scratch, compare the user's request against the Available Skills above. Skills contain carefully configured settings (API endpoints, scripts, model configs) that you CANNOT reliably reproduce.
+   - If ANY skill is relevant (even partially), you MUST emit a \`\`\`skill-request block with those skill IDs and STOP. Do NOT generate a workflow-json in the same response. Wait for the skill details to be provided, then use \`from_skill_id\` to reference those steps.
+   - Only generate steps from scratch when NO skill covers that specific functionality.
+   - NEVER regenerate what a skill already provides — always reference it with \`from_skill_id\`.
 
 3. **When the user describes a goal**, analyze it and either:
    - Ask clarifying questions if the goal is too vague
@@ -228,7 +236,8 @@ function tryParseWorkflow(jsonStr: string): GeneratedWorkflow | null {
         prompt_template: step.prompt_template || '',
         output_format: step.output_format || 'text',
         executor_config: step.executor_config,
-        from_template_id: step.from_template_id,
+        from_skill_id: step.from_skill_id || step.from_template_id,
+        from_template_id: step.from_template_id || step.from_skill_id,
         from_step_order: step.from_step_order,
         override_fields: step.override_fields,
       }));
@@ -280,17 +289,18 @@ function parseAssistantResponse(content: string): AssistantResponse {
     }
   }
 
-  // Extract template-request block if present
-  const templateMatch = content.match(/```template-request\s*\n?([\s\S]*?)\n?\s*```/);
-  if (templateMatch) {
+  // Extract skill-request block if present
+  const skillMatch = content.match(/```skill-request\s*\n?([\s\S]*?)\n?\s*```/);
+  if (skillMatch) {
     try {
-      const ids = JSON.parse(templateMatch[1]);
+      const ids = JSON.parse(skillMatch[1]);
       if (Array.isArray(ids) && ids.every((id: any) => typeof id === 'number')) {
+        result.skillRequest = ids;
         result.templateRequest = ids;
-        result.message = result.message.replace(/```template-request\s*\n?[\s\S]*?\n?\s*```/, '').trim();
+        result.message = result.message.replace(/```skill-request\s*\n?[\s\S]*?\n?\s*```/, '').trim();
       }
     } catch (e) {
-      // Invalid JSON in template-request block — ignore
+      // Invalid JSON in skill-request block — ignore
     }
   }
 
@@ -351,13 +361,16 @@ export async function generateWorkflow(
 
   const parsed = parseAssistantResponse(response.content);
 
-  // Two-pass: if the AI requested template details, fetch them and do a second call
-  if (parsed.templateRequest && parsed.templateRequest.length > 0) {
-    const { queries } = await import('../models/database');
-    const templateDetails: string[] = [];
+  // Two-pass: if the AI requested skill details, fetch them and do a second call
+  if (parsed.skillRequest && parsed.skillRequest.length > 0) {
+    const { getDatabase } = await import('../models/database');
+    const db = getDatabase();
+    const skillDetails: string[] = [];
 
-    for (const templateId of parsed.templateRequest) {
-      const steps = queries.getStepsByRecipeId(templateId) as any[];
+    for (const skillId of parsed.skillRequest) {
+      const steps = db.prepare(
+        "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' ORDER BY step_order"
+      ).all(skillId) as any[];
       if (steps.length === 0) continue;
 
       const stepDescriptions = steps.map((s: any) => {
@@ -376,17 +389,17 @@ export async function generateWorkflow(
         return details;
       });
 
-      templateDetails.push(`Template ID ${templateId}:\n${JSON.stringify(stepDescriptions, null, 2)}`);
+      skillDetails.push(`Skill ID ${skillId}:\n${JSON.stringify(stepDescriptions, null, 2)}`);
     }
 
-    if (templateDetails.length > 0) {
-      // Inject template details as a follow-up and do a second AI call
+    if (skillDetails.length > 0) {
+      // Inject skill details as a follow-up and do a second AI call
       const followUpMessages: { role: 'user' | 'assistant'; content: string }[] = [
         ...apiMessages,
         { role: 'assistant' as const, content: response.content },
         {
           role: 'user' as const,
-          content: `Here are the full template details you requested:\n\n${templateDetails.join('\n\n')}\n\nReference these steps using from_template_id and from_step_order rather than regenerating the config. Only include fields in override_fields if you explicitly changed them. Now generate the workflow-json.`,
+          content: `Here are the full skill details you requested:\n\n${skillDetails.join('\n\n')}\n\nReference these steps using from_skill_id and from_step_order rather than regenerating the config. Only include fields in override_fields if you explicitly changed them. Now generate the workflow-json.`,
         },
       ];
 
@@ -420,56 +433,61 @@ export async function generateWorkflow(
   return parsed;
 }
 
-export async function saveWorkflowAsRecipe(
+export async function saveWorkflowGraph(
   workflow: GeneratedWorkflow,
   userId: number,
-  isTemplate: boolean = false
-): Promise<{ recipeId: number }> {
-  // Import database queries lazily to avoid circular dependencies
-  const { queries } = await import('../models/database');
+  asSkill: boolean = false
+): Promise<{ entityType: 'skill' | 'workflow'; skillId?: number; workflowId?: number }> {
+  const { getDatabase } = await import('../models/database');
+  const db = getDatabase();
 
-  // Create the recipe (positional args: name, description, createdBy, isTemplate)
-  const result = queries.createRecipe(
+  const parentType: 'skill' | 'workflow' = asSkill ? 'skill' : 'workflow';
+  const parentTable = asSkill ? 'skills' : 'workflows';
+  const parentInsert = db.prepare(
+    `INSERT INTO ${parentTable} (name, description, created_by, tags) VALUES (?, ?, ?, ?)`
+  );
+  const parentResult = parentInsert.run(
     workflow.name,
     workflow.description || null,
     userId,
-    isTemplate
+    JSON.stringify([])
   );
+  const parentId = Number(parentResult.lastInsertRowid);
 
-  const recipeId = result.lastInsertRowid;
+  const getSkillStep = db.prepare(
+    "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' AND step_order = ?"
+  );
+  const insertStep = db.prepare(`
+    INSERT INTO skill_steps (
+      parent_id, parent_type, step_order, step_name, step_type, ai_model, prompt_template, input_config, output_format, model_config, executor_config
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
 
-  // Create steps
   for (let i = 0; i < workflow.steps.length; i++) {
     const step = workflow.steps[i];
 
-    // Hybrid merge: if step references a template, use template's config as base
-    let mergedPrompt = step.prompt_template || null;
+    let mergedPrompt = step.prompt_template || '';
     let mergedAiModel = step.ai_model || null;
     let mergedOutputFormat = step.output_format || 'text';
     let mergedStepType = step.step_type || 'ai';
-    let mergedApiConfig: string | null = null;
-    let mergedExecutorConfig: string | null = step.executor_config ? JSON.stringify(step.executor_config) : null;
-    let mergedModelConfig: string | null = null;
-    let mergedInputConfig: string | null = null;
+    let mergedExecutorConfig: string = step.executor_config ? JSON.stringify(step.executor_config) : '{}';
+    let mergedModelConfig: string = '{}';
+    let mergedInputConfig: string = '{}';
 
-    if (step.from_template_id && step.from_step_order) {
-      const templateSteps = queries.getStepsByRecipeId(step.from_template_id) as any[];
-      const sourceStep = templateSteps.find((s: any) => s.step_order === step.from_step_order);
-
+    const sourceSkillId = step.from_skill_id || step.from_template_id;
+    if (sourceSkillId && step.from_step_order) {
+      const sourceStep = getSkillStep.get(sourceSkillId, step.from_step_order) as any;
       if (sourceStep) {
-        // Start with all values from the template step
-        mergedPrompt = sourceStep.prompt_template;
-        mergedAiModel = sourceStep.ai_model;
+        mergedPrompt = sourceStep.prompt_template || '';
+        mergedAiModel = sourceStep.ai_model || null;
         mergedOutputFormat = sourceStep.output_format || 'text';
         mergedStepType = sourceStep.step_type || 'ai';
-        mergedApiConfig = sourceStep.api_config;
-        mergedExecutorConfig = sourceStep.executor_config;
-        mergedModelConfig = sourceStep.model_config;
-        mergedInputConfig = sourceStep.input_config;
+        mergedExecutorConfig = sourceStep.executor_config || '{}';
+        mergedModelConfig = sourceStep.model_config || '{}';
+        mergedInputConfig = sourceStep.input_config || '{}';
 
-        // Apply AI's overrides only for fields explicitly listed
         const overrides = step.override_fields || [];
-        if (overrides.includes('prompt_template')) mergedPrompt = step.prompt_template || null;
+        if (overrides.includes('prompt_template')) mergedPrompt = step.prompt_template || '';
         if (overrides.includes('ai_model')) mergedAiModel = step.ai_model || null;
         if (overrides.includes('output_format')) mergedOutputFormat = step.output_format || 'text';
         if (overrides.includes('step_type')) mergedStepType = step.step_type || 'ai';
@@ -479,19 +497,11 @@ export async function saveWorkflowAsRecipe(
       }
     }
 
-    // Build input_config from requiredInputs that are referenced in this step
-    // (only if not already sourced from template)
-    if (!mergedInputConfig) {
-      const stepVars = workflow.requiredInputs.filter(input => {
-        if (mergedPrompt && mergedPrompt.includes(`{{${input.name}}}`)) {
-          return true;
-        }
-        if (mergedExecutorConfig && mergedExecutorConfig.includes(`{{${input.name}}}`)) {
-          return true;
-        }
-        if (mergedStepType === 'scraping' && input.type === 'url_list') {
-          return true;
-        }
+    if (!mergedInputConfig || mergedInputConfig === '{}' || mergedInputConfig === '') {
+      const stepVars = workflow.requiredInputs.filter((input) => {
+        if (mergedPrompt.includes(`{{${input.name}}}`)) return true;
+        if (mergedExecutorConfig.includes(`{{${input.name}}}`)) return true;
+        if (mergedStepType === 'scraping' && input.type === 'url_list') return true;
         return false;
       });
 
@@ -502,23 +512,36 @@ export async function saveWorkflowAsRecipe(
               return acc;
             }, {} as Record<string, any>),
           })
-        : null;
+        : '{}';
     }
 
-    queries.createStep(
-      recipeId,
+    insertStep.run(
+      parentId,
+      parentType,
       i + 1,
       step.step_name,
+      mergedStepType,
       mergedAiModel,
       mergedPrompt,
       mergedInputConfig,
       mergedOutputFormat,
       mergedModelConfig,
-      mergedStepType,
-      mergedApiConfig,
       mergedExecutorConfig
     );
   }
 
-  return { recipeId };
+  if (asSkill) {
+    return { entityType: 'skill', skillId: parentId };
+  }
+  return { entityType: 'workflow', workflowId: parentId };
+}
+
+// Backward-compatible alias used by older tests and callers.
+export async function saveWorkflowAsRecipe(
+  workflow: GeneratedWorkflow,
+  userId: number,
+  isTemplate: boolean = false
+): Promise<{ recipeId: number }> {
+  const result = await saveWorkflowGraph(workflow, userId, isTemplate);
+  return { recipeId: Number(result.workflowId || result.skillId || 0) };
 }

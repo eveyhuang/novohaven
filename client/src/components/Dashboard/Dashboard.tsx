@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Recipe, WorkflowExecution } from '../../types';
+import { WorkflowDefinition, WorkflowExecution } from '../../types';
 import api from '../../services/api';
 import { Button, Card, CardBody } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
@@ -9,7 +9,8 @@ import { translateText } from '../../services/translationService';
 export function Dashboard() {
   const navigate = useNavigate();
   const { t } = useLanguage();
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [skills, setSkills] = useState<WorkflowDefinition[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
   const [recentExecutions, setRecentExecutions] = useState<WorkflowExecution[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -28,11 +29,13 @@ export function Dashboard() {
     setIsLoading(true);
     setError(null);
     try {
-      const [recipesData, executionsData] = await Promise.all([
-        api.getRecipes(),
+      const [skillsData, workflowsData, executionsData] = await Promise.all([
+        api.getSkills(),
+        api.getWorkflows(),
         api.getExecutions(),
       ]);
-      setRecipes(recipesData);
+      setSkills(skillsData);
+      setWorkflows(workflowsData);
       setRecentExecutions(executionsData.slice(0, 5));
 
       // Load agent health data (non-blocking)
@@ -59,20 +62,30 @@ export function Dashboard() {
     }
   };
 
-  const handleCloneRecipe = async (recipeId: number) => {
+  const handleCloneWorkflow = async (workflowId: number) => {
     try {
-      const cloned = await api.cloneRecipe(recipeId);
+      const cloned = await api.cloneWorkflow(workflowId);
       navigate(`/workflows/${cloned.id}`);
     } catch (err: any) {
       setError(err.message);
     }
   };
 
-  const handleDeleteRecipe = async (recipeId: number) => {
+  const handleDeleteWorkflow = async (workflowId: number) => {
     if (!window.confirm('Are you sure you want to delete this?')) return;
     try {
-      await api.deleteRecipe(recipeId);
-      setRecipes(recipes.filter(r => r.id !== recipeId));
+      await api.deleteWorkflow(workflowId);
+      setWorkflows(workflows.filter(w => w.id !== workflowId));
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleDeleteSkill = async (skillId: number) => {
+    if (!window.confirm('Are you sure you want to delete this?')) return;
+    try {
+      await api.deleteSkill(skillId);
+      setSkills(skills.filter(s => s.id !== skillId));
     } catch (err: any) {
       setError(err.message);
     }
@@ -85,9 +98,6 @@ export function Dashboard() {
       </div>
     );
   }
-
-  const templateRecipes = recipes.filter(r => r.is_template);
-  const userRecipes = recipes.filter(r => !r.is_template);
 
   return (
     <div className="space-y-8">
@@ -160,7 +170,7 @@ export function Dashboard() {
             Create New Skill
           </Button>
         </div>
-        {templateRecipes.length === 0 ? (
+        {skills.length === 0 ? (
           <Card>
             <CardBody className="text-center py-8">
               <p className="text-secondary-600 mb-4">
@@ -173,12 +183,12 @@ export function Dashboard() {
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {templateRecipes.map((template) => (
-              <TemplateCard
-                key={template.id}
-                template={template}
-                onEdit={() => navigate(`/skills/${template.id}`)}
-                onDelete={() => handleDeleteRecipe(template.id)}
+            {skills.map((skill) => (
+              <SkillCard
+                key={skill.id}
+                skill={skill}
+                onEdit={() => navigate(`/skills/${skill.id}`)}
+                onDelete={() => handleDeleteSkill(skill.id)}
                 t={t}
               />
             ))}
@@ -199,7 +209,7 @@ export function Dashboard() {
             Create New Workflow
           </Button>
         </div>
-        {userRecipes.length === 0 ? (
+        {workflows.length === 0 ? (
           <Card>
             <CardBody className="text-center py-12">
               <p className="text-secondary-600 mb-4">
@@ -212,14 +222,14 @@ export function Dashboard() {
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {userRecipes.map((recipe) => (
-              <RecipeCard
-                key={recipe.id}
-                recipe={recipe}
-                onRun={() => navigate(`/workflows/${recipe.id}/run`)}
-                onEdit={() => navigate(`/workflows/${recipe.id}`)}
-                onClone={() => handleCloneRecipe(recipe.id)}
-                onDelete={() => handleDeleteRecipe(recipe.id)}
+            {workflows.map((workflow) => (
+              <WorkflowCard
+                key={workflow.id}
+                workflow={workflow}
+                onRun={() => navigate(`/workflows/${workflow.id}/run`)}
+                onEdit={() => navigate(`/workflows/${workflow.id}`)}
+                onClone={() => handleCloneWorkflow(workflow.id)}
+                onDelete={() => handleDeleteWorkflow(workflow.id)}
                 t={t}
               />
             ))}
@@ -264,8 +274,8 @@ export function Dashboard() {
   );
 }
 
-interface RecipeCardProps {
-  recipe: Recipe;
+interface WorkflowCardProps {
+  workflow: WorkflowDefinition;
   onRun?: () => void;
   onEdit?: () => void;
   onClone?: () => void;
@@ -273,22 +283,22 @@ interface RecipeCardProps {
   t: (key: any) => string;
 }
 
-function RecipeCard({ recipe, onRun, onEdit, onClone, onDelete, t }: RecipeCardProps) {
+function WorkflowCard({ workflow, onRun, onEdit, onClone, onDelete, t }: WorkflowCardProps) {
   const { language } = useLanguage();
-  const [translatedName, setTranslatedName] = useState(recipe.name);
-  const [translatedDesc, setTranslatedDesc] = useState(recipe.description || '');
+  const [translatedName, setTranslatedName] = useState(workflow.name);
+  const [translatedDesc, setTranslatedDesc] = useState(workflow.description || '');
 
   useEffect(() => {
     if (language === 'en') {
-      setTranslatedName(recipe.name);
-      setTranslatedDesc(recipe.description || '');
+      setTranslatedName(workflow.name);
+      setTranslatedDesc(workflow.description || '');
     } else {
-      translateText(recipe.name, 'en', language).then(setTranslatedName);
-      if (recipe.description) {
-        translateText(recipe.description, 'en', language).then(setTranslatedDesc);
+      translateText(workflow.name, 'en', language).then(setTranslatedName);
+      if (workflow.description) {
+        translateText(workflow.description, 'en', language).then(setTranslatedDesc);
       }
     }
-  }, [recipe.name, recipe.description, language]);
+  }, [workflow.name, workflow.description, language]);
 
   return (
     <Card hoverable className="flex flex-col">
@@ -296,7 +306,7 @@ function RecipeCard({ recipe, onRun, onEdit, onClone, onDelete, t }: RecipeCardP
         <div className="flex items-start justify-between">
           <h3 className="font-semibold text-secondary-900">{translatedName}</h3>
           <span className="text-sm text-secondary-500">
-            {recipe.step_count || 0} {t('templates')}
+            {workflow.step_count || 0} steps
           </span>
         </div>
         <p className="text-sm text-secondary-600 mt-2 line-clamp-2">
@@ -331,50 +341,50 @@ function RecipeCard({ recipe, onRun, onEdit, onClone, onDelete, t }: RecipeCardP
   );
 }
 
-interface TemplateCardProps {
-  template: Recipe;
+interface SkillCardProps {
+  skill: WorkflowDefinition;
   onEdit: () => void;
   onDelete: () => void;
   t: (key: any) => string;
 }
 
-function TemplateCard({ template, onEdit, onDelete, t }: TemplateCardProps) {
+function SkillCard({ skill, onEdit, onDelete, t }: SkillCardProps) {
   const { language } = useLanguage();
-  const [translatedName, setTranslatedName] = useState(template.name);
-  const [translatedDesc, setTranslatedDesc] = useState(template.description || '');
-  const [templateType, setTemplateType] = useState<'AI' | 'API'>('AI');
+  const [translatedName, setTranslatedName] = useState(skill.name);
+  const [translatedDesc, setTranslatedDesc] = useState(skill.description || '');
+  const [skillType, setSkillType] = useState<'AI' | 'API'>('AI');
 
   useEffect(() => {
     if (language === 'en') {
-      setTranslatedName(template.name);
-      setTranslatedDesc(template.description || '');
+      setTranslatedName(skill.name);
+      setTranslatedDesc(skill.description || '');
     } else {
-      translateText(template.name, 'en', language).then(setTranslatedName);
-      if (template.description) {
-        translateText(template.description, 'en', language).then(setTranslatedDesc);
+      translateText(skill.name, 'en', language).then(setTranslatedName);
+      if (skill.description) {
+        translateText(skill.description, 'en', language).then(setTranslatedDesc);
       }
     }
-  }, [template.name, template.description, language]);
+  }, [skill.name, skill.description, language]);
 
-  // Determine template type: "API" if any step is scraping, otherwise "AI"
+  // Determine skill type: "API" if any step is scraping, otherwise "AI"
   useEffect(() => {
-    if (template.steps && template.steps.length > 0) {
+    if (skill.steps && skill.steps.length > 0) {
       // Steps are available, check step types
-      const hasScrapingStep = template.steps.some(step => step.step_type === 'scraping');
-      setTemplateType(hasScrapingStep ? 'API' : 'AI');
+      const hasScrapingStep = skill.steps.some(step => step.step_type === 'scraping');
+      setSkillType(hasScrapingStep ? 'API' : 'AI');
     } else {
-      // Steps not loaded, fetch full recipe to determine type
-      api.getRecipe(template.id).then(fullRecipe => {
-        if (fullRecipe.steps && fullRecipe.steps.length > 0) {
-          const hasScrapingStep = fullRecipe.steps.some(step => step.step_type === 'scraping');
-          setTemplateType(hasScrapingStep ? 'API' : 'AI');
+      // Steps not loaded, fetch full skill to determine type
+      api.getSkill(skill.id).then(fullSkill => {
+        if (fullSkill.steps && fullSkill.steps.length > 0) {
+          const hasScrapingStep = fullSkill.steps.some((step: any) => step.step_type === 'scraping');
+          setSkillType(hasScrapingStep ? 'API' : 'AI');
         }
       }).catch(() => {
         // If fetch fails, default to 'AI'
-        setTemplateType('AI');
+        setSkillType('AI');
       });
     }
-  }, [template.id, template.steps]);
+  }, [skill.id, skill.steps]);
 
   return (
     <Card hoverable className="flex flex-col" onClick={onEdit}>
@@ -382,7 +392,7 @@ function TemplateCard({ template, onEdit, onDelete, t }: TemplateCardProps) {
         <div className="flex items-start justify-between">
           <h3 className="font-semibold text-secondary-900">{translatedName}</h3>
           <span className="inline-block px-2 py-0.5 text-xs font-medium bg-primary-100 text-primary-700 rounded">
-            {templateType}
+            {skillType}
           </span>
         </div>
         <p className="text-sm text-secondary-600 mt-2 line-clamp-2">
@@ -411,10 +421,10 @@ interface ExecutionRowProps {
 
 function ExecutionRow({ execution, onClick, t }: ExecutionRowProps) {
   const { language } = useLanguage();
-  const [translatedName, setTranslatedName] = useState(execution.recipe_name || `Recipe #${execution.recipe_id}`);
+  const [translatedName, setTranslatedName] = useState(execution.recipe_name || `Workflow #${execution.recipe_id}`);
 
   useEffect(() => {
-    const recipeName = execution.recipe_name || `Recipe #${execution.recipe_id}`;
+    const recipeName = execution.recipe_name || `Workflow #${execution.recipe_id}`;
     if (language === 'en') {
       setTranslatedName(recipeName);
     } else {

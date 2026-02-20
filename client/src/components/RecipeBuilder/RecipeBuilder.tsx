@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Recipe, RecipeStep, AIModel } from '../../types';
+import { WorkflowDefinition, WorkflowStep, AIModel } from '../../types';
 import api, { ExecutorInfo } from '../../services/api';
 import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, ExecutorConfigFields } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
@@ -25,7 +25,7 @@ function extractInputsFromPrompt(promptTemplate: string | null | undefined): str
 }
 
 // Extract user input variables from all steps
-function extractRequiredInputs(steps: RecipeStep[]): string[] {
+function extractRequiredInputs(steps: WorkflowStep[]): string[] {
   const allVariables = new Set<string>();
 
   steps.forEach((step) => {
@@ -46,15 +46,14 @@ export function RecipeBuilder() {
   // Check if this is a new recipe: either no id param or id is 'new'
   const isNew = !id || id === 'new';
 
-  const [recipe, setRecipe] = useState<Partial<Recipe>>({
+  const [recipe, setRecipe] = useState<Partial<WorkflowDefinition>>({
     name: '',
     description: '',
     steps: [],
-    is_template: false,
   });
   const [models, setModels] = useState<AIModel[]>([]);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
-  const [templateRecipes, setTemplateRecipes] = useState<Recipe[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<WorkflowDefinition[]>([]);
   const [isLoading, setIsLoading] = useState(!isNew);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,15 +63,15 @@ export function RecipeBuilder() {
 
   // Compute required inputs from all steps
   const requiredInputs = useMemo(() => {
-    return extractRequiredInputs((recipe.steps || []) as RecipeStep[]);
+    return extractRequiredInputs((recipe.steps || []) as WorkflowStep[]);
   }, [recipe.steps]);
 
   useEffect(() => {
     loadModels();
     loadExecutors();
-    loadTemplates();
+    loadSkills();
     if (!isNew && id) {
-      loadRecipe(parseInt(id));
+      loadWorkflow(parseInt(id));
     }
   }, [id, isNew]);
 
@@ -98,27 +97,26 @@ export function RecipeBuilder() {
     return executors.find(e => e.type === (stepType || 'ai'));
   };
 
-  const loadTemplates = async () => {
+  const loadSkills = async () => {
     try {
-      const recipes = await api.getRecipes();
-      const templates = recipes.filter(r => r.is_template);
-      // Load steps for each template
-      const templatesWithSteps = await Promise.all(
-        templates.map(async (template) => {
-          const fullRecipe = await api.getRecipe(template.id);
-          return fullRecipe;
+      const skills = await api.getSkills();
+      // Load steps for each skill
+      const skillsWithSteps = await Promise.all(
+        skills.map(async (skill) => {
+          const fullSkill = await api.getSkill(skill.id);
+          return fullSkill;
         })
       );
-      setTemplateRecipes(templatesWithSteps);
+      setAvailableSkills(skillsWithSteps);
     } catch (err: any) {
-      console.error('Failed to load templates:', err);
+      console.error('Failed to load skills:', err);
     }
   };
 
-  const loadRecipe = async (recipeId: number) => {
+  const loadWorkflow = async (workflowId: number) => {
     setIsLoading(true);
     try {
-      const data = await api.getRecipe(recipeId);
+      const data = await api.getWorkflow(workflowId);
       setRecipe(data);
       if (data.steps && data.steps.length > 0) {
         setSelectedStepIndex(0);
@@ -145,19 +143,17 @@ export function RecipeBuilder() {
       }));
 
       if (isNew) {
-        const created = await api.createRecipe({
+        const created = await api.createWorkflow({
           name: recipe.name,
           description: recipe.description,
           steps,
-          is_template: false,
         });
-        navigate(`/recipes/${created.id}`);
+        navigate(`/workflows/${created.id}`);
       } else if (id) {
-        await api.updateRecipe(parseInt(id), {
+        await api.updateWorkflow(parseInt(id), {
           name: recipe.name,
           description: recipe.description,
           steps,
-          is_template: recipe.is_template || false,
         });
         addNotification({ type: 'success', title: t('workflowSaved') });
       }
@@ -173,7 +169,7 @@ export function RecipeBuilder() {
   const handleSaveAndRun = async () => {
     const saved = await handleSave();
     if (saved && !isNew && id) {
-      navigate(`/recipes/${id}/run`);
+      navigate(`/workflows/${id}/run`);
     }
   };
 
@@ -181,9 +177,9 @@ export function RecipeBuilder() {
     setShowStepSelector(true);
   };
 
-  const addTemplateStep = (templateStep: RecipeStep) => {
-    const newStep: RecipeStep = {
-      ...templateStep,
+  const addSkillStep = (skillStep: WorkflowStep) => {
+    const newStep: WorkflowStep = {
+      ...skillStep,
       id: undefined,
       recipe_id: undefined,
       step_order: (recipe.steps?.length || 0) + 1,
@@ -196,7 +192,7 @@ export function RecipeBuilder() {
     setShowStepSelector(false);
   };
 
-  const updateStep = (index: number, updates: Partial<RecipeStep>) => {
+  const updateStep = (index: number, updates: Partial<WorkflowStep>) => {
     const steps = [...(recipe.steps || [])];
     steps[index] = { ...steps[index], ...updates };
     setRecipe({ ...recipe, steps });
@@ -585,38 +581,38 @@ export function RecipeBuilder() {
       <Modal
         isOpen={showStepSelector}
         onClose={() => setShowStepSelector(false)}
-        title={t('selectTemplateStep')}
+        title="Select Skill Step"
         size="lg"
       >
-        <p className="text-sm text-secondary-600 mb-4">{t('selectTemplateDesc')}</p>
+        <p className="text-sm text-secondary-600 mb-4">Choose a skill step to add into this workflow.</p>
         <div className="space-y-2 max-h-96 overflow-y-auto">
-          {templateRecipes.length === 0 ? (
+          {availableSkills.length === 0 ? (
             <p className="text-secondary-600 text-center py-4">
-              {t('noTemplatesAvailable')}
+              No skills available. Create a skill first.
             </p>
           ) : (
-            templateRecipes.map((template) => {
-              const step = template.steps?.[0];
+            availableSkills.map((skill) => {
+              const step = skill.steps?.[0];
               if (!step) return null;
               const execInfo = getExecutorInfo(step.step_type);
               return (
                 <div
-                  key={template.id}
+                  key={skill.id}
                   className="border border-secondary-200 rounded-lg p-4 hover:bg-secondary-50 cursor-pointer flex items-center justify-between"
-                  onClick={() => addTemplateStep(step)}
+                  onClick={() => addSkillStep(step)}
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-lg">{execInfo?.icon || '🤖'}</span>
-                      <h3 className="font-semibold text-secondary-900">{template.name}</h3>
+                      <h3 className="font-semibold text-secondary-900">{skill.name}</h3>
                       <span className="text-xs px-2 py-0.5 rounded bg-secondary-100 text-secondary-600">
                         {step.step_type === 'ai'
                           ? models.find(m => m.id === step.ai_model)?.name || step.ai_model
                           : execInfo?.displayName || step.step_type}
                       </span>
                     </div>
-                    {template.description && (
-                      <p className="text-sm text-secondary-600 mt-1">{template.description}</p>
+                    {skill.description && (
+                      <p className="text-sm text-secondary-600 mt-1">{skill.description}</p>
                     )}
                   </div>
                   <Button size="sm" variant="secondary">

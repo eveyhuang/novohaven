@@ -1,7 +1,5 @@
 import {
-  Recipe,
-  CreateRecipeRequest,
-  UpdateRecipeRequest,
+  WorkflowDefinition,
   CompanyStandard,
   CreateStandardRequest,
   WorkflowExecution,
@@ -90,42 +88,6 @@ class ApiClient {
     return this.request<{ user: User }>('/auth/me');
   }
 
-  // Recipe endpoints
-  async getRecipes(): Promise<Recipe[]> {
-    return this.request<Recipe[]>('/recipes');
-  }
-
-  async getRecipe(id: number): Promise<Recipe> {
-    return this.request<Recipe>(`/recipes/${id}`);
-  }
-
-  async createRecipe(data: CreateRecipeRequest): Promise<Recipe> {
-    return this.request<Recipe>('/recipes', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async updateRecipe(id: number, data: UpdateRecipeRequest): Promise<Recipe> {
-    return this.request<Recipe>(`/recipes/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async deleteRecipe(id: number): Promise<{ success: boolean }> {
-    return this.request<{ success: boolean }>(`/recipes/${id}`, {
-      method: 'DELETE',
-    });
-  }
-
-  async cloneRecipe(id: number, name?: string): Promise<Recipe> {
-    return this.request<Recipe>(`/recipes/${id}/clone`, {
-      method: 'POST',
-      body: JSON.stringify({ name }),
-    });
-  }
-
   // Execution endpoints
   async getExecutions(): Promise<WorkflowExecution[]> {
     return this.request<WorkflowExecution[]>('/executions');
@@ -150,15 +112,30 @@ class ApiClient {
     });
   }
 
-  async startExecution(
-    recipeId: number,
+  async startSkillExecution(
+    skillId: number,
     inputData: Record<string, any>,
     modifiedSteps?: any[]
   ): Promise<ExecutionResult> {
     return this.request<ExecutionResult>('/executions', {
       method: 'POST',
       body: JSON.stringify({
-        recipe_id: recipeId,
+        skill_id: skillId,
+        input_data: inputData,
+        steps: modifiedSteps,
+      }),
+    });
+  }
+
+  async startWorkflowExecution(
+    workflowId: number,
+    inputData: Record<string, any>,
+    modifiedSteps?: any[]
+  ): Promise<ExecutionResult> {
+    return this.request<ExecutionResult>('/executions', {
+      method: 'POST',
+      body: JSON.stringify({
+        workflow_id: workflowId,
         input_data: inputData,
         steps: modifiedSteps,
       }),
@@ -341,13 +318,13 @@ class ApiClient {
     });
   }
 
-  async startManusTaskFromTemplate(
-    templateId: number,
+  async startManusTaskFromSkill(
+    skillId: number,
     variables: Record<string, string>
   ): Promise<{ taskId: string; compiledPrompt: string }> {
-    return this.request<{ taskId: string; compiledPrompt: string }>('/manus/tasks/from-template', {
+    return this.request<{ taskId: string; compiledPrompt: string }>('/manus/tasks/from-skill', {
       method: 'POST',
-      body: JSON.stringify({ templateId, variables }),
+      body: JSON.stringify({ skillId, variables }),
     });
   }
 
@@ -407,19 +384,19 @@ class ApiClient {
   }
 
   // Skill endpoints (new architecture)
-  async getSkills(): Promise<any[]> {
+  async getSkills(): Promise<WorkflowDefinition[]> {
     return this.request('/skills');
   }
 
-  async getSkill(id: number): Promise<any> {
+  async getSkill(id: number): Promise<WorkflowDefinition> {
     return this.request(`/skills/${id}`);
   }
 
-  async createSkill(data: any): Promise<any> {
+  async createSkill(data: any): Promise<WorkflowDefinition> {
     return this.request('/skills', { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async updateSkill(id: number, data: any): Promise<any> {
+  async updateSkill(id: number, data: any): Promise<WorkflowDefinition> {
     return this.request(`/skills/${id}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
@@ -427,25 +404,33 @@ class ApiClient {
     return this.request(`/skills/${id}`, { method: 'DELETE' });
   }
 
+  async cloneSkill(id: number, name?: string): Promise<WorkflowDefinition> {
+    return this.request(`/skills/${id}/clone`, { method: 'POST', body: JSON.stringify({ name }) });
+  }
+
   // Workflow endpoints (new architecture)
-  async getWorkflows(): Promise<any[]> {
+  async getWorkflows(): Promise<WorkflowDefinition[]> {
     return this.request('/workflows');
   }
 
-  async getWorkflow(id: number): Promise<any> {
+  async getWorkflow(id: number): Promise<WorkflowDefinition> {
     return this.request(`/workflows/${id}`);
   }
 
-  async createWorkflow(data: any): Promise<any> {
+  async createWorkflow(data: any): Promise<WorkflowDefinition> {
     return this.request('/workflows', { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async updateWorkflow(id: number, data: any): Promise<any> {
+  async updateWorkflow(id: number, data: any): Promise<WorkflowDefinition> {
     return this.request(`/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) });
   }
 
   async deleteWorkflow(id: number): Promise<{ success: boolean }> {
     return this.request(`/workflows/${id}`, { method: 'DELETE' });
+  }
+
+  async cloneWorkflow(id: number, name?: string): Promise<WorkflowDefinition> {
+    return this.request(`/workflows/${id}/clone`, { method: 'POST', body: JSON.stringify({ name }) });
   }
 
   // Session endpoints
@@ -559,11 +544,11 @@ class ApiClient {
 
   async assistantSave(
     workflow: GeneratedWorkflow,
-    isTemplate?: boolean
-  ): Promise<{ success: boolean; recipeId: number; message: string }> {
+    asSkill?: boolean
+  ): Promise<{ success: boolean; entityType: 'skill' | 'workflow'; skillId?: number; workflowId?: number; message: string }> {
     return this.request('/assistant/save', {
       method: 'POST',
-      body: JSON.stringify({ workflow, isTemplate }),
+      body: JSON.stringify({ workflow, asSkill }),
     });
   }
 }
@@ -633,6 +618,9 @@ export interface GeneratedStep {
   prompt_template: string;
   output_format: 'text' | 'json' | 'markdown' | 'image';
   executor_config?: Record<string, any>;
+  from_skill_id?: number;
+  from_step_order?: number;
+  override_fields?: string[];
 }
 
 export interface GeneratedWorkflow {

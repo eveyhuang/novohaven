@@ -6,7 +6,6 @@ import fs from 'fs';
 import { initializeDatabase } from './models/database';
 
 // Import routes
-import recipesRouter from './routes/recipes';
 import executionsRouter from './routes/executions';
 import standardsRouter from './routes/standards';
 import aiRouter from './routes/ai';
@@ -72,7 +71,6 @@ app.get('/api/health', (req, res) => {
 const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
-app.use('/api/recipes', recipesRouter);
 app.use('/api/executions', executionsRouter);
 app.use('/api/standards', standardsRouter);
 app.use('/api/ai', aiRouter);
@@ -170,7 +168,7 @@ async function start() {
       console.log('\nAPI endpoints:');
       console.log('  - /api/skills, /api/workflows, /api/sessions');
       console.log('  - /api/agents, /api/plugins, /api/skills/drafts');
-      console.log('  - /api/recipes, /api/executions, /api/standards');
+      console.log('  - /api/executions, /api/standards');
       console.log('  - /api/ai, /api/auth, /api/outputs, /api/usage');
     });
   } catch (error) {

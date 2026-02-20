@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth';
-import { generateWorkflow, saveWorkflowAsRecipe, ConversationMessage, GeneratedWorkflow } from '../services/workflowAssistant';
+import { generateWorkflow, saveWorkflowGraph, ConversationMessage, GeneratedWorkflow } from '../services/workflowAssistant';
 
 const router = Router();
 
@@ -25,12 +25,12 @@ router.post('/generate', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/assistant/save - Save a generated workflow as a recipe
+// POST /api/assistant/save - Save a generated workflow as a workflow or skill
 router.post('/save', async (req: Request, res: Response) => {
   try {
-    const { workflow, isTemplate } = req.body as {
+    const { workflow, asSkill } = req.body as {
       workflow: GeneratedWorkflow;
-      isTemplate?: boolean;
+      asSkill?: boolean;
     };
 
     if (!workflow || !workflow.name || !workflow.steps || !Array.isArray(workflow.steps)) {
@@ -42,12 +42,15 @@ router.post('/save', async (req: Request, res: Response) => {
     }
 
     const userId = req.user!.id;
-    const result = await saveWorkflowAsRecipe(workflow, userId, isTemplate);
+    const saveAsSkill = !!asSkill;
+    const result = await saveWorkflowGraph(workflow, userId, saveAsSkill);
 
     res.json({
       success: true,
-      recipeId: result.recipeId,
-      message: `Workflow "${workflow.name}" saved successfully`,
+      entityType: result.entityType,
+      skillId: result.skillId,
+      workflowId: result.workflowId,
+      message: `"${workflow.name}" saved successfully`,
     });
   } catch (error: any) {
     console.error('Assistant save error:', error);

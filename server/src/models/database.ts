@@ -268,8 +268,11 @@ export function initializeDatabase(): void {
     throw new Error(`User with ID ${mockUserId} does not exist`);
   }
 
-  // Seed template recipes
-  seedTemplateRecipes(mockUserId);
+  // Run migrations (recipes → skills/workflows)
+  runMigrations();
+
+  // Seed default skills
+  seedDefaultSkills(mockUserId);
 
   // Seed default agent config
   const defaultAgent = getOne('SELECT id FROM agent_configs WHERE name = ?', ['Default Agent']);
@@ -282,9 +285,6 @@ export function initializeDatabase(): void {
        '["tool-browser","tool-bash","tool-fileops","tool-skill-manager"]',
        '["channel-web","channel-lark"]']);
   }
-
-  // Run migrations (recipes → skills/workflows)
-  runMigrations();
 
   // Update default agent config to use Claude Sonnet 4.5
   const currentDefault = getOne('SELECT default_model FROM agent_configs WHERE name = ?', ['Default Agent']);
@@ -382,8 +382,8 @@ function runMigrations(): void {
   console.log('[Migration] recipes → skills/workflows migration complete');
 }
 
-// Helper function to upsert a template recipe
-function upsertTemplateRecipe(
+// Helper function to upsert a default skill
+function upsertSkillDefinition(
   name: string,
   description: string,
   createdBy: number,
@@ -401,36 +401,33 @@ function upsertTemplateRecipe(
 ): number {
   if (!db) throw new Error('Database not initialized');
 
-  const existing = getOne('SELECT id FROM recipes WHERE name = ? AND is_template = 1', [name]);
-  let recipeId: number;
+  const existing = getOne('SELECT id FROM skills WHERE name = ? AND created_by = ?', [name, createdBy]);
+  let skillId: number;
 
   if (existing) {
-    recipeId = existing.id;
+    skillId = existing.id;
     run(`
-      UPDATE recipes
-      SET description = ?, updated_at = CURRENT_TIMESTAMP
+      UPDATE skills
+      SET description = ?, status = 'active', updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `, [description, recipeId]);
-
-    run(`
-      DELETE FROM step_executions
-      WHERE step_id IN (SELECT id FROM recipe_steps WHERE recipe_id = ?)
-    `, [recipeId]);
-    run('DELETE FROM recipe_steps WHERE recipe_id = ?', [recipeId]);
+    `, [description, skillId]);
+    run("DELETE FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill'", [skillId]);
   } else {
     const result = run(`
-      INSERT INTO recipes (name, description, created_by, is_template)
-      VALUES (?, ?, ?, 1)
+      INSERT INTO skills (name, description, created_by, status, tags)
+      VALUES (?, ?, ?, 'active', '[]')
     `, [name, description, createdBy]);
-    recipeId = result.lastInsertRowid;
+    skillId = result.lastInsertRowid;
   }
 
   steps.forEach(step => {
     run(`
-      INSERT INTO recipe_steps (recipe_id, step_order, step_name, step_type, ai_model, prompt_template, output_format, model_config, input_config, api_config)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO skill_steps (
+        parent_id, parent_type, step_order, step_name, step_type, ai_model, prompt_template, output_format, model_config, input_config, executor_config
+      )
+      VALUES (?, 'skill', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-      recipeId,
+      skillId,
       step.step_order,
       step.step_name,
       step.step_type || 'ai',
@@ -439,11 +436,11 @@ function upsertTemplateRecipe(
       step.output_format,
       step.model_config,
       step.input_config,
-      step.api_config || null
+      '{}'
     ]);
   });
 
-  return recipeId;
+  return skillId;
 }
 
 // Helper function to upsert company standards
@@ -474,10 +471,10 @@ function upsertCompanyStandard(
   }
 }
 
-function seedTemplateRecipes(mockUserId: number): void {
+function seedDefaultSkills(mockUserId: number): void {
   if (!db) return;
 
-  // Template: Image Style Analyzer
+  // Skill: Image Style Analyzer
   const imageStyleAnalyzerInputConfig = JSON.stringify({
     variables: {
       reference_image: {
@@ -572,14 +569,14 @@ Be specific and technical. Include real-world imperfections that give the image 
     }
   ];
 
-  upsertTemplateRecipe(
+  upsertSkillDefinition(
     'Image Style Analyzer',
     'Analyze photography style, camera settings, lighting, and composition for AI image generation reference',
     mockUserId,
     imageStyleAnalyzerSteps
   );
 
-  // Template: Product Image Generator
+  // Skill: Product Image Generator
 
   const imageGenInputConfig = JSON.stringify({
     variables: {
@@ -624,14 +621,14 @@ Generate the image according to the exact specifications provided in the require
     }
   ];
 
-  upsertTemplateRecipe(
+  upsertSkillDefinition(
     'Product Image Generator',
     'Generate professional product images using AI based on reference images and detailed requirements',
     mockUserId,
     imageGenSteps
   );
 
-  // Template: Review Analyzer
+  // Skill: Review Analyzer
 
   const reviewAnalyzerInputConfig = JSON.stringify({
     variables: {
@@ -731,7 +728,7 @@ OUTPUT FORMAT (Markdown):
     }
   ];
 
-  upsertTemplateRecipe(
+  upsertSkillDefinition(
     'Product Review Analyzer',
     'Perform qualitative analysis on product reviews to understand customer sentiment, pain points, and feature preferences',
     mockUserId,

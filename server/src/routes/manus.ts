@@ -8,7 +8,7 @@ import {
 } from '../services/manusService';
 import { compilePrompt } from '../services/promptParser';
 import { logUsage } from '../services/usageTrackingService';
-import { queries } from '../models/database';
+import { queries, getDatabase } from '../models/database';
 
 const router = Router();
 
@@ -61,10 +61,10 @@ router.post('/tasks', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/manus/tasks/from-template — Start a task from a saved template
-router.post('/tasks/from-template', async (req: Request, res: Response) => {
+// POST /api/manus/tasks/from-skill — Start a task from a saved skill
+router.post('/tasks/from-skill', async (req: Request, res: Response) => {
   try {
-    const { templateId, variables } = req.body;
+    const { skillId, variables } = req.body;
     const userId = req.user?.id;
 
     if (!userId) {
@@ -72,8 +72,8 @@ router.post('/tasks/from-template', async (req: Request, res: Response) => {
       return;
     }
 
-    if (!templateId) {
-      res.status(400).json({ error: 'templateId is required' });
+    if (!skillId) {
+      res.status(400).json({ error: 'skillId is required' });
       return;
     }
 
@@ -82,17 +82,20 @@ router.post('/tasks/from-template', async (req: Request, res: Response) => {
       return;
     }
 
-    // Load the template recipe and its first step
-    const recipe = queries.getRecipeById(templateId) as any;
-    if (!recipe) {
-      res.status(404).json({ error: 'Template not found' });
+    // Load the skill and its first step
+    const db = getDatabase();
+    const skill = db.prepare('SELECT * FROM skills WHERE id = ?').get(skillId) as any;
+    if (!skill) {
+      res.status(404).json({ error: 'Skill not found' });
       return;
     }
 
-    const steps = queries.getStepsByRecipeId(templateId) as any[];
+    const steps = db.prepare(
+      "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' ORDER BY step_order"
+    ).all(skillId) as any[];
     const step = steps[0];
     if (!step || !step.prompt_template) {
-      res.status(400).json({ error: 'Template has no prompt template' });
+      res.status(400).json({ error: 'Skill has no prompt template' });
       return;
     }
 
@@ -112,11 +115,11 @@ router.post('/tasks/from-template', async (req: Request, res: Response) => {
     taskPrompts.set(taskId, { prompt: compiledPrompt, userId });
 
     // Log usage
-    logUsage(userId, 'manus', 'template_task', 1, 0, { taskId, templateId });
+    logUsage(userId, 'manus', 'skill_task', 1, 0, { taskId, skillId });
 
     res.json({ taskId, compiledPrompt });
   } catch (error: any) {
-    console.error('[Manus] From-template error:', error);
+    console.error('[Manus] From-skill error:', error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -6,7 +6,7 @@ import { NotificationProvider } from './context/NotificationContext';
 import { Layout, Notifications } from './components/common';
 import { Dashboard } from './components/Dashboard';
 import { WorkflowEditor, WorkflowRunner } from './components/RecipeBuilder';
-import { SkillEditor } from './components/TemplateEditor';
+import { SkillEditor } from './components/SkillEditor';
 import { ExecutionList } from './components/WorkflowExecution';
 import ChatExecution from './components/ChatExecution/ChatExecution';
 import { StandardsManager } from './components/CompanyStandards';
@@ -31,21 +31,14 @@ function App() {
             {/* Dashboard */}
             <Route path="/" element={<Dashboard />} />
 
-            {/* Skill Routes (was Templates) */}
+            {/* Skill Routes */}
             <Route path="/skills/new" element={<SkillEditor />} />
             <Route path="/skills/:id" element={<SkillEditor />} />
 
-            {/* Workflow Routes (was Recipes) */}
+            {/* Workflow Routes */}
             <Route path="/workflows/new" element={<WorkflowEditor />} />
             <Route path="/workflows/:id" element={<WorkflowEditor />} />
             <Route path="/workflows/:id/run" element={<WorkflowRunner />} />
-
-            {/* Backward compat routes */}
-            <Route path="/templates/new" element={<SkillEditor />} />
-            <Route path="/templates/:id" element={<SkillEditor />} />
-            <Route path="/recipes/new" element={<WorkflowEditor />} />
-            <Route path="/recipes/:id" element={<WorkflowEditor />} />
-            <Route path="/recipes/:id/run" element={<WorkflowRunner />} />
 
             {/* Agent Chat */}
             <Route path="/chat" element={<AgentChat />} />

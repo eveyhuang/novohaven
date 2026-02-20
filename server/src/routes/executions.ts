@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { queries } from '../models/database';
+import { queries, getDatabase } from '../models/database';
 import { authMiddleware } from '../middleware/auth';
 import {
   startExecution,
@@ -13,10 +13,161 @@ import {
   StepExecution,
   Recipe,
   RecipeStep,
-  StartExecutionRequest,
 } from '../types';
 
 const router = Router();
+
+type ParentType = 'skill' | 'workflow';
+
+interface GraphParent {
+  id: number;
+  name: string;
+  description?: string | null;
+  created_by?: number | null;
+}
+
+interface SkillStepRow {
+  id: number;
+  parent_id: number;
+  parent_type: ParentType;
+  step_order: number;
+  step_name: string;
+  step_type?: string | null;
+  ai_model?: string | null;
+  prompt_template?: string | null;
+  input_config?: string | null;
+  output_format?: string | null;
+  model_config?: string | null;
+  executor_config?: string | null;
+}
+
+function loadGraphParent(parentType: ParentType, parentId: number): {
+  parent: GraphParent | null;
+  steps: SkillStepRow[];
+} {
+  const db = getDatabase();
+  const table = parentType === 'skill' ? 'skills' : 'workflows';
+  const parent = db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(parentId) as GraphParent | undefined;
+  if (!parent) return { parent: null, steps: [] };
+  const steps = db.prepare(
+    'SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = ? ORDER BY step_order'
+  ).all(parentId, parentType) as SkillStepRow[];
+  return { parent, steps };
+}
+
+function ensureExecutionRecipeFromGraph(
+  parentType: ParentType,
+  parent: GraphParent,
+  steps: SkillStepRow[]
+): { recipeId: number; syncedSteps: RecipeStep[] } {
+  const db = getDatabase();
+  const bridgeMarker = `[BRIDGE:${parentType}:${parent.id}]`;
+  const existingRecipe = db.prepare('SELECT id FROM recipes WHERE description = ?').get(bridgeMarker) as { id: number } | undefined;
+  let recipeId: number;
+
+  if (existingRecipe) {
+    recipeId = existingRecipe.id;
+    db.prepare(
+      'UPDATE recipes SET name = ?, description = ?, is_template = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    ).run(
+      parent.name,
+      bridgeMarker,
+      parentType === 'skill' ? 1 : 0,
+      recipeId
+    );
+  } else {
+    const created = db.prepare(
+      'INSERT INTO recipes (name, description, created_by, is_template) VALUES (?, ?, ?, ?)'
+    ).run(
+      parent.name,
+      bridgeMarker,
+      parent.created_by || null,
+      parentType === 'skill' ? 1 : 0
+    );
+    recipeId = Number(created.lastInsertRowid);
+  }
+
+  const existingSteps = db.prepare(
+    'SELECT id, step_order FROM recipe_steps WHERE recipe_id = ? ORDER BY step_order'
+  ).all(recipeId) as Array<{ id: number; step_order: number }>;
+  const existingStepIdByOrder = new Map(existingSteps.map((row) => [row.step_order, row.id]));
+  const expectedOrders = new Set<number>();
+  const syncedSteps: RecipeStep[] = [];
+
+  for (const step of steps) {
+    expectedOrders.add(step.step_order);
+    const stepName = step.step_name || `Step ${step.step_order}`;
+    const stepType = step.step_type || 'ai';
+    const outputFormat = (step.output_format as RecipeStep['output_format']) || 'text';
+    const promptTemplate = step.prompt_template || '';
+    const inputConfig = step.input_config || '{}';
+    const modelConfig = step.model_config || '{}';
+    const executorConfig = step.executor_config || '{}';
+    const aiModel = step.ai_model || null;
+
+    const existingStepId = existingStepIdByOrder.get(step.step_order);
+    let recipeStepId: number;
+    if (existingStepId) {
+      db.prepare(`
+        UPDATE recipe_steps
+        SET step_name = ?, step_type = ?, ai_model = ?, prompt_template = ?, input_config = ?, output_format = ?, model_config = ?, executor_config = ?
+        WHERE id = ?
+      `).run(
+        stepName,
+        stepType,
+        aiModel,
+        promptTemplate,
+        inputConfig,
+        outputFormat,
+        modelConfig,
+        executorConfig,
+        existingStepId
+      );
+      recipeStepId = existingStepId;
+    } else {
+      const inserted = db.prepare(`
+        INSERT INTO recipe_steps (recipe_id, step_order, step_name, step_type, ai_model, prompt_template, input_config, output_format, model_config, api_config, executor_config)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        recipeId,
+        step.step_order,
+        stepName,
+        stepType,
+        aiModel,
+        promptTemplate,
+        inputConfig,
+        outputFormat,
+        modelConfig,
+        null,
+        executorConfig
+      );
+      recipeStepId = Number(inserted.lastInsertRowid);
+    }
+
+    syncedSteps.push({
+      id: recipeStepId,
+      recipe_id: recipeId,
+      step_order: step.step_order,
+      step_name: stepName,
+      step_type: stepType,
+      ai_model: aiModel || '',
+      prompt_template: promptTemplate,
+      input_config: inputConfig,
+      output_format: outputFormat,
+      model_config: modelConfig,
+      executor_config: executorConfig,
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  for (const oldStep of existingSteps) {
+    if (!expectedOrders.has(oldStep.step_order)) {
+      db.prepare('DELETE FROM recipe_steps WHERE id = ?').run(oldStep.id);
+    }
+  }
+
+  return { recipeId, syncedSteps };
+}
 
 // Apply auth middleware to all routes
 router.use(authMiddleware);
@@ -159,25 +310,67 @@ router.post('/quick', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/executions - Start execution from a recipe
+// POST /api/executions - Start execution from a recipe, skill, or workflow
 router.post('/', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id;
-    const { recipe_id, input_data, steps: customSteps } = req.body;
+    const {
+      recipe_id,
+      workflow_id,
+      skill_id,
+      input_data,
+      steps: customSteps,
+    } = req.body;
 
-    if (!recipe_id) {
-      res.status(400).json({ error: 'recipe_id is required' });
+    const idCount = [recipe_id, workflow_id, skill_id].filter((v) => v !== undefined && v !== null).length;
+    if (idCount !== 1) {
+      res.status(400).json({ error: 'Exactly one of recipe_id, workflow_id, or skill_id is required' });
       return;
     }
 
-    const recipe = queries.getRecipeById(recipe_id) as Recipe | undefined;
-    if (!recipe) {
-      res.status(404).json({ error: 'Recipe not found' });
-      return;
+    let resolvedRecipeId = Number(recipe_id || 0);
+    let resolvedCustomSteps = customSteps as RecipeStep[] | undefined;
+
+    if (workflow_id || skill_id) {
+      const parentType: ParentType = workflow_id ? 'workflow' : 'skill';
+      const parentId = Number(workflow_id || skill_id);
+      const { parent, steps } = loadGraphParent(parentType, parentId);
+      if (!parent) {
+        res.status(404).json({ error: `${parentType === 'workflow' ? 'Workflow' : 'Skill'} not found` });
+        return;
+      }
+      if (steps.length === 0 && !resolvedCustomSteps) {
+        res.status(400).json({ error: `${parentType === 'workflow' ? 'Workflow' : 'Skill'} has no steps` });
+        return;
+      }
+
+      const bridged = ensureExecutionRecipeFromGraph(parentType, parent, steps);
+      resolvedRecipeId = bridged.recipeId;
+      if (!resolvedCustomSteps) {
+        resolvedCustomSteps = bridged.syncedSteps;
+      } else {
+        const syncedByOrder = new Map(bridged.syncedSteps.map((step) => [step.step_order, step]));
+        resolvedCustomSteps = (resolvedCustomSteps as RecipeStep[]).map((step, idx) => {
+          const stepOrder = step.step_order || idx + 1;
+          const base = syncedByOrder.get(stepOrder);
+          return {
+            ...(base || {}),
+            ...step,
+            id: base?.id,
+            recipe_id: resolvedRecipeId,
+            step_order: stepOrder,
+          } as RecipeStep;
+        });
+      }
+    } else {
+      const recipe = queries.getRecipeById(resolvedRecipeId) as Recipe | undefined;
+      if (!recipe) {
+        res.status(404).json({ error: 'Recipe not found' });
+        return;
+      }
     }
 
-    // Pass custom steps if provided (for template modifications)
-    const result = await startExecution(recipe_id, userId, input_data || {}, customSteps);
+    const result = await startExecution(resolvedRecipeId, userId, input_data || {}, resolvedCustomSteps);
 
     if (!result.success && result.executionId === 0) {
       res.status(400).json({ error: result.error });
