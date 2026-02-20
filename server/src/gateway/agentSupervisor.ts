@@ -72,7 +72,20 @@ export class AgentSupervisor {
       } else if (msg.type === 'stream_chunk') {
         this.onResponse(msg.sessionId, { text: msg.content, isChunk: true, messageId: msg.messageId } as any);
       } else if (msg.type === 'stream_done') {
-        this.onResponse(msg.sessionId, { text: '', isDone: true, messageId: msg.messageId } as any);
+        const imageAttachments = (msg.generatedImageUrls as string[] | undefined)?.map((url: string) => ({
+          type: 'image' as const,
+          data: url,
+          name: url.split('/').pop() || 'generated-image.png',
+          mimeType: url.endsWith('.jpg') || url.endsWith('.jpeg') ? 'image/jpeg'
+                    : url.endsWith('.webp') ? 'image/webp'
+                    : 'image/png',
+        }));
+        this.onResponse(msg.sessionId, {
+          text: '',
+          isDone: true,
+          messageId: msg.messageId,
+          attachments: imageAttachments,
+        } as any);
       }
       // Handle other IPC message types (approval_request, execution_event, etc.)
     });
