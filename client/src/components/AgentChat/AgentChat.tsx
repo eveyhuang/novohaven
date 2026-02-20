@@ -321,6 +321,25 @@ export function AgentChat() {
             setStreaming(false);
           } else if (data.type === 'done' || data.type === 'end') {
             setStreaming(false);
+            if (Array.isArray(data.attachments) && data.attachments.length > 0) {
+              const newAttachments: FileAttachment[] = data.attachments.map((a: any) => ({
+                type: a.type || 'image',
+                data: a.url,
+                name: a.name || 'generated-image.png',
+                mimeType: a.mimeType || 'image/png',
+              }));
+              setMessages((prev) => {
+                const lastIdx = [...prev].reverse().findIndex(m => m.role === 'assistant');
+                if (lastIdx === -1) return prev;
+                const idx = prev.length - 1 - lastIdx;
+                const updated = [...prev];
+                updated[idx] = {
+                  ...updated[idx],
+                  attachments: [...(updated[idx].attachments || []), ...newAttachments],
+                };
+                return updated;
+              });
+            }
           } else if (data.type === 'error') {
             setStreaming(false);
             setMessages((prev) => [
