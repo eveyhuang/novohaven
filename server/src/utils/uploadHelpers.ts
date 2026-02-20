@@ -15,6 +15,10 @@ export function getUploadsDir(): string {
  * Returns the absolute path to a session's uploads subdirectory, creating it if needed.
  */
 export function getSessionUploadsDir(sessionId: string): string {
+  // Validate sessionId to prevent path traversal attacks
+  if (!/^[0-9a-f-]{1,64}$/i.test(sessionId) && sessionId !== 'web-default') {
+    throw new Error(`Invalid session ID: ${sessionId}`);
+  }
   const dir = path.join(getUploadsDir(), `session-${sessionId}`);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -68,6 +72,9 @@ function mimeTypeToExt(mimeType: string): string {
  * Called when a session is deleted.
  */
 export function deleteSessionUploads(sessionId: string): void {
+  if (!/^[0-9a-f-]{1,64}$/i.test(sessionId) && sessionId !== 'web-default') {
+    return; // silently ignore invalid session IDs during cleanup
+  }
   const dir = path.join(getUploadsDir(), `session-${sessionId}`);
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });

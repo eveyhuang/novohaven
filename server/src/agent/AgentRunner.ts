@@ -11,8 +11,10 @@
  * Uses PromptBuilder for context assembly and ToolExecutor for tool dispatch.
  */
 import Database from 'better-sqlite3';
+import fs from 'fs';
 import path from 'path';
 import { ChannelMessage, CompletionRequest, MessageAttachment, ProviderPlugin, ToolPlugin } from '../plugins/types';
+import { getUploadsDir } from '../utils/uploadHelpers';
 import { Session, AgentConfig } from '../types';
 import { PromptBuilder } from './PromptBuilder';
 import { ToolExecutor } from './ToolExecutor';
@@ -197,12 +199,10 @@ export class AgentRunner {
             // Case 2: file stored on disk at /uploads/session-<id>/...
             if (url.startsWith('/uploads/')) {
               try {
-                const fsModule = require('fs') as typeof import('fs');
-                const pathModule = require('path') as typeof import('path');
-                const uploadsRoot = pathModule.join(__dirname, '../../uploads');
+                const uploadsRoot = getUploadsDir();
                 const relPath = url.replace(/^\/uploads\//, '');
-                const filePath = pathModule.join(uploadsRoot, relPath);
-                const base64Data = fsModule.readFileSync(filePath).toString('base64');
+                const filePath = path.join(uploadsRoot, relPath);
+                const base64Data = fs.readFileSync(filePath).toString('base64');
                 return {
                   type: 'image' as const,
                   mimeType: a.mimeType || 'image/png',
@@ -238,13 +238,32 @@ export class AgentRunner {
       const toolAttachments = inboundAttachments
         .filter(a => a.type === 'image')
         .map(a => {
-          const dataUrl = a.url || '';
-          const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          return {
-            type: 'image' as const,
-            mimeType: match ? match[1] : (a.mimeType || 'image/png'),
-            data: match ? match[2] : dataUrl,
-          };
+          const url = a.url || '';
+          const dataUrlMatch = url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+          if (dataUrlMatch) {
+            return {
+              type: 'image' as const,
+              mimeType: dataUrlMatch[1],
+              data: dataUrlMatch[2],
+            };
+          }
+          if (url.startsWith('/uploads/')) {
+            try {
+              const uploadsRoot = getUploadsDir();
+              const relPath = url.replace(/^\/uploads\//, '');
+              const filePath = require('path').join(uploadsRoot, relPath);
+              const base64Data = fs.readFileSync(filePath).toString('base64');
+              return {
+                type: 'image' as const,
+                mimeType: a.mimeType || 'image/png',
+                data: base64Data,
+              };
+            } catch (err) {
+              console.error('[AgentRunner] Failed to read upload for tool context:', err);
+              return { type: 'image' as const, mimeType: a.mimeType || 'image/png', data: '' };
+            }
+          }
+          return { type: 'image' as const, mimeType: a.mimeType || 'image/png', data: url };
         });
       this.toolExecutor.setAttachments(toolAttachments);
     }

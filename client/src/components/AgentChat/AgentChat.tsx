@@ -330,7 +330,19 @@ export function AgentChat() {
               }));
               setMessages((prev) => {
                 const lastIdx = [...prev].reverse().findIndex(m => m.role === 'assistant');
-                if (lastIdx === -1) return prev;
+                // If no assistant message exists yet for this turn, create a placeholder
+                if (lastIdx === -1) {
+                  return [
+                    ...prev,
+                    {
+                      id: data.messageId || `assistant-img-${Date.now()}`,
+                      role: 'assistant' as const,
+                      content: '',
+                      timestamp: new Date().toISOString(),
+                      attachments: newAttachments,
+                    },
+                  ];
+                }
                 const idx = prev.length - 1 - lastIdx;
                 const updated = [...prev];
                 updated[idx] = {

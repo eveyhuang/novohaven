@@ -67,8 +67,10 @@ router.delete('/', (req, res) => {
   const db = getDatabase();
   const sessionIds = (db.prepare('SELECT id FROM sessions').all() as Array<{ id: string }>)
     .map(s => s.id);
-  db.prepare('DELETE FROM session_messages').run();
-  db.prepare('DELETE FROM sessions').run();
+  db.transaction(() => {
+    db.prepare('DELETE FROM session_messages').run();
+    db.prepare('DELETE FROM sessions').run();
+  })();
   sessionIds.forEach(id => deleteSessionUploads(id));
   res.json({ success: true });
 });
