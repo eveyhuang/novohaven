@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { initializeDatabase } from './models/database';
 
 // Import routes
@@ -43,7 +44,7 @@ app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:3000',
   credentials: true,
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Request logging middleware
@@ -66,6 +67,11 @@ app.get('/api/health', (req, res) => {
 });
 
 // API routes
+
+// Serve uploaded files (chat images) — no auth required for static assets
+const uploadsDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', express.static(uploadsDir));
 app.use('/api/recipes', recipesRouter);
 app.use('/api/executions', executionsRouter);
 app.use('/api/standards', standardsRouter);
