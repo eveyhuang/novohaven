@@ -2,6 +2,7 @@ import { Request, Response, Router } from 'express';
 import {
   ChannelPlugin, PluginManifest, ChannelMessage, AgentResponse,
 } from '../../types';
+import { saveImageToDisk } from '../../../utils/uploadHelpers';
 
 // Store SSE connections by session ID
 const sseConnections = new Map<string, Response[]>();
@@ -40,18 +41,39 @@ class WebChannelPlugin implements ChannelPlugin {
     const { text, sessionId, attachments } = req.body;
     if (!text && (!attachments || attachments.length === 0)) return null;
 
+    const channelId = sessionId || 'web-default';
+
+    // Save uploaded images to disk; return file URLs instead of base64
+    const processedAttachments = attachments?.map((a: any, i: number) => {
+      if (a.type === 'image' && a.data && a.data.startsWith('data:')) {
+        try {
+          const fileUrl = saveImageToDisk(a.data, a.mimeType || 'image/png', channelId, `upload-${i}`);
+          return {
+            type: a.type || 'image',
+            url: fileUrl,
+            name: a.name,
+            mimeType: a.mimeType,
+          };
+        } catch (err) {
+          console.error('[channel-web] Failed to save upload to disk:', err);
+          return { type: a.type, url: a.data, name: a.name, mimeType: a.mimeType };
+        }
+      }
+      return {
+        type: a.type || 'file',
+        url: a.data,
+        name: a.name,
+        mimeType: a.mimeType,
+      };
+    });
+
     return {
       channelType: 'web',
-      channelId: sessionId || 'web-default',
+      channelId,
       userId: (req as any).userId?.toString() || '1',
       content: {
         text,
-        attachments: attachments?.map((a: any) => ({
-          type: a.type || 'image',
-          url: a.data, // base64 data URL
-          name: a.name,
-          mimeType: a.mimeType,
-        })),
+        attachments: processedAttachments,
       },
       metadata: { sessionId },
       timestamp: new Date(),
