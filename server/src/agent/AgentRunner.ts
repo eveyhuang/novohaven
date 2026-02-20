@@ -232,6 +232,7 @@ export class AgentRunner {
 
     let round = 0;
     let currentMessages = [...messages];
+    let pendingImageUrls: string[] = [];
 
     while (round < this.maxToolRounds) {
       round++;
@@ -281,13 +282,15 @@ export class AgentRunner {
 
       // If no tool calls, we're done — signal stream complete (no need to re-send full text)
       if (toolCalls.length === 0) {
-        if (fullText) {
+        if (fullText || pendingImageUrls.length > 0) {
           process.send!({
             type: 'stream_done',
             sessionId: this.sessionId,
             messageId,
+            ...(pendingImageUrls.length > 0 ? { generatedImageUrls: pendingImageUrls } : {}),
           });
-          this.persistAssistantMessage(fullText);
+          this.persistAssistantMessage(fullText, pendingImageUrls);
+          pendingImageUrls = [];
         }
         return;
       }
@@ -311,6 +314,9 @@ export class AgentRunner {
           const executor = this.toolExecutor || new ToolExecutor(this.tools, { sessionId: this.sessionId, userId: 1 });
           const toolResult = await executor.execute(tc.name, tc.args);
           result = toolResult.output;
+          if (toolResult.metadata?.generatedImageUrls?.length) {
+            pendingImageUrls.push(...toolResult.metadata.generatedImageUrls);
+          }
         } catch (err: any) {
           result = `Tool error: ${err.message}`;
         }
@@ -351,11 +357,15 @@ export class AgentRunner {
   /**
    * Persist an assistant message to the database.
    */
-  private persistAssistantMessage(content: string): void {
+  private persistAssistantMessage(content: string, imageUrls: string[] = []): void {
     this.db.prepare(`
-      INSERT INTO session_messages (session_id, role, content)
-      VALUES (?, 'assistant', ?)
-    `).run(this.sessionId, content);
+      INSERT INTO session_messages (session_id, role, content, metadata)
+      VALUES (?, 'assistant', ?, ?)
+    `).run(
+      this.sessionId,
+      content,
+      JSON.stringify(imageUrls.length > 0 ? { generatedImageUrls: imageUrls } : {})
+    );
   }
 
   /**
