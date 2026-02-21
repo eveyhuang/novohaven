@@ -13,7 +13,7 @@ export interface GeneratedStep {
   step_type: string;
   ai_model: string;
   prompt_template: string;
-  output_format: 'text' | 'json' | 'markdown' | 'image';
+  output_format: 'text' | 'json' | 'markdown' | 'image' | 'file';
   executor_config?: Record<string, any>;
   // Skill sourcing
   from_skill_id?: number;
@@ -59,10 +59,9 @@ export interface AssistantResponse {
 
 // Preferred models for the assistant (in order of preference)
 const PREFERRED_MODELS = [
-  'gemini-3-pro-preview',
   'claude-opus-4-5',
+  'gemini-3-pro-preview',
   'gpt-4o',
-  'gemini-2.5-flash',
 ];
 
 type AssistantApiMessage = { role: 'user' | 'assistant'; content: string };
@@ -128,7 +127,7 @@ You can override specific fields by listing them in "override_fields".
 Example:
 {
   "step_name": "Custom Name",
-  "step_type": "scraping",
+  "step_type": "browser",
   "from_skill_id": 3,
   "from_step_order": 1,
   "override_fields": ["step_name"]
@@ -137,7 +136,7 @@ Example:
   }
 
   // Gather available executors
-  const executors = getAllExecutors();
+  const executors = getAllExecutors().filter((e) => e.type !== 'scraping');
   const executorDescriptions = executors.map(e => {
     const schema = e.getConfigSchema();
     const fields = schema.fields.map(f =>
@@ -185,10 +184,10 @@ ${skillSection}
 
 1. **Respond in the user's language.** If they write in Chinese, respond in Chinese. If English, respond in English.
 
-2. **ALWAYS check skills first — this is MANDATORY.** Before generating ANY step from scratch, compare the user's request against the Available Skills above. Skills contain carefully configured settings (API endpoints, scripts, model configs) that you CANNOT reliably reproduce.
-   - If ANY skill is relevant (even partially), you MUST emit a \`\`\`skill-request block with those skill IDs and STOP. Do NOT generate a workflow-json in the same response. Wait for the skill details to be provided, then use \`from_skill_id\` to reference those steps.
-   - Only generate steps from scratch when NO skill covers that specific functionality.
-   - NEVER regenerate what a skill already provides — always reference it with \`from_skill_id\`.
+2. **Check skills first, then decide pragmatic reuse.**
+   - If an existing skill clearly covers a sub-task, reference that sub-task with \`from_skill_id\`.
+   - If a skill is only partially relevant, combine skill-derived steps with newly generated steps.
+   - Do NOT force the whole workflow into one reused skill when multiple explicit sub-tasks are requested.
 
 3. **When the user describes a goal**, analyze it and either:
    - Ask clarifying questions if the goal is too vague
@@ -198,10 +197,11 @@ ${skillSection}
    - A conversational explanation of what you've created
    - A JSON workflow block wrapped in \`\`\`workflow-json ... \`\`\` fences
    - For repeatable sub-tasks, include reusable \`skill_blueprints\` and reference them from workflow steps.
+   - Do not collapse an end-to-end workflow into a single blueprint unless the user explicitly asks for a single reusable block.
 
 5. **Choose the right step type for each task:**
    - Use "ai" for text generation, analysis, summarization, translation
-   - Use "scraping" for fetching product reviews from URLs
+   - Use "browser" for any website navigation, search, extraction, or review collection
    - Use "http" for calling external APIs
    - Use "script" for custom data processing or calculations
    - Use "transform" for format conversion (CSV/JSON), field mapping, filtering
@@ -214,7 +214,21 @@ ${skillSection}
 
 7. **For non-AI steps**, provide complete executor_config with all required fields.
 
-8. **When suggesting refinements**, offer 2-3 specific ideas the user might want.
+8. **Browser steps are stateless across workflow steps (CRITICAL).**
+   - A browser step does NOT inherit page/session state from a previous browser step.
+   - If the user describes "search" and "extract" separately, you should still produce executable config:
+     - Prefer a small sequence of focused browser steps (typically 2-6), each with a clear purpose.
+     - Only combine into one giant browser step when the user explicitly asks for a minimal single-step flow.
+     - If you keep multiple browser steps, each must include a valid startUrl or navigate action.
+   - Never emit a browser extraction step that starts from about:blank.
+   - Do NOT add script steps only to prepend URL protocol. Browser executor already normalizes domain inputs such as \`www.amazon.com\`.
+   - Prefer URL variables directly from user inputs (for example \`{{source_url}}\`), instead of fragile URL placeholders like \`{{step_1_output.formatted_source_url}}\`.
+
+9. **For browser extraction**, prefer output_format = "json" so extracted values are preserved.
+
+10. **When the user asks for a CSV or downloadable artifact**, set output_format = "file" on the producing step.
+
+11. **When suggesting refinements**, offer 2-3 specific ideas the user might want.
 
 ## Workflow JSON Format
 
@@ -233,7 +247,7 @@ ${skillSection}
       "steps": [
         {
           "step_name": "Extract Wayfair signals",
-          "step_type": "scraping",
+          "step_type": "browser",
           "output_format": "json",
           "executor_config": {}
         }
@@ -263,13 +277,13 @@ CRITICAL: When you generate a workflow, you MUST include a \`\`\`workflow-json c
 function normalizeGeneratedStep(step: any, index: number): GeneratedStep {
   const outputFormat = step?.output_format;
   const normalizedOutput: GeneratedStep['output_format'] =
-    outputFormat === 'json' || outputFormat === 'markdown' || outputFormat === 'image'
+    outputFormat === 'json' || outputFormat === 'markdown' || outputFormat === 'image' || outputFormat === 'file'
       ? outputFormat
       : 'text';
 
   return {
     step_name: step?.step_name || `Step ${index + 1}`,
-    step_type: step?.step_type || 'ai',
+    step_type: step?.step_type === 'scraping' ? 'browser' : (step?.step_type || 'ai'),
     ai_model: step?.ai_model || '',
     prompt_template: step?.prompt_template || '',
     output_format: normalizedOutput,
@@ -285,13 +299,14 @@ function normalizeGeneratedStep(step: any, index: number): GeneratedStep {
 
 function normalizeInputSpecs(inputs: any): GeneratedInputSpec[] {
   if (!Array.isArray(inputs)) return [];
+  const isStepOutputReference = (name: string): boolean => /^step_\d+_output(?:\..+)?$/i.test(String(name || '').trim());
   return inputs
     .map((input: any) => ({
       name: String(input?.name || '').trim(),
       type: String(input?.type || 'text').trim() || 'text',
       description: String(input?.description || '').trim(),
     }))
-    .filter((input: GeneratedInputSpec) => input.name.length > 0);
+    .filter((input: GeneratedInputSpec) => input.name.length > 0 && !isStepOutputReference(input.name));
 }
 
 function normalizeSkillBlueprints(raw: any): GeneratedSkillBlueprint[] {
@@ -310,6 +325,211 @@ function normalizeSkillBlueprints(raw: any): GeneratedSkillBlueprint[] {
     .filter((bp: GeneratedSkillBlueprint) => bp.steps.length > 0);
 }
 
+function hasSkillReference(step: GeneratedStep): boolean {
+  return Boolean(
+    step.from_skill_id ||
+    step.from_skill_blueprint ||
+    step.from_skill_name ||
+    step.from_template_id
+  );
+}
+
+function toExecutorConfigObject(config: any): Record<string, any> {
+  if (!config) return {};
+  if (typeof config === 'string') {
+    try {
+      const parsed = JSON.parse(config);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof config === 'object' && !Array.isArray(config)) {
+    return { ...config };
+  }
+  return {};
+}
+
+function inferBrowserFallbackStartUrl(requiredInputs: GeneratedInputSpec[]): string | undefined {
+  const preferredKeys = [
+    'source_platform_url',
+    'source_url',
+    'target_url',
+    'url',
+    'website',
+    'site_url',
+    'start_url',
+  ];
+  const inputMap = new Map(requiredInputs.map((item) => [item.name.toLowerCase(), item.name]));
+
+  for (const key of preferredKeys) {
+    const exact = inputMap.get(key);
+    if (exact) return `{{${exact}}}`;
+  }
+
+  const fuzzy = requiredInputs.find((item) => {
+    const name = item.name.toLowerCase();
+    return name.includes('url') || name.includes('website') || name.includes('site');
+  });
+  if (fuzzy) return `{{${fuzzy.name}}}`;
+
+  return undefined;
+}
+
+function mergeConsecutiveBrowserSteps(steps: GeneratedStep[]): GeneratedStep[] {
+  const merged: GeneratedStep[] = [];
+  let i = 0;
+
+  while (i < steps.length) {
+    const current = steps[i];
+    if (current.step_type !== 'browser' || hasSkillReference(current)) {
+      merged.push(current);
+      i += 1;
+      continue;
+    }
+
+    const chain: GeneratedStep[] = [current];
+    let j = i + 1;
+    while (j < steps.length) {
+      const candidate = steps[j];
+      if (candidate.step_type !== 'browser' || hasSkillReference(candidate)) break;
+      chain.push(candidate);
+      j += 1;
+    }
+
+    if (chain.length === 1) {
+      merged.push(current);
+      i = j;
+      continue;
+    }
+
+    const mergedConfig: Record<string, any> = toExecutorConfigObject(chain[0].executor_config);
+    const combinedActions: any[] = [];
+    const combinedExtractors: any[] = [];
+
+    for (const step of chain) {
+      const cfg = toExecutorConfigObject(step.executor_config);
+      if (!mergedConfig.startUrl && typeof cfg.startUrl === 'string' && cfg.startUrl.trim()) {
+        mergedConfig.startUrl = cfg.startUrl.trim();
+      }
+      if (mergedConfig.defaultWaitMs === undefined && cfg.defaultWaitMs !== undefined) {
+        mergedConfig.defaultWaitMs = cfg.defaultWaitMs;
+      }
+      if (mergedConfig.defaultTimeoutMs === undefined && cfg.defaultTimeoutMs !== undefined) {
+        mergedConfig.defaultTimeoutMs = cfg.defaultTimeoutMs;
+      }
+      if (cfg.maxItems !== undefined) {
+        mergedConfig.maxItems = cfg.maxItems;
+      }
+      if (Array.isArray(cfg.actions)) combinedActions.push(...cfg.actions);
+      if (Array.isArray(cfg.extractors)) combinedExtractors.push(...cfg.extractors);
+    }
+
+    mergedConfig.actions = combinedActions;
+    mergedConfig.extractors = combinedExtractors;
+
+    merged.push({
+      ...chain[0],
+      executor_config: mergedConfig,
+      output_format: chain[chain.length - 1].output_format || chain[0].output_format,
+      step_name: chain[0].step_name || 'Browser Automation',
+    });
+
+    i = j;
+  }
+
+  return merged;
+}
+
+function applyBrowserExecutionSafety(
+  steps: GeneratedStep[],
+  requiredInputs: GeneratedInputSpec[]
+): GeneratedStep[] {
+  const normalized = steps.map((step) => ({ ...step }));
+  const fallbackStartUrl = inferBrowserFallbackStartUrl(requiredInputs);
+  let lastKnownUrl: string | undefined;
+  const stepFieldPattern = /\{\{\s*step_\d+_output\.[^}]+\s*\}\}/g;
+
+  for (const step of normalized) {
+    if (step.step_type !== 'browser' || hasSkillReference(step)) continue;
+
+    const cfg = toExecutorConfigObject(step.executor_config);
+    const extractors = Array.isArray(cfg.extractors) ? cfg.extractors : [];
+
+    if (typeof cfg.startUrl === 'string' && fallbackStartUrl) {
+      cfg.startUrl = cfg.startUrl.replace(stepFieldPattern, fallbackStartUrl);
+    }
+    if (fallbackStartUrl && Array.isArray(cfg.actions)) {
+      cfg.actions = cfg.actions.map((action: any) => {
+        if (action?.type === 'navigate' && typeof action?.url === 'string') {
+          return {
+            ...action,
+            url: action.url.replace(stepFieldPattern, fallbackStartUrl),
+          };
+        }
+        return action;
+      });
+    }
+
+    const actions = Array.isArray(cfg.actions) ? cfg.actions : [];
+    const hasNavigateAction = actions.some((action: any) =>
+      action?.type === 'navigate' && typeof action?.url === 'string' && action.url.trim().length > 0
+    );
+    const startUrl = typeof cfg.startUrl === 'string' ? cfg.startUrl.trim() : '';
+
+    if (!startUrl && !hasNavigateAction) {
+      const injected = lastKnownUrl || fallbackStartUrl;
+      if (injected) {
+        cfg.startUrl = injected;
+      }
+    }
+
+    // Browser extraction is more useful as JSON so the chat can show actual extracted values.
+    const hasExtraction = actions.some((action: any) => action?.type === 'extract') || extractors.length > 0;
+    if (hasExtraction && step.output_format === 'text') {
+      step.output_format = 'json';
+    }
+
+    step.executor_config = cfg;
+
+    if (typeof cfg.startUrl === 'string' && cfg.startUrl.trim()) {
+      lastKnownUrl = cfg.startUrl.trim();
+      continue;
+    }
+    const firstNavigate = actions.find((action: any) =>
+      action?.type === 'navigate' && typeof action?.url === 'string' && action.url.trim().length > 0
+    );
+    if (firstNavigate) {
+      lastKnownUrl = firstNavigate.url.trim();
+    }
+  }
+
+  return normalized;
+}
+
+function applyFileOutputHints(steps: GeneratedStep[]): GeneratedStep[] {
+  const csvPattern = /\bcsv\b|\.csv|comma[- ]separated/i;
+  return steps.map((step) => {
+    if (step.output_format === 'file') return step;
+    const promptText = step.prompt_template || '';
+    const configText = JSON.stringify(step.executor_config || {});
+    const mentionsCsv = csvPattern.test(promptText) || csvPattern.test(configText);
+    if (!mentionsCsv) return step;
+    if (step.output_format === 'text' || step.output_format === 'markdown') {
+      return { ...step, output_format: 'file' };
+    }
+    return step;
+  });
+}
+
+function normalizeGeneratedWorkflowStructure(workflow: GeneratedWorkflow): GeneratedWorkflow {
+  // Preserve explicit multi-step browser decompositions from the model.
+  // Over-merging can hide intent and make iterative fixing harder in AI Workflow Builder.
+  workflow.steps = applyBrowserExecutionSafety(workflow.steps || [], workflow.requiredInputs || []);
+  workflow.steps = applyFileOutputHints(workflow.steps || []);
+  return workflow;
+}
+
 
 function tryParseWorkflow(jsonStr: string): GeneratedWorkflow | null {
   try {
@@ -319,7 +539,7 @@ function tryParseWorkflow(jsonStr: string): GeneratedWorkflow | null {
       workflow.steps = raw.steps.map((step: any, i: number) => normalizeGeneratedStep(step, i));
       workflow.requiredInputs = normalizeInputSpecs(raw.requiredInputs);
       workflow.skill_blueprints = normalizeSkillBlueprints(raw.skill_blueprints || raw.skills);
-      return workflow;
+      return normalizeGeneratedWorkflowStructure(workflow);
     }
   } catch (e) {
     // JSON parse failed
@@ -380,9 +600,90 @@ function hasSkillRequest(parsed: AssistantResponse): boolean {
   return Array.isArray(parsed.skillRequest) && parsed.skillRequest.length > 0;
 }
 
+function isLikelyChinese(text: string): boolean {
+  return /[\u4e00-\u9fff]/.test(text || '');
+}
+
+function buildEmergencyWorkflowMessages(messages: ConversationMessage[]): AssistantApiMessage[] {
+  const userHistory = messages
+    .filter((msg) => msg.role === 'user')
+    .map((msg, idx) => `User request ${idx + 1}:\n${msg.content}`)
+    .join('\n\n');
+
+  return [{
+    role: 'user',
+    content: `Convert these requirements into a complete workflow JSON object:\n\n${userHistory}`,
+  }];
+}
+
+async function forceGenerateWorkflowJson(
+  messages: ConversationMessage[],
+  modelId: string
+): Promise<AssistantResponse | null> {
+  const latestUserMessage = [...messages].reverse().find((msg) => msg.role === 'user')?.content || '';
+  const chinese = isLikelyChinese(latestUserMessage);
+
+  const emergencySystemPrompt = `You are a strict workflow JSON compiler.
+Return ONLY a valid JSON object. No markdown fences. No explanation text.
+
+Required top-level keys:
+- name (string)
+- description (string)
+- steps (array)
+- requiredInputs (array)
+
+Each step must include:
+- step_name (string)
+- step_type (one of: ai, browser, transform, script, http)
+- ai_model (string, can be empty for non-ai)
+- prompt_template (string, can be empty for non-ai)
+- output_format (one of: text, json, markdown, image, file)
+- executor_config (object, required for non-ai)
+
+Rules:
+- Browser steps are stateless; each browser step must have startUrl or a navigate action.
+- Do not add script steps only for URL protocol formatting.
+- For browser extraction, prefer output_format "json".
+- If the user requests CSV/downloadable output, prefer output_format "file" on the final producing step.
+- For script runtime, use only "python3" or "node" (never "nodejs").
+- Prefer URL variables directly from user inputs (for example {{source_url}}).
+`;
+
+  const forcedResponse = await callAIByModel(modelId, '', {
+    temperature: 0.1,
+    maxTokens: 12000,
+    systemMessage: emergencySystemPrompt,
+    messages: buildEmergencyWorkflowMessages(messages),
+  });
+
+  if (!forcedResponse.success) return null;
+
+  const directWorkflow = tryParseWorkflow(forcedResponse.content);
+  if (directWorkflow) {
+    return {
+      message: chinese
+        ? '已基于你的描述生成可编辑工作流草稿。'
+        : 'I generated an editable workflow draft from your requirements.',
+      workflow: directWorkflow,
+    };
+  }
+
+  const parsed = parseAssistantResponse(forcedResponse.content);
+  if (parsed.workflow) {
+    return {
+      ...parsed,
+      message: parsed.message?.trim() || (chinese
+        ? '已基于你的描述生成可编辑工作流草稿。'
+        : 'I generated an editable workflow draft from your requirements.'),
+    };
+  }
+
+  return null;
+}
+
 function addMissingWorkflowHint(parsed: AssistantResponse, messages: ConversationMessage[]): AssistantResponse {
   const latestUserMessage = [...messages].reverse().find((msg) => msg.role === 'user')?.content || '';
-  const chinese = /[\u4e00-\u9fff]/.test(`${latestUserMessage}\n${parsed.message}`);
+  const chinese = isLikelyChinese(`${latestUserMessage}\n${parsed.message}`);
 
   const hint = chinese
     ? '未能从本次 AI 回复中提取有效的工作流 JSON，因此右侧预览暂时为空。请让我“直接输出 workflow-json 代码块（不要解释）”后重试。'
@@ -630,6 +931,12 @@ Do NOT say "wait a moment" or "I will generate later". Produce the final result 
     } else {
       console.warn('[WorkflowAssistant] Workflow repair pass failed:', repairResponse.error || 'unknown error');
     }
+
+    const emergency = await forceGenerateWorkflowJson(messages, modelId);
+    if (emergency?.workflow) {
+      console.warn('[WorkflowAssistant] Recovered workflow JSON via emergency compiler pass.');
+      return emergency;
+    }
   }
 
   if (!parsed.workflow && !hasSkillRequest(parsed)) {
@@ -683,7 +990,7 @@ export async function saveWorkflowGraph(
     const stepVars = candidates.filter((input) => {
       if (prompt.includes(`{{${input.name}}}`)) return true;
       if (executorConfig.includes(`{{${input.name}}}`)) return true;
-      if (stepType === 'scraping' && input.type === 'url_list') return true;
+      if (stepType === 'browser' && input.type === 'url_list') return true;
       return false;
     });
 

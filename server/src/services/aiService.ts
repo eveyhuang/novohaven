@@ -461,6 +461,42 @@ The mock AI service simulates the behavior of real AI providers, allowing for de
   };
 }
 
+function isRetriableError(provider: AIProvider, errorMessage?: string): boolean {
+  if (!errorMessage) return false;
+  if (provider === 'mock') return false;
+
+  const text = errorMessage.toLowerCase();
+  return (
+    text.includes('overloaded_error') ||
+    text.includes('overloaded') ||
+    text.includes('rate limit') ||
+    text.includes('too many requests') ||
+    text.includes('temporarily unavailable') ||
+    text.includes('resource exhausted') ||
+    text.includes('deadline exceeded') ||
+    text.includes('timeout') ||
+    /\b429\b/.test(text) ||
+    /\b529\b/.test(text) ||
+    /\b503\b/.test(text)
+  );
+}
+
+function getRetryAttempts(provider: AIProvider): number {
+  if (provider === 'anthropic') return 3;
+  if (provider === 'openai' || provider === 'google') return 2;
+  return 1;
+}
+
+function retryDelayMs(attempt: number): number {
+  const base = 600 * Math.pow(2, Math.max(0, attempt - 1));
+  const jitter = Math.floor(Math.random() * 250);
+  return Math.min(5000, base + jitter);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // Unified AI service interface
 export async function callAI(
   provider: AIProvider,
@@ -468,28 +504,64 @@ export async function callAI(
   prompt: string,
   config: AIServiceConfig = {}
 ): Promise<AIResponse> {
-  // Check if this is an image generation model
-  if (modelSupportsImageGeneration(model)) {
-    return callGoogleImageGeneration(model, prompt, config);
+  const runOnce = async (): Promise<AIResponse> => {
+    // Check if this is an image generation model
+    if (modelSupportsImageGeneration(model)) {
+      return callGoogleImageGeneration(model, prompt, config);
+    }
+
+    switch (provider) {
+      case 'openai':
+        return callOpenAI(model, prompt, config);
+      case 'anthropic':
+        return callAnthropic(model, prompt, config);
+      case 'google':
+        return callGoogle(model, prompt, config);
+      case 'mock':
+        return callMock(model, prompt, config);
+      default:
+        return {
+          success: false,
+          content: '',
+          model,
+          error: `Unknown provider: ${provider}`,
+        };
+    }
+  };
+
+  const attempts = getRetryAttempts(provider);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const response = await runOnce();
+    if (response.success) {
+      return response;
+    }
+
+    if (attempt < attempts && isRetriableError(provider, response.error)) {
+      const delay = retryDelayMs(attempt);
+      console.warn(
+        `[AIService] Retrying transient ${provider} error for model ${model} ` +
+        `(attempt ${attempt}/${attempts}) after ${delay}ms: ${response.error}`
+      );
+      await sleep(delay);
+      continue;
+    }
+
+    if (isRetriableError(provider, response.error)) {
+      return {
+        ...response,
+        error: `${response.error} (provider temporarily overloaded; please retry in a moment)`,
+      };
+    }
+
+    return response;
   }
 
-  switch (provider) {
-    case 'openai':
-      return callOpenAI(model, prompt, config);
-    case 'anthropic':
-      return callAnthropic(model, prompt, config);
-    case 'google':
-      return callGoogle(model, prompt, config);
-    case 'mock':
-      return callMock(model, prompt, config);
-    default:
-      return {
-        success: false,
-        content: '',
-        model,
-        error: `Unknown provider: ${provider}`,
-      };
-  }
+  return {
+    success: false,
+    content: '',
+    model,
+    error: 'AI request failed after retry attempts',
+  };
 }
 
 // Helper to call AI by model ID (auto-detects provider)

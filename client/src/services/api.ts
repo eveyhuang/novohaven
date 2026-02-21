@@ -617,7 +617,7 @@ export interface GeneratedStep {
   step_type: string;
   ai_model: string;
   prompt_template: string;
-  output_format: 'text' | 'json' | 'markdown' | 'image';
+  output_format: 'text' | 'json' | 'markdown' | 'image' | 'file';
   executor_config?: Record<string, any>;
   from_skill_id?: number;
   from_skill_blueprint?: string;

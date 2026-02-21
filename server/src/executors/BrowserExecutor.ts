@@ -1,6 +1,7 @@
 import { RecipeStep, StepExecution } from '../types';
 import { browserService } from '../services/browserService';
 import { queries } from '../models/database';
+import type { Page } from 'puppeteer';
 import {
   StepExecutor,
   StepExecutorContext,
@@ -55,6 +56,19 @@ const DEFAULT_CONFIG: BrowserConfig = {
   maxItems: 20,
 };
 
+const BROWSER_CONCURRENCY_RETRY_COUNT = Math.max(
+  0,
+  parseInt(process.env.BROWSER_CONCURRENCY_RETRY_COUNT || '2', 10)
+);
+const BROWSER_CONCURRENCY_RETRY_DELAY_MS = Math.max(
+  200,
+  parseInt(process.env.BROWSER_CONCURRENCY_RETRY_DELAY_MS || '1500', 10)
+);
+const BROWSER_EXECUTOR_TASK_RETENTION_MS = Math.max(
+  0,
+  parseInt(process.env.BROWSER_EXECUTOR_TASK_RETENTION_MS || '0', 10)
+);
+
 export class BrowserExecutor implements StepExecutor {
   type = 'browser';
   displayName = 'Browser Automation';
@@ -100,7 +114,14 @@ export class BrowserExecutor implements StepExecutor {
       );
 
       this.emitProgress(task, emitter, executionId, context.stepExecution, step, 'Launching browser automation step...');
-      const page = await browserService.launchBrowser(browserTaskId);
+      const page = await this.launchBrowserWithRetry(
+        browserTaskId,
+        task,
+        emitter,
+        executionId,
+        context.stepExecution,
+        step
+      );
       const timeoutMs = resolvedConfig.defaultTimeoutMs || DEFAULT_CONFIG.defaultTimeoutMs!;
       const waitMs = resolvedConfig.defaultWaitMs || DEFAULT_CONFIG.defaultWaitMs!;
       const maxItems = resolvedConfig.maxItems || DEFAULT_CONFIG.maxItems!;
@@ -235,10 +256,15 @@ export class BrowserExecutor implements StepExecutor {
         error: `Browser execution error: ${error.message || 'Unknown error'}`,
       };
     } finally {
-      // Keep browser task around briefly for stream reconnect/debug visibility.
-      setTimeout(async () => {
+      if (BROWSER_EXECUTOR_TASK_RETENTION_MS > 0) {
+        // Optional short retention for debugging reconnects.
+        setTimeout(async () => {
+          await browserService.destroyTask(browserTaskId).catch(() => undefined);
+        }, BROWSER_EXECUTOR_TASK_RETENTION_MS);
+      } else {
+        // Default: release browser capacity immediately after step finishes/fails.
         await browserService.destroyTask(browserTaskId).catch(() => undefined);
-      }, 5 * 60 * 1000);
+      }
     }
   }
 
@@ -308,20 +334,55 @@ export class BrowserExecutor implements StepExecutor {
 
   private buildVariableMap(userInputs: Record<string, any>, completed: StepExecution[]): Record<string, string> {
     const vars: Record<string, string> = {};
+
+    const addObjectFields = (prefix: string, value: any, depth: number = 0) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 2) return;
+      for (const [key, nested] of Object.entries(value)) {
+        const path = `${prefix}.${key}`;
+        if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+          addObjectFields(path, nested, depth + 1);
+        } else {
+          vars[path] = typeof nested === 'string' ? nested : JSON.stringify(nested);
+        }
+      }
+    };
+
+    const tryParseObject = (raw: any): Record<string, any> | null => {
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        return raw as Record<string, any>;
+      }
+      if (typeof raw !== 'string') return null;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, any>;
+        }
+      } catch {
+        // Ignore parse failures.
+      }
+      return null;
+    };
+
     for (const [key, val] of Object.entries(userInputs || {})) {
       vars[key] = typeof val === 'string' ? val : JSON.stringify(val);
     }
     for (const step of completed || []) {
+      const outputKey = `step_${step.step_order}_output`;
       let value = '';
       try {
         if (step.output_data) {
           const parsed = JSON.parse(step.output_data);
-          value = typeof parsed?.content === 'string' ? parsed.content : JSON.stringify(parsed?.content ?? parsed);
+          const content = parsed?.content ?? parsed;
+          value = typeof content === 'string' ? content : JSON.stringify(content);
+          const contentObject = tryParseObject(content);
+          if (contentObject) {
+            addObjectFields(outputKey, contentObject);
+          }
         }
       } catch {
         value = step.output_data || '';
       }
-      vars[`step_${step.step_order}_output`] = value;
+      vars[outputKey] = value;
     }
     return vars;
   }
@@ -350,7 +411,51 @@ export class BrowserExecutor implements StepExecutor {
       const fallbackUrl = vars.target_url || vars.url || vars.product_url || vars.website;
       if (fallbackUrl) resolved.startUrl = fallbackUrl;
     }
+
+    // Normalize common URL inputs like "www.amazon.com" for browser navigation.
+    if (resolved.startUrl) {
+      resolved.startUrl = this.normalizeNavigableUrl(resolved.startUrl);
+    }
+    if (Array.isArray(resolved.actions)) {
+      resolved.actions = resolved.actions.map((action) => {
+        if (action?.type === 'navigate' && action.url) {
+          return { ...action, url: this.normalizeNavigableUrl(action.url) };
+        }
+        return action;
+      });
+    }
+
     return resolved;
+  }
+
+  private normalizeNavigableUrl(raw: string): string {
+    let value = String(raw || '').trim();
+    if (!value) return value;
+
+    // Strip simple accidental wrapping quotes.
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1).trim();
+    }
+
+    // Remove embedded whitespace that can break navigation.
+    value = value.replace(/\s+/g, '');
+
+    // Collapse duplicated protocol prefixes like "https://https://example.com".
+    while (/^(https?:\/\/)(https?:\/\/)/i.test(value)) {
+      value = value.replace(/^(https?:\/\/)(https?:\/\/)/i, '$1');
+    }
+
+    // Keep explicit schemes (http, https, file, about, chrome, etc.)
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return value;
+    if (value.startsWith('//')) return `https:${value}`;
+
+    // Common user input: domain without protocol.
+    if (value.startsWith('www.')) return `https://${value}`;
+    if (!/\s/.test(value) && /^[\w.-]+\.[a-zA-Z]{2,}(\/.*)?$/.test(value)) {
+      return `https://${value}`;
+    }
+
+    return value;
   }
 
   private async extractFromSelector(
@@ -432,5 +537,41 @@ export class BrowserExecutor implements StepExecutor {
 
   private async sleep(ms: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  }
+
+  private async launchBrowserWithRetry(
+    taskId: string,
+    task: any,
+    emitter: StepExecutorContext['emitter'],
+    executionId: number,
+    stepExecution: StepExecutorContext['stepExecution'],
+    step: RecipeStep
+  ): Promise<Page> {
+    let attempt = 0;
+
+    while (true) {
+      try {
+        return await browserService.launchBrowser(taskId);
+      } catch (error: any) {
+        const message = String(error?.message || '');
+        const isCapacityError = message.includes('Max concurrent browsers');
+
+        if (!isCapacityError || attempt >= BROWSER_CONCURRENCY_RETRY_COUNT) {
+          throw error;
+        }
+
+        attempt += 1;
+        const waitMs = BROWSER_CONCURRENCY_RETRY_DELAY_MS * attempt;
+        this.emitProgress(
+          task,
+          emitter,
+          executionId,
+          stepExecution,
+          step,
+          `Browser capacity busy. Retrying launch (${attempt}/${BROWSER_CONCURRENCY_RETRY_COUNT}) in ${Math.ceil(waitMs / 1000)}s...`
+        );
+        await this.sleep(waitMs);
+      }
+    }
   }
 }

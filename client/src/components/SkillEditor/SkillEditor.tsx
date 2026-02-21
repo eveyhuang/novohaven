@@ -43,8 +43,8 @@ const DEFAULT_INPUT_CONFIG: InputTypeConfig = {
   description: '',
 };
 
-const BUSINESS_EXECUTOR_TYPES = new Set(['ai', 'scraping', 'manus', 'browser']);
-const EXECUTOR_DISPLAY_ORDER = ['ai', 'scraping', 'manus', 'browser', 'script', 'http', 'transform'];
+const BUSINESS_EXECUTOR_TYPES = new Set(['ai', 'manus', 'browser']);
+const EXECUTOR_DISPLAY_ORDER = ['ai', 'manus', 'browser', 'script', 'http', 'transform'];
 
 export function SkillEditor() {
   const { id } = useParams();
@@ -61,7 +61,7 @@ export function SkillEditor() {
     step_type: StepType;
     ai_model: string;
     prompt_template: string;
-    output_format: 'text' | 'json' | 'markdown' | 'image';
+    output_format: 'text' | 'json' | 'markdown' | 'image' | 'file';
     model_config: string;
     input_config: string;
     api_config: string;
@@ -128,7 +128,7 @@ export function SkillEditor() {
   const loadExecutors = async () => {
     try {
       const data = await api.getExecutors();
-      setExecutors(data);
+      setExecutors(data.filter((exec) => exec.type !== 'scraping'));
     } catch (err: any) {
       console.error('Failed to load executors:', err);
     }
@@ -146,7 +146,7 @@ export function SkillEditor() {
         name: data.name,
         description: data.description || '',
         step_name: step?.step_name || data.name,
-        step_type: (step?.step_type as StepType) || 'ai',
+        step_type: (step?.step_type === 'scraping' ? 'browser' : step?.step_type as StepType) || 'ai',
         ai_model: step?.ai_model || 'mock',
         prompt_template: step?.prompt_template || '',
         output_format: step?.output_format || 'text',
@@ -469,7 +469,23 @@ export function SkillEditor() {
 
     try {
       const skillId = parseInt(id);
-      const result = await api.startSkillExecution(skillId, processedInputs);
+      const step: any = {
+        step_order: 1,
+        step_name: template.step_name || template.name || 'Step 1',
+        step_type: template.step_type === 'scraping' ? 'browser' : template.step_type,
+        ai_model: template.ai_model,
+        prompt_template: template.prompt_template,
+        output_format: template.output_format,
+        model_config: template.model_config,
+        input_config: template.input_config,
+      };
+      if (template.executor_config) {
+        step.executor_config = template.executor_config;
+      }
+
+      // Run with current in-editor step settings (even if not saved yet),
+      // so step type/model changes apply immediately to this execution.
+      const result = await api.startSkillExecution(skillId, processedInputs, [step]);
       console.log('[SkillEditor] Execution started, navigating to:', `/executions/${result.executionId}`);
       setShowRunPanel(false);
       navigate(`/executions/${result.executionId}`);
@@ -497,18 +513,13 @@ export function SkillEditor() {
       const step: any = {
         step_order: 1,
         step_name: template.step_name || template.name,
-        step_type: template.step_type,
+        step_type: template.step_type === 'scraping' ? 'browser' : template.step_type,
         ai_model: template.ai_model,
         prompt_template: template.prompt_template,
         output_format: template.output_format,
         model_config: template.model_config,
         input_config: template.input_config,
       };
-
-      // Include api_config for scraping templates
-      if (template.step_type === 'scraping' && template.api_config) {
-        step.api_config = template.api_config;
-      }
 
       // Include executor_config for non-AI/scraping types
       if (template.executor_config) {
@@ -751,6 +762,7 @@ export function SkillEditor() {
               options={[
                 { value: 'json', label: t('json') },
                 { value: 'text', label: t('plainText') },
+                { value: 'file', label: 'File' },
               ]}
             />
 
@@ -820,6 +832,7 @@ export function SkillEditor() {
                 { value: 'text', label: t('plainText') },
                 { value: 'markdown', label: t('markdown') },
                 { value: 'json', label: t('json') },
+                { value: 'file', label: 'File' },
               ]}
             />
           </CardBody>
@@ -875,6 +888,7 @@ export function SkillEditor() {
                 { value: 'markdown', label: t('markdown') },
                 { value: 'json', label: t('json') },
                 { value: 'image', label: t('generatedImages') },
+                { value: 'file', label: 'File' },
               ]}
             />
 

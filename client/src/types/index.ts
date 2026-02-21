@@ -30,7 +30,7 @@ export interface WorkflowStep {
   ai_model: string;
   prompt_template: string;
   input_config?: string;
-  output_format: 'text' | 'json' | 'markdown' | 'image';
+  output_format: 'text' | 'json' | 'markdown' | 'image' | 'file';
   model_config?: string;
   api_config?: string; // For non-AI steps: { service: 'manus', endpoint: 'scrape' }
   executor_config?: string; // JSON: executor-specific configuration

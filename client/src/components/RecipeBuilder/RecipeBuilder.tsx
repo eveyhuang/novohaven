@@ -6,6 +6,29 @@ import { Button, Input, TextArea, Select, Card, CardBody, CardHeader, Modal, Exe
 import { useLanguage } from '../../context/LanguageContext';
 import { useNotifications } from '../../context/NotificationContext';
 
+const STEP_OUTPUT_REF_REGEX = /^step_\d+_output(?:\..+)?$/i;
+const COMPANY_STANDARD_KEYS = [
+  'brand_voice',
+  'amazon_requirements',
+  'image_style_guidelines',
+  'social_media_guidelines',
+  'platform_requirements',
+  'tone_guidelines',
+];
+
+function isStepOutputReference(varName: string): boolean {
+  return STEP_OUTPUT_REF_REGEX.test(String(varName || '').trim());
+}
+
+function isCompanyStandardVariable(varName: string): boolean {
+  const normalized = String(varName || '').trim().toLowerCase();
+  return COMPANY_STANDARD_KEYS.some((key) =>
+    normalized.includes(key.replace(/_/g, '')) ||
+    normalized === key ||
+    normalized.replace(/_/g, '') === key.replace(/_/g, '')
+  );
+}
+
 // Extract user input variables from a single prompt template (excludes step outputs and company standards)
 function extractInputsFromPrompt(promptTemplate: string | null | undefined): string[] {
   if (!promptTemplate) return [];
@@ -14,8 +37,7 @@ function extractInputsFromPrompt(promptTemplate: string | null | undefined): str
   matches.forEach((match) => {
     const varName = match.replace(/\{\{|\}\}/g, '').trim();
     // Exclude step outputs (step_N_output) and common company standards
-    if (!varName.match(/^step_\d+_output$/) &&
-        !['brand_voice', 'amazon_requirements', 'image_style_guidelines', 'social_media_guidelines'].includes(varName)) {
+    if (!isStepOutputReference(varName) && !isCompanyStandardVariable(varName)) {
       if (!variables.includes(varName)) {
         variables.push(varName);
       }
@@ -26,15 +48,105 @@ function extractInputsFromPrompt(promptTemplate: string | null | undefined): str
 
 // Extract user input variables from all steps
 function extractRequiredInputs(steps: WorkflowStep[]): string[] {
-  const allVariables = new Set<string>();
+  const requiredInputs = new Set<string>();
+  const optionalInputs = new Set<string>();
+  const variableRegex = /\{\{([^}]+)\}\}/g;
 
-  steps.forEach((step) => {
-    extractInputsFromPrompt(step.prompt_template).forEach((varName) => {
-      allVariables.add(varName);
-    });
-  });
+  // Pass 1: collect optional variables from input_config.
+  for (const step of steps) {
+    if (!step?.input_config) continue;
+    try {
+      const config = typeof step.input_config === 'string'
+        ? JSON.parse(step.input_config)
+        : step.input_config;
+      if (!config?.variables) continue;
 
-  return Array.from(allVariables).sort();
+      if (Array.isArray(config.variables)) {
+        for (const variable of config.variables) {
+          const source = String(variable?.source || '').trim();
+          if (source && source !== 'user_input') continue;
+          if (isStepOutputReference(source)) continue;
+          if (variable?.optional === true || variable?.required === false) {
+            optionalInputs.add(String(variable.name || '').trim());
+          }
+        }
+      } else {
+        for (const [varName, varConfig] of Object.entries(config.variables)) {
+          const cfg = varConfig as any;
+          const source = String(cfg?.source || '').trim();
+          if (source && source !== 'user_input') continue;
+          if (isStepOutputReference(source)) continue;
+          if (cfg?.optional === true || cfg?.required === false) {
+            optionalInputs.add(String(varName || '').trim());
+          }
+        }
+      }
+    } catch {
+      // Ignore malformed step config.
+    }
+  }
+
+  const collectTemplateVariables = (templateText: string) => {
+    if (!templateText) return;
+    let match: RegExpExecArray | null;
+    variableRegex.lastIndex = 0;
+    while ((match = variableRegex.exec(templateText)) !== null) {
+      const varName = String(match[1] || '').trim();
+      if (!varName) continue;
+      if (isStepOutputReference(varName)) continue;
+      if (isCompanyStandardVariable(varName)) continue;
+      if (optionalInputs.has(varName)) continue;
+      requiredInputs.add(varName);
+    }
+  };
+
+  // Pass 2: collect required user-input variables.
+  for (const step of steps) {
+    if (step?.input_config) {
+      try {
+        const config = typeof step.input_config === 'string'
+          ? JSON.parse(step.input_config)
+          : step.input_config;
+        if (config?.variables) {
+          if (Array.isArray(config.variables)) {
+            for (const variable of config.variables) {
+              const name = String(variable?.name || '').trim();
+              if (!name) continue;
+              if (isStepOutputReference(name)) continue;
+              if (variable?.source === 'user_input' && variable?.required !== false && variable?.optional !== true) {
+                requiredInputs.add(name);
+              }
+            }
+          } else {
+            for (const [varName, varConfig] of Object.entries(config.variables)) {
+              const name = String(varName || '').trim();
+              const cfg = varConfig as any;
+              const source = String(cfg?.source || '').trim();
+              if (!name) continue;
+              if (isStepOutputReference(name)) continue;
+              if (source && source !== 'user_input') continue;
+              if (isStepOutputReference(source)) continue;
+              if (cfg?.optional !== true && cfg?.required !== false) {
+                requiredInputs.add(name);
+              }
+            }
+          }
+        }
+      } catch {
+        // Ignore malformed step config.
+      }
+    }
+
+    collectTemplateVariables(step.prompt_template || '');
+    if (step?.step_type && step.step_type !== 'ai') {
+      const executorText = typeof step.executor_config === 'string'
+        ? step.executor_config
+        : JSON.stringify(step.executor_config || {});
+      collectTemplateVariables(executorText);
+    }
+  }
+
+  return Array.from(requiredInputs).sort();
 }
 
 

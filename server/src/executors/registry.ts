@@ -1,6 +1,5 @@
 import { StepExecutor } from './StepExecutor';
 import { AIExecutor } from './AIExecutor';
-import { ScrapingExecutor } from './ScrapingExecutor';
 import { ManusExecutor } from './ManusExecutor';
 import { ScriptExecutor } from './ScriptExecutor';
 import { HttpExecutor } from './HttpExecutor';
@@ -23,7 +22,6 @@ export function getAllExecutors(): StepExecutor[] {
 
 // Register built-in executors
 registerExecutor(new AIExecutor());
-registerExecutor(new ScrapingExecutor());
 registerExecutor(new ManusExecutor());
 registerExecutor(new ScriptExecutor());
 registerExecutor(new HttpExecutor());

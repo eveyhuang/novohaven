@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { getAllExecutors } from '../executors/registry';
 
 const router = Router();
-const BUSINESS_EXECUTOR_TYPES = new Set(['ai', 'scraping', 'manus', 'browser']);
+const BUSINESS_EXECUTOR_TYPES = new Set(['ai', 'manus', 'browser']);
 
 // GET /api/executors - List all available step executor types with their config schemas
 router.get('/', (req, res) => {

@@ -126,6 +126,7 @@ export async function startExecution(
 function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
   const inputs = new Set<string>();
   const variableRegex = /\{\{([^}]+)\}\}/g;
+  const isStepOutputReference = (value: string): boolean => /^step_\d+_output(?:\..+)?$/i.test(String(value || '').trim());
 
   const standardNames = [
     'brand_voice', 'amazon_requirements', 'social_media_guidelines',
@@ -142,7 +143,7 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
           if (Array.isArray(inputConfig.variables)) {
             // Array format: [{ name: 'product_urls', source: 'user_input', ... }]
             for (const variable of inputConfig.variables) {
-              if (variable.source === 'user_input' && variable.required !== false) {
+              if (variable.source === 'user_input' && variable.required !== false && !isStepOutputReference(variable.name)) {
                 inputs.add(variable.name);
               }
             }
@@ -151,7 +152,7 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
             for (const [varName, varConfig] of Object.entries(inputConfig.variables)) {
               const config = varConfig as any;
               // Skip optional variables
-              if (config.optional !== true) {
+              if (config.optional !== true && !isStepOutputReference(varName)) {
                 inputs.add(varName);
               }
             }
@@ -169,7 +170,7 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
     while ((match = variableRegex.exec(template)) !== null) {
       const varName = match[1].trim();
       // Skip step outputs and company standards
-      if (!varName.match(/^step_\d+_output$/) &&
+      if (!isStepOutputReference(varName) &&
           !standardNames.some(s => varName.toLowerCase().includes(s.replace(/_/g, '')))) {
         inputs.add(varName);
       }
@@ -244,7 +245,8 @@ async function executeWorkflowWithSteps(
     };
   }
 
-  const stepType = step.step_type || 'ai';
+  const rawStepType = step.step_type || 'ai';
+  const stepType = rawStepType === 'scraping' ? 'browser' : rawStepType;
 
   // Emit step-start
   const startMsg = executionEvents.createMessage({
@@ -780,4 +782,3 @@ export function getExecutionStatus(executionId: number): ExecutionResult | null 
     }),
   };
 }
-
