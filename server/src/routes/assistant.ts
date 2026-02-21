@@ -50,6 +50,7 @@ router.post('/save', async (req: Request, res: Response) => {
       entityType: result.entityType,
       skillId: result.skillId,
       workflowId: result.workflowId,
+      createdSkillIds: result.createdSkillIds || [],
       message: `"${workflow.name}" saved successfully`,
     });
   } catch (error: any) {

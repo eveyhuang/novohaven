@@ -63,6 +63,15 @@ export class PromptBuilder {
           'If execution is needed, perform the actual tool call first, then report concrete results from the tool output.',
         ].join('\n')
       );
+      systemParts.push(
+        [
+          '\n## Completion And Reuse Rules',
+          'If the user asks for a file (CSV/JSON/Markdown/etc.), you must return the real generated file path or inline file content from tool output.',
+          'Do not claim a file was created unless a tool output confirms it.',
+          'After a successful ad-hoc multi-step task (especially browser + extraction + file output), propose reusability by creating a draft with `skill_create` unless an existing suitable skill/workflow was already used.',
+          'If an existing skill/workflow was used but required fixes, submit improvements via `skill_edit`.',
+        ].join('\n')
+      );
     }
 
     // Layer 3: Relevant skills (keyword search)
@@ -114,28 +123,153 @@ export class PromptBuilder {
 
     if (!lastMsg) return null;
 
-    const query = lastMsg.content.toLowerCase();
-    const words = query.split(/\s+/).filter((w: string) => w.length > 3);
-    if (words.length === 0) return null;
+    const query = String(lastMsg.content || '').toLowerCase().trim();
+    const tokens = this.tokenizeQuery(query);
+    if (!query || tokens.length === 0) return null;
 
-    // Keyword search against skills and workflows
-    const likeClause = words.map(() => '(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)').join(' OR ');
-    const params = words.flatMap((w: string) => [`%${w}%`, `%${w}%`]);
+    const session = this.db.prepare(
+      'SELECT user_id FROM sessions WHERE id = ?'
+    ).get(sessionId) as { user_id?: number } | undefined;
+    const userId = session?.user_id || 1;
 
-    const skills = this.db.prepare(`
-      SELECT id, name, description, 'skill' as type FROM skills WHERE status = 'active' AND (${likeClause})
-      UNION ALL
-      SELECT id, name, description, 'workflow' as type FROM workflows WHERE status = 'active' AND (${likeClause})
-      LIMIT 5
-    `).all(...params, ...params) as any[];
+    const candidates = [
+      ...(this.db.prepare(`
+        SELECT id, name, description, tags, 'skill' as type
+        FROM skills
+        WHERE status = 'active' AND (created_by = ? OR created_by IS NULL)
+        ORDER BY updated_at DESC
+        LIMIT 200
+      `).all(userId) as any[]),
+      ...(this.db.prepare(`
+        SELECT id, name, description, tags, 'workflow' as type
+        FROM workflows
+        WHERE status = 'active' AND (created_by = ? OR created_by IS NULL)
+        ORDER BY updated_at DESC
+        LIMIT 200
+      `).all(userId) as any[]),
+    ];
 
-    if (skills.length === 0) return null;
+    const ranked = candidates.map((candidate) => {
+      const steps = this.db.prepare(
+        'SELECT step_name, step_type, prompt_template, input_config FROM skill_steps WHERE parent_id = ? AND parent_type = ? ORDER BY step_order'
+      ).all(candidate.id, candidate.type) as any[];
+      const score = this.scoreAssetRelevance(query, tokens, candidate, steps);
+      return { candidate, steps, score };
+    })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
 
-    const lines = skills.map((s: any) =>
-      `- **${s.name}** (${s.type} #${s.id}): ${s.description || 'No description'}`
-    );
+    if (ranked.length === 0) return null;
 
-    return `The following skills/workflows may be relevant. Use \`skill_search\` or \`skill_execute\` to work with them:\n${lines.join('\n')}`;
+    const top = ranked[0];
+    const lines = ranked.map(({ candidate, steps, score }) => {
+      const stepTypes = steps.map((s: any) => s.step_type).filter(Boolean);
+      const inputs = this.extractRequiredInputsFromSteps(steps);
+      const inputText = inputs.length > 0 ? ` | required: ${inputs.join(', ')}` : '';
+      const stepText = stepTypes.length > 0 ? ` | steps: ${stepTypes.join(' -> ')}` : '';
+      return `- [${candidate.type} #${candidate.id}] ${candidate.name} (score ${score})${stepText}${inputText}`;
+    });
+
+    return [
+      `Top match to execute first: [${top.candidate.type} #${top.candidate.id}] ${top.candidate.name}.`,
+      'Prefer executing a high-confidence existing skill/workflow before proposing a new one.',
+      'Relevant assets:',
+      ...lines,
+      'Use `skill_search` for deeper lookup and `skill_execute` when required inputs are available.',
+    ].join('\n');
+  }
+
+  private tokenizeQuery(query: string): string[] {
+    const normalized = String(query || '').toLowerCase().trim();
+    if (!normalized) return [];
+
+    const tokens = new Set<string>();
+    const asciiTokens = normalized.split(/[^a-z0-9_]+/).filter((t) => t.length >= 2);
+    asciiTokens.forEach((t) => tokens.add(t));
+
+    const cjkChunks = normalized.match(/[\u3400-\u9fff]+/g) || [];
+    for (const chunk of cjkChunks) {
+      if (chunk.length >= 2) tokens.add(chunk);
+      if (chunk.length >= 3) {
+        for (let i = 0; i <= chunk.length - 2; i++) {
+          tokens.add(chunk.slice(i, i + 2));
+        }
+      }
+    }
+
+    if (tokens.size === 0 && normalized.length >= 2) {
+      tokens.add(normalized);
+    }
+    return Array.from(tokens);
+  }
+
+  private parseTags(raw: any): string[] {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.map((t) => String(t));
+    try {
+      const parsed = JSON.parse(String(raw));
+      if (Array.isArray(parsed)) return parsed.map((t) => String(t));
+    } catch {}
+    return [];
+  }
+
+  private scoreAssetRelevance(query: string, tokens: string[], candidate: any, steps: any[]): number {
+    const name = String(candidate?.name || '').toLowerCase();
+    const desc = String(candidate?.description || '').toLowerCase();
+    const tags = this.parseTags(candidate?.tags).join(' ').toLowerCase();
+    const stepText = steps
+      .map((s: any) => `${s.step_name || ''} ${s.step_type || ''} ${s.prompt_template || ''}`)
+      .join(' ')
+      .toLowerCase();
+    const blob = `${name} ${desc} ${tags} ${stepText}`;
+
+    let score = 0;
+    if (name.includes(query)) score += 80;
+    if (desc.includes(query)) score += 30;
+    if (tags.includes(query)) score += 35;
+
+    for (const token of tokens) {
+      if (name.includes(token)) score += 18;
+      if (desc.includes(token)) score += 10;
+      if (tags.includes(token)) score += 14;
+      if (stepText.includes(token)) score += 8;
+    }
+
+    const csvIntent = /\bcsv\b|spreadsheet|导出|表格|输出文件/.test(query);
+    if (csvIntent) {
+      if (/\bcsv\b|spreadsheet|导出|表格|\.csv/.test(blob)) score += 12;
+      else score -= 4;
+    }
+
+    const workflowIntent = /\bworkflow\b|pipeline|multi[-\s]?step|流程|链路|步骤/.test(query);
+    if (workflowIntent && candidate?.type === 'workflow') score += 8;
+
+    if (score < 18) return 0;
+    return score;
+  }
+
+  private extractRequiredInputsFromSteps(steps: any[]): string[] {
+    const vars = new Set<string>();
+    for (const step of steps) {
+      try {
+        const config = JSON.parse(step.input_config || '{}');
+        if (config.variables && !Array.isArray(config.variables)) {
+          for (const [name, varDef] of Object.entries(config.variables) as any[]) {
+            if (!varDef?.optional) vars.add(`{{${name}}}`);
+          }
+        }
+      } catch {}
+
+      const prompt = String(step.prompt_template || '');
+      const matches = prompt.match(/\{\{([^}]+)\}\}/g) || [];
+      for (const match of matches) {
+        const key = match.replace(/\{\{|\}\}/g, '').trim();
+        if (!key || key.startsWith('step_')) continue;
+        vars.add(`{{${key}}}`);
+      }
+    }
+    return Array.from(vars);
   }
 
   /**

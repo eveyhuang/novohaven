@@ -33,7 +33,7 @@ export class AgentRunner {
   private promptBuilder: PromptBuilder;
   private toolExecutor: ToolExecutor | null = null;
   private pendingApprovals = new Map<string, PendingApproval>();
-  private maxToolRounds = 10;
+  private maxToolRounds = Math.max(1, parseInt(process.env.AGENT_MAX_TOOL_ROUNDS || '20', 10));
   private ready: Promise<void>;
 
   constructor(sessionId: string) {
@@ -295,11 +295,12 @@ export class AgentRunner {
     }
 
     let round = 0;
+    let toolRounds = 0;
     let currentMessages = [...messages];
     let pendingImageUrls: string[] = [];
     let pendingGeneratedFiles: Array<{ name: string; url: string; mimeType?: string; type?: string; size?: number }> = [];
 
-    while (round < this.maxToolRounds) {
+    while (true) {
       round++;
 
       const request: CompletionRequest = {
@@ -362,6 +363,12 @@ export class AgentRunner {
         return;
       }
 
+      // Enforce a hard cap on tool rounds, but allow a final non-tool response turn.
+      if (toolRounds >= this.maxToolRounds) {
+        break;
+      }
+      toolRounds++;
+
       // Persist assistant message with tool calls
       this.db.prepare(`
         INSERT INTO session_messages (session_id, role, content, tool_calls)
@@ -417,7 +424,7 @@ export class AgentRunner {
     }
 
     // Max rounds exceeded
-    const msg = 'Reached maximum tool execution rounds. Please try a simpler request.';
+    const msg = `Reached maximum tool execution rounds (${this.maxToolRounds}). Please try a simpler request.`;
     this.sendResponse(msg);
     this.persistAssistantMessage(msg);
   }

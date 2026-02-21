@@ -328,6 +328,31 @@ export function AIWorkflowBuilder() {
                     </div>
                   )}
 
+                  {/* Reusable skill blueprints */}
+                  {currentWorkflow.skill_blueprints && currentWorkflow.skill_blueprints.length > 0 && (
+                    <div className="bg-emerald-50 rounded-lg p-3">
+                      <p className="text-xs font-medium text-emerald-700 mb-2">
+                        Reusable Skills ({currentWorkflow.skill_blueprints.length})
+                      </p>
+                      <div className="space-y-2">
+                        {currentWorkflow.skill_blueprints.map((bp, i) => (
+                          <div key={bp.key || `${bp.name}-${i}`} className="border border-emerald-200 rounded px-2 py-1.5 bg-white/70">
+                            <div className="text-xs font-semibold text-emerald-800">
+                              {bp.name}
+                              {bp.key ? <span className="ml-1 text-emerald-600">[{bp.key}]</span> : null}
+                            </div>
+                            <div className="text-[11px] text-emerald-700">
+                              {bp.steps.length} step(s)
+                              {bp.requiredInputs && bp.requiredInputs.length > 0
+                                ? ` • ${bp.requiredInputs.length} input(s)`
+                                : ''}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Steps */}
                   <div className="space-y-2">
                     {currentWorkflow.steps.map((step, index) => (
@@ -411,6 +436,14 @@ function StepCard({
   t,
 }: StepCardProps) {
   const icon = STEP_TYPE_ICONS[step.step_type] || '\u2699\uFE0F';
+  const sourceLabel = step.from_skill_id
+    ? `skill #${step.from_skill_id}${step.from_step_order ? ` step ${step.from_step_order}` : ''}`
+    : step.from_skill_blueprint
+      ? `blueprint:${step.from_skill_blueprint}${step.from_step_order ? ` step ${step.from_step_order}` : ''}`
+      : step.from_skill_name
+        ? `skill:${step.from_skill_name}${step.from_step_order ? ` step ${step.from_step_order}` : ''}`
+        : 'inline';
+  const modelLabel = step.ai_model ? `model:${step.ai_model}` : '';
 
   return (
     <div className="border border-secondary-200 rounded-lg overflow-hidden">
@@ -463,6 +496,10 @@ function StepCard({
             {'\u2715'}
           </button>
         </div>
+      </div>
+      <div className="px-3 pb-2 pt-1 bg-secondary-50 border-t border-secondary-100 flex items-center gap-2 text-[11px] text-secondary-500">
+        <span className="px-1.5 py-0.5 rounded bg-secondary-200 text-secondary-700">source:{sourceLabel}</span>
+        {modelLabel && <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">{modelLabel}</span>}
       </div>
 
       {/* Step details (when editing) */}

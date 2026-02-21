@@ -5,6 +5,7 @@ import { ManusExecutor } from './ManusExecutor';
 import { ScriptExecutor } from './ScriptExecutor';
 import { HttpExecutor } from './HttpExecutor';
 import { TransformExecutor } from './TransformExecutor';
+import { BrowserExecutor } from './BrowserExecutor';
 
 const executors = new Map<string, StepExecutor>();
 
@@ -27,3 +28,4 @@ registerExecutor(new ManusExecutor());
 registerExecutor(new ScriptExecutor());
 registerExecutor(new HttpExecutor());
 registerExecutor(new TransformExecutor());
+registerExecutor(new BrowserExecutor());

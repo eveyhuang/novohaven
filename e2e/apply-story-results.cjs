@@ -4,7 +4,9 @@ const fs = require('fs/promises');
 const path = require('path');
 
 const RESULTS_PATH = path.join(process.cwd(), 'e2e', 'story-results.json');
-const DOC_PATH = path.join(process.cwd(), 'docs', 'user-stories-web-tests.md');
+const DOC_PATH = process.env.STORY_DOC_PATH
+  ? path.resolve(process.cwd(), process.env.STORY_DOC_PATH)
+  : path.join(process.cwd(), 'docs', 'user-stories-web-tests.md');
 
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -33,7 +35,7 @@ async function main() {
   for (const story of stories) {
     const id = story.id;
     const sectionRegex = new RegExp(
-      `(^###\\s+${escapeRegExp(id)}\\b[^\\n]*\\n[\\s\\S]*?)(?=^###\\s+[A-Z]{2}-\\d+[a-z]?\\b|^##\\s|\\Z)`,
+      `(^###\\s+${escapeRegExp(id)}\\b[^\\n]*\\n[\\s\\S]*?)(?=^###\\s+[A-Za-z0-9-]+\\b|^##\\s|\\Z)`,
       'm'
     );
     const match = doc.match(sectionRegex);

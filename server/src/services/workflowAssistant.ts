@@ -17,17 +17,35 @@ export interface GeneratedStep {
   executor_config?: Record<string, any>;
   // Skill sourcing
   from_skill_id?: number;
+  from_skill_blueprint?: string;
+  from_skill_name?: string;
   // Backward compatibility
   from_template_id?: number;
   from_step_order?: number;
   override_fields?: string[];  // which fields the AI explicitly changed
 }
 
+export interface GeneratedInputSpec {
+  name: string;
+  type: string;
+  description: string;
+}
+
+export interface GeneratedSkillBlueprint {
+  key?: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  requiredInputs?: GeneratedInputSpec[];
+  steps: GeneratedStep[];
+}
+
 export interface GeneratedWorkflow {
   name: string;
   description: string;
   steps: GeneratedStep[];
-  requiredInputs: { name: string; type: string; description: string }[];
+  requiredInputs: GeneratedInputSpec[];
+  skill_blueprints?: GeneratedSkillBlueprint[];
 }
 
 export interface AssistantResponse {
@@ -177,6 +195,7 @@ ${skillSection}
 4. **When generating a workflow**, respond with BOTH:
    - A conversational explanation of what you've created
    - A JSON workflow block wrapped in \`\`\`workflow-json ... \`\`\` fences
+   - For repeatable sub-tasks, include reusable \`skill_blueprints\` and reference them from workflow steps.
 
 5. **Choose the right step type for each task:**
    - Use "ai" for text generation, analysis, summarization, translation
@@ -201,14 +220,29 @@ ${skillSection}
 {
   "name": "Workflow Name",
   "description": "Brief description",
+  "skill_blueprints": [
+    {
+      "key": "wayfair_keyword_scan",
+      "name": "Wayfair Keyword Scanner",
+      "description": "Extract top category and recommendation keywords from Wayfair",
+      "requiredInputs": [
+        { "name": "category", "type": "text", "description": "Target category name" }
+      ],
+      "steps": [
+        {
+          "step_name": "Extract Wayfair signals",
+          "step_type": "scraping",
+          "output_format": "json",
+          "executor_config": {}
+        }
+      ]
+    }
+  ],
   "steps": [
     {
-      "step_name": "Step Name",
-      "step_type": "ai",
-      "ai_model": "model-id",
-      "prompt_template": "Complete prompt with {{variables}}",
-      "output_format": "text",
-      "executor_config": {}
+      "step_name": "Use Wayfair skill",
+      "from_skill_blueprint": "wayfair_keyword_scan",
+      "from_step_order": 1
     }
   ],
   "requiredInputs": [
@@ -224,24 +258,65 @@ Always ensure step outputs chain correctly — if step 2 needs step 1's output, 
 CRITICAL: When you generate a workflow, you MUST include a \`\`\`workflow-json code block with the complete JSON. Without this block, the workflow cannot be displayed to the user. NEVER skip the JSON block when generating a workflow.`;
 }
 
+function normalizeGeneratedStep(step: any, index: number): GeneratedStep {
+  const outputFormat = step?.output_format;
+  const normalizedOutput: GeneratedStep['output_format'] =
+    outputFormat === 'json' || outputFormat === 'markdown' || outputFormat === 'image'
+      ? outputFormat
+      : 'text';
+
+  return {
+    step_name: step?.step_name || `Step ${index + 1}`,
+    step_type: step?.step_type || 'ai',
+    ai_model: step?.ai_model || '',
+    prompt_template: step?.prompt_template || '',
+    output_format: normalizedOutput,
+    executor_config: step?.executor_config,
+    from_skill_id: step?.from_skill_id || step?.from_template_id,
+    from_skill_blueprint: step?.from_skill_blueprint,
+    from_skill_name: step?.from_skill_name,
+    from_template_id: step?.from_template_id || step?.from_skill_id,
+    from_step_order: step?.from_step_order,
+    override_fields: step?.override_fields,
+  };
+}
+
+function normalizeInputSpecs(inputs: any): GeneratedInputSpec[] {
+  if (!Array.isArray(inputs)) return [];
+  return inputs
+    .map((input: any) => ({
+      name: String(input?.name || '').trim(),
+      type: String(input?.type || 'text').trim() || 'text',
+      description: String(input?.description || '').trim(),
+    }))
+    .filter((input: GeneratedInputSpec) => input.name.length > 0);
+}
+
+function normalizeSkillBlueprints(raw: any): GeneratedSkillBlueprint[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item: any, idx: number) => ({
+      key: item?.key ? String(item.key) : undefined,
+      name: String(item?.name || '').trim() || `Skill Blueprint ${idx + 1}`,
+      description: item?.description ? String(item.description) : '',
+      tags: Array.isArray(item?.tags) ? item.tags.map((t: any) => String(t)) : [],
+      requiredInputs: normalizeInputSpecs(item?.requiredInputs),
+      steps: Array.isArray(item?.steps)
+        ? item.steps.map((step: any, stepIdx: number) => normalizeGeneratedStep(step, stepIdx))
+        : [],
+    }))
+    .filter((bp: GeneratedSkillBlueprint) => bp.steps.length > 0);
+}
+
 
 function tryParseWorkflow(jsonStr: string): GeneratedWorkflow | null {
   try {
-    const workflow = JSON.parse(jsonStr) as GeneratedWorkflow;
-    if (workflow.name && workflow.steps && Array.isArray(workflow.steps)) {
-      workflow.steps = workflow.steps.map((step, i) => ({
-        step_name: step.step_name || `Step ${i + 1}`,
-        step_type: step.step_type || 'ai',
-        ai_model: step.ai_model || '',
-        prompt_template: step.prompt_template || '',
-        output_format: step.output_format || 'text',
-        executor_config: step.executor_config,
-        from_skill_id: step.from_skill_id || step.from_template_id,
-        from_template_id: step.from_template_id || step.from_skill_id,
-        from_step_order: step.from_step_order,
-        override_fields: step.override_fields,
-      }));
-      workflow.requiredInputs = workflow.requiredInputs || [];
+    const raw = JSON.parse(jsonStr) as any;
+    if (raw.name && raw.steps && Array.isArray(raw.steps)) {
+      const workflow = raw as GeneratedWorkflow;
+      workflow.steps = raw.steps.map((step: any, i: number) => normalizeGeneratedStep(step, i));
+      workflow.requiredInputs = normalizeInputSpecs(raw.requiredInputs);
+      workflow.skill_blueprints = normalizeSkillBlueprints(raw.skill_blueprints || raw.skills);
       return workflow;
     }
   } catch (e) {
@@ -399,7 +474,7 @@ export async function generateWorkflow(
         { role: 'assistant' as const, content: response.content },
         {
           role: 'user' as const,
-          content: `Here are the full skill details you requested:\n\n${skillDetails.join('\n\n')}\n\nReference these steps using from_skill_id and from_step_order rather than regenerating the config. Only include fields in override_fields if you explicitly changed them. Now generate the workflow-json.`,
+          content: `Here are the full skill details you requested:\n\n${skillDetails.join('\n\n')}\n\nReference these steps using from_skill_id and from_step_order rather than regenerating the config. If you design new reusable blocks, include them in skill_blueprints and reference them with from_skill_blueprint. Only include fields in override_fields if you explicitly changed them. Now generate the workflow-json.`,
         },
       ];
 
@@ -437,7 +512,7 @@ export async function saveWorkflowGraph(
   workflow: GeneratedWorkflow,
   userId: number,
   asSkill: boolean = false
-): Promise<{ entityType: 'skill' | 'workflow'; skillId?: number; workflowId?: number }> {
+): Promise<{ entityType: 'skill' | 'workflow'; skillId?: number; workflowId?: number; createdSkillIds?: number[] }> {
   const { getDatabase } = await import('../models/database');
   const db = getDatabase();
 
@@ -446,14 +521,6 @@ export async function saveWorkflowGraph(
   const parentInsert = db.prepare(
     `INSERT INTO ${parentTable} (name, description, created_by, tags) VALUES (?, ?, ?, ?)`
   );
-  const parentResult = parentInsert.run(
-    workflow.name,
-    workflow.description || null,
-    userId,
-    JSON.stringify([])
-  );
-  const parentId = Number(parentResult.lastInsertRowid);
-
   const getSkillStep = db.prepare(
     "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' AND step_order = ?"
   );
@@ -462,78 +529,149 @@ export async function saveWorkflowGraph(
       parent_id, parent_type, step_order, step_name, step_type, ai_model, prompt_template, input_config, output_format, model_config, executor_config
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const createdSkillIds: number[] = [];
+  const blueprintSkillIds = new Map<string, number>();
 
-  for (let i = 0; i < workflow.steps.length; i++) {
-    const step = workflow.steps[i];
+  const registerBlueprintAlias = (key: string | undefined, name: string | undefined, skillId: number) => {
+    if (key && key.trim()) {
+      blueprintSkillIds.set(key.trim(), skillId);
+      blueprintSkillIds.set(key.trim().toLowerCase(), skillId);
+    }
+    if (name && name.trim()) {
+      blueprintSkillIds.set(name.trim(), skillId);
+      blueprintSkillIds.set(name.trim().toLowerCase(), skillId);
+    }
+  };
 
-    let mergedPrompt = step.prompt_template || '';
-    let mergedAiModel = step.ai_model || null;
-    let mergedOutputFormat = step.output_format || 'text';
-    let mergedStepType = step.step_type || 'ai';
-    let mergedExecutorConfig: string = step.executor_config ? JSON.stringify(step.executor_config) : '{}';
-    let mergedModelConfig: string = '{}';
-    let mergedInputConfig: string = '{}';
+  const inferInputConfig = (
+    prompt: string,
+    executorConfig: string,
+    stepType: string,
+    candidates: GeneratedInputSpec[]
+  ): string => {
+    const stepVars = candidates.filter((input) => {
+      if (prompt.includes(`{{${input.name}}}`)) return true;
+      if (executorConfig.includes(`{{${input.name}}}`)) return true;
+      if (stepType === 'scraping' && input.type === 'url_list') return true;
+      return false;
+    });
 
-    const sourceSkillId = step.from_skill_id || step.from_template_id;
-    if (sourceSkillId && step.from_step_order) {
-      const sourceStep = getSkillStep.get(sourceSkillId, step.from_step_order) as any;
-      if (sourceStep) {
-        mergedPrompt = sourceStep.prompt_template || '';
-        mergedAiModel = sourceStep.ai_model || null;
-        mergedOutputFormat = sourceStep.output_format || 'text';
-        mergedStepType = sourceStep.step_type || 'ai';
-        mergedExecutorConfig = sourceStep.executor_config || '{}';
-        mergedModelConfig = sourceStep.model_config || '{}';
-        mergedInputConfig = sourceStep.input_config || '{}';
+    if (stepVars.length === 0) return '{}';
+    return JSON.stringify({
+      variables: stepVars.reduce((acc, v) => {
+        acc[v.name] = { type: v.type, description: v.description };
+        return acc;
+      }, {} as Record<string, any>),
+    });
+  };
 
-        const overrides = step.override_fields || [];
-        if (overrides.includes('prompt_template')) mergedPrompt = step.prompt_template || '';
-        if (overrides.includes('ai_model')) mergedAiModel = step.ai_model || null;
-        if (overrides.includes('output_format')) mergedOutputFormat = step.output_format || 'text';
-        if (overrides.includes('step_type')) mergedStepType = step.step_type || 'ai';
-        if (overrides.includes('executor_config') && step.executor_config) {
-          mergedExecutorConfig = JSON.stringify(step.executor_config);
+  const persistSteps = (
+    parentId: number,
+    targetType: 'skill' | 'workflow',
+    steps: GeneratedStep[],
+    inputCandidates: GeneratedInputSpec[]
+  ) => {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+
+      let mergedPrompt = step.prompt_template || '';
+      let mergedAiModel = step.ai_model || null;
+      let mergedOutputFormat = step.output_format || 'text';
+      let mergedStepType = step.step_type || 'ai';
+      let mergedExecutorConfig: string = step.executor_config ? JSON.stringify(step.executor_config) : '{}';
+      let mergedModelConfig: string = '{}';
+      let mergedInputConfig: string = '{}';
+
+      const sourceFromBlueprint = step.from_skill_blueprint
+        ? (blueprintSkillIds.get(step.from_skill_blueprint)
+          || blueprintSkillIds.get(step.from_skill_blueprint.toLowerCase()))
+        : undefined;
+      const sourceFromName = step.from_skill_name
+        ? (blueprintSkillIds.get(step.from_skill_name)
+          || blueprintSkillIds.get(step.from_skill_name.toLowerCase()))
+        : undefined;
+
+      const sourceSkillId = step.from_skill_id || step.from_template_id || sourceFromBlueprint || sourceFromName;
+      if (sourceSkillId && step.from_step_order) {
+        const sourceStep = getSkillStep.get(sourceSkillId, step.from_step_order) as any;
+        if (sourceStep) {
+          mergedPrompt = sourceStep.prompt_template || '';
+          mergedAiModel = sourceStep.ai_model || null;
+          mergedOutputFormat = sourceStep.output_format || 'text';
+          mergedStepType = sourceStep.step_type || 'ai';
+          mergedExecutorConfig = sourceStep.executor_config || '{}';
+          mergedModelConfig = sourceStep.model_config || '{}';
+          mergedInputConfig = sourceStep.input_config || '{}';
+
+          const overrides = step.override_fields || [];
+          if (overrides.includes('prompt_template')) mergedPrompt = step.prompt_template || '';
+          if (overrides.includes('ai_model')) mergedAiModel = step.ai_model || null;
+          if (overrides.includes('output_format')) mergedOutputFormat = step.output_format || 'text';
+          if (overrides.includes('step_type')) mergedStepType = step.step_type || 'ai';
+          if (overrides.includes('executor_config') && step.executor_config) {
+            mergedExecutorConfig = JSON.stringify(step.executor_config);
+          }
         }
+      }
+
+      if (!mergedInputConfig || mergedInputConfig === '{}' || mergedInputConfig === '') {
+        mergedInputConfig = inferInputConfig(mergedPrompt, mergedExecutorConfig, mergedStepType, inputCandidates);
+      }
+
+      insertStep.run(
+        parentId,
+        targetType,
+        i + 1,
+        step.step_name,
+        mergedStepType,
+        mergedAiModel,
+        mergedPrompt,
+        mergedInputConfig,
+        mergedOutputFormat,
+        mergedModelConfig,
+        mergedExecutorConfig
+      );
+    }
+  };
+
+  const result = db.transaction(() => {
+    if (!asSkill && workflow.skill_blueprints && workflow.skill_blueprints.length > 0) {
+      for (let i = 0; i < workflow.skill_blueprints.length; i++) {
+        const blueprint = workflow.skill_blueprints[i];
+        if (!blueprint.steps || blueprint.steps.length === 0) continue;
+
+        const skillInsert = db.prepare(
+          'INSERT INTO skills (name, description, created_by, tags) VALUES (?, ?, ?, ?)'
+        );
+        const inserted = skillInsert.run(
+          blueprint.name || `Generated Skill ${i + 1}`,
+          blueprint.description || null,
+          userId,
+          JSON.stringify(blueprint.tags || [])
+        );
+        const createdSkillId = Number(inserted.lastInsertRowid);
+        createdSkillIds.push(createdSkillId);
+        registerBlueprintAlias(blueprint.key, blueprint.name, createdSkillId);
+        persistSteps(createdSkillId, 'skill', blueprint.steps, blueprint.requiredInputs || workflow.requiredInputs || []);
       }
     }
 
-    if (!mergedInputConfig || mergedInputConfig === '{}' || mergedInputConfig === '') {
-      const stepVars = workflow.requiredInputs.filter((input) => {
-        if (mergedPrompt.includes(`{{${input.name}}}`)) return true;
-        if (mergedExecutorConfig.includes(`{{${input.name}}}`)) return true;
-        if (mergedStepType === 'scraping' && input.type === 'url_list') return true;
-        return false;
-      });
-
-      mergedInputConfig = stepVars.length > 0
-        ? JSON.stringify({
-            variables: stepVars.reduce((acc, v) => {
-              acc[v.name] = { type: v.type, description: v.description };
-              return acc;
-            }, {} as Record<string, any>),
-          })
-        : '{}';
-    }
-
-    insertStep.run(
-      parentId,
-      parentType,
-      i + 1,
-      step.step_name,
-      mergedStepType,
-      mergedAiModel,
-      mergedPrompt,
-      mergedInputConfig,
-      mergedOutputFormat,
-      mergedModelConfig,
-      mergedExecutorConfig
+    const parentResult = parentInsert.run(
+      workflow.name,
+      workflow.description || null,
+      userId,
+      JSON.stringify([])
     );
-  }
+    const parentId = Number(parentResult.lastInsertRowid);
+    persistSteps(parentId, parentType, workflow.steps, workflow.requiredInputs || []);
 
-  if (asSkill) {
-    return { entityType: 'skill', skillId: parentId };
-  }
-  return { entityType: 'workflow', workflowId: parentId };
+    if (asSkill) {
+      return { entityType: 'skill' as const, skillId: parentId, createdSkillIds };
+    }
+    return { entityType: 'workflow' as const, workflowId: parentId, createdSkillIds };
+  })();
+
+  return result;
 }
 
 // Backward-compatible alias used by older tests and callers.

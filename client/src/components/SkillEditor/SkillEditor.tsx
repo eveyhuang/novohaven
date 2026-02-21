@@ -43,6 +43,9 @@ const DEFAULT_INPUT_CONFIG: InputTypeConfig = {
   description: '',
 };
 
+const BUSINESS_EXECUTOR_TYPES = new Set(['ai', 'scraping', 'manus', 'browser']);
+const EXECUTOR_DISPLAY_ORDER = ['ai', 'scraping', 'manus', 'browser', 'script', 'http', 'transform'];
+
 export function SkillEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -103,6 +106,7 @@ export function SkillEditor() {
   const [runInputValues, setRunInputValues] = useState<Record<string, any>>({});
   const [isRunStarting, setIsRunStarting] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [showAdvancedExecutors, setShowAdvancedExecutors] = useState(false);
 
   useEffect(() => {
     loadModels();
@@ -552,6 +556,40 @@ export function SkillEditor() {
     return [...new Set([...promptVariables, ...configured])];
   }, [promptVariables, template.input_config]);
 
+  const orderedExecutors = useMemo(() => {
+    return [...executors].sort((a, b) => {
+      const aIdx = EXECUTOR_DISPLAY_ORDER.indexOf(a.type);
+      const bIdx = EXECUTOR_DISPLAY_ORDER.indexOf(b.type);
+      const aOrder = aIdx === -1 ? Number.MAX_SAFE_INTEGER : aIdx;
+      const bOrder = bIdx === -1 ? Number.MAX_SAFE_INTEGER : bIdx;
+      return aOrder - bOrder;
+    });
+  }, [executors]);
+
+  const advancedExecutors = useMemo(
+    () => orderedExecutors.filter((e) => !BUSINESS_EXECUTOR_TYPES.has(e.type)),
+    [orderedExecutors]
+  );
+
+  const selectedExecutor = useMemo(
+    () => orderedExecutors.find((e) => e.type === template.step_type),
+    [orderedExecutors, template.step_type]
+  );
+
+  const selectedExecutorIsAdvanced = !!selectedExecutor && !BUSINESS_EXECUTOR_TYPES.has(selectedExecutor.type);
+
+  const visibleExecutors = useMemo(() => {
+    if (showAdvancedExecutors) return orderedExecutors;
+
+    const business = orderedExecutors.filter((e) => BUSINESS_EXECUTOR_TYPES.has(e.type));
+    if (!selectedExecutor || BUSINESS_EXECUTOR_TYPES.has(selectedExecutor.type)) {
+      return business;
+    }
+
+    // Keep current advanced selection visible for backward-compatible editing.
+    return [...business, selectedExecutor];
+  }, [orderedExecutors, selectedExecutor, showAdvancedExecutors]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -625,11 +663,31 @@ export function SkillEditor() {
       {executors.length > 0 && (
         <Card>
           <CardHeader>
-            <h2 className="font-semibold text-secondary-900">{t('stepType')}</h2>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="font-semibold text-secondary-900">{t('stepType')}</h2>
+                <p className="text-sm text-secondary-500 mt-1">
+                  {showAdvancedExecutors
+                    ? 'Advanced mode: all technical step types are visible.'
+                    : 'Intent mode: simplified step types for non-technical users.'}
+                </p>
+              </div>
+              {advancedExecutors.length > 0 && (
+                <Button
+                  size="sm"
+                  variant={showAdvancedExecutors ? 'secondary' : 'ghost'}
+                  onClick={() => setShowAdvancedExecutors((prev) => !prev)}
+                >
+                  {showAdvancedExecutors ? 'Hide Advanced/Internal' : 'Show Advanced/Internal'}
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardBody>
-            <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-              {executors.map((exec) => (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {visibleExecutors.map((exec) => {
+                const isAdvanced = !BUSINESS_EXECUTOR_TYPES.has(exec.type);
+                return (
                 <button
                   key={exec.type}
                   onClick={() => setTemplate({ ...template, step_type: exec.type as StepType })}
@@ -642,9 +700,20 @@ export function SkillEditor() {
                   <span className="text-2xl mb-1">{exec.icon}</span>
                   <span className="text-sm font-medium text-secondary-900">{exec.displayName}</span>
                   <span className="text-xs text-secondary-500 mt-0.5 text-center">{exec.description.slice(0, 50)}</span>
+                  {isAdvanced && (
+                    <span className="mt-2 px-2 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700">
+                      Advanced
+                    </span>
+                  )}
                 </button>
-              ))}
+                );
+              })}
             </div>
+            {selectedExecutorIsAdvanced && !showAdvancedExecutors && (
+              <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+                This skill currently uses an advanced step type. It is still editable, but advanced types are hidden by default.
+              </div>
+            )}
           </CardBody>
         </Card>
       )}
