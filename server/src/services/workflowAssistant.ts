@@ -65,6 +65,8 @@ const PREFERRED_MODELS = [
   'gemini-2.5-flash',
 ];
 
+type AssistantApiMessage = { role: 'user' | 'assistant'; content: string };
+
 function selectAssistantModel(): string {
   const available = getAvailableModels();
   const availableIds = available.map(m => m.id);
@@ -325,6 +327,151 @@ function tryParseWorkflow(jsonStr: string): GeneratedWorkflow | null {
   return null;
 }
 
+function tryParseWorkflowFromEmbeddedJson(content: string): GeneratedWorkflow | null {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+
+    if (inString) {
+      if (escapeNext) {
+        escapeNext = false;
+      } else if (char === '\\') {
+        escapeNext = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+
+    if (char === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        candidates.push(content.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const workflow = tryParseWorkflow(candidates[i]);
+    if (workflow) return workflow;
+  }
+
+  return null;
+}
+
+function hasSkillRequest(parsed: AssistantResponse): boolean {
+  return Array.isArray(parsed.skillRequest) && parsed.skillRequest.length > 0;
+}
+
+function addMissingWorkflowHint(parsed: AssistantResponse, messages: ConversationMessage[]): AssistantResponse {
+  const latestUserMessage = [...messages].reverse().find((msg) => msg.role === 'user')?.content || '';
+  const chinese = /[\u4e00-\u9fff]/.test(`${latestUserMessage}\n${parsed.message}`);
+
+  const hint = chinese
+    ? '未能从本次 AI 回复中提取有效的工作流 JSON，因此右侧预览暂时为空。请让我“直接输出 workflow-json 代码块（不要解释）”后重试。'
+    : 'I could not extract a valid workflow JSON from this reply, so the workflow preview is still empty. Please ask me to "output only a workflow-json code block" and retry.';
+
+  const retrySuggestion = chinese
+    ? '请直接输出 workflow-json 代码块（不要解释）'
+    : 'Output only a workflow-json code block (no extra text).';
+
+  const mergedMessage = parsed.message?.trim()
+    ? `${parsed.message.trim()}\n\n${hint}`
+    : hint;
+
+  return {
+    ...parsed,
+    message: mergedMessage,
+    suggestions: parsed.suggestions && parsed.suggestions.length > 0
+      ? parsed.suggestions
+      : [retrySuggestion],
+  };
+}
+
+async function resolveSkillRequestIfNeeded(
+  parsed: AssistantResponse,
+  apiMessages: AssistantApiMessage[],
+  assistantContent: string,
+  modelId: string,
+  systemPrompt: string
+): Promise<AssistantResponse> {
+  if (!hasSkillRequest(parsed)) return parsed;
+
+  const { getDatabase } = await import('../models/database');
+  const db = getDatabase();
+  const skillDetails: string[] = [];
+
+  for (const skillId of parsed.skillRequest || []) {
+    const steps = db.prepare(
+      "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' ORDER BY step_order"
+    ).all(skillId) as any[];
+    if (steps.length === 0) continue;
+
+    const stepDescriptions = steps.map((s: any) => {
+      const details: Record<string, any> = {
+        step_order: s.step_order,
+        step_name: s.step_name,
+        step_type: s.step_type,
+        ai_model: s.ai_model,
+        prompt_template: s.prompt_template,
+        output_format: s.output_format,
+      };
+      if (s.api_config) details.api_config = JSON.parse(s.api_config);
+      if (s.executor_config) details.executor_config = JSON.parse(s.executor_config);
+      if (s.input_config) details.input_config = JSON.parse(s.input_config);
+      if (s.model_config) details.model_config = JSON.parse(s.model_config);
+      return details;
+    });
+
+    skillDetails.push(`Skill ID ${skillId}:\n${JSON.stringify(stepDescriptions, null, 2)}`);
+  }
+
+  if (skillDetails.length === 0) return parsed;
+
+  const followUpMessages: AssistantApiMessage[] = [
+    ...apiMessages,
+    { role: 'assistant', content: assistantContent },
+    {
+      role: 'user',
+      content: `Here are the full skill details you requested:\n\n${skillDetails.join('\n\n')}\n\nReference these steps using from_skill_id and from_step_order rather than regenerating the config. If you design new reusable blocks, include them in skill_blueprints and reference them with from_skill_blueprint. Only include fields in override_fields if you explicitly changed them. Now generate the workflow-json.`,
+    },
+  ];
+
+  const secondResponse = await callAIByModel(modelId, '', {
+    temperature: 0.7,
+    maxTokens: 16000,
+    systemMessage: systemPrompt,
+    messages: followUpMessages,
+  });
+
+  if (!secondResponse.success) {
+    throw new Error(secondResponse.error || 'AI generation failed (second pass)');
+  }
+
+  const secondParsed = parseAssistantResponse(secondResponse.content);
+  if (!secondParsed.workflow) {
+    console.warn('[WorkflowAssistant] No workflow JSON extracted from second-pass AI response.');
+  }
+  return secondParsed;
+}
+
 function parseAssistantResponse(content: string): AssistantResponse {
   const result: AssistantResponse = {
     message: content,
@@ -352,7 +499,15 @@ function parseAssistantResponse(content: string): AssistantResponse {
     }
   }
 
-  // Strategy 3: Fall back to raw JSON with "name" + "steps" keys
+  // Strategy 3: Scan for any embedded JSON object and parse the valid workflow object
+  if (!result.workflow) {
+    const workflow = tryParseWorkflowFromEmbeddedJson(content);
+    if (workflow) {
+      result.workflow = workflow;
+    }
+  }
+
+  // Strategy 4: Fall back to raw JSON with "name" + "steps" keys
   if (!result.workflow) {
     const rawMatch = content.match(/(\{[\s\S]*"name"\s*:[\s\S]*"steps"\s*:\s*\[[\s\S]*\][\s\S]*\})/);
     if (rawMatch) {
@@ -412,7 +567,7 @@ export async function generateWorkflow(
   const systemPrompt = await buildSystemPrompt(userId);
 
   // Build multi-turn messages, with a format reminder on the last user message
-  const apiMessages = messages.map((msg, i) => {
+  const apiMessages: AssistantApiMessage[] = messages.map((msg, i) => {
     if (i === messages.length - 1 && msg.role === 'user') {
       return {
         role: msg.role,
@@ -434,75 +589,51 @@ export async function generateWorkflow(
     throw new Error(response.error || 'AI generation failed');
   }
 
-  const parsed = parseAssistantResponse(response.content);
+  let parsed = parseAssistantResponse(response.content);
+  const initialHadSkillRequest = hasSkillRequest(parsed);
+  parsed = await resolveSkillRequestIfNeeded(parsed, apiMessages, response.content, modelId, systemPrompt);
 
-  // Two-pass: if the AI requested skill details, fetch them and do a second call
-  if (parsed.skillRequest && parsed.skillRequest.length > 0) {
-    const { getDatabase } = await import('../models/database');
-    const db = getDatabase();
-    const skillDetails: string[] = [];
-
-    for (const skillId of parsed.skillRequest) {
-      const steps = db.prepare(
-        "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' ORDER BY step_order"
-      ).all(skillId) as any[];
-      if (steps.length === 0) continue;
-
-      const stepDescriptions = steps.map((s: any) => {
-        const details: Record<string, any> = {
-          step_order: s.step_order,
-          step_name: s.step_name,
-          step_type: s.step_type,
-          ai_model: s.ai_model,
-          prompt_template: s.prompt_template,
-          output_format: s.output_format,
-        };
-        if (s.api_config) details.api_config = JSON.parse(s.api_config);
-        if (s.executor_config) details.executor_config = JSON.parse(s.executor_config);
-        if (s.input_config) details.input_config = JSON.parse(s.input_config);
-        if (s.model_config) details.model_config = JSON.parse(s.model_config);
-        return details;
-      });
-
-      skillDetails.push(`Skill ID ${skillId}:\n${JSON.stringify(stepDescriptions, null, 2)}`);
-    }
-
-    if (skillDetails.length > 0) {
-      // Inject skill details as a follow-up and do a second AI call
-      const followUpMessages: { role: 'user' | 'assistant'; content: string }[] = [
-        ...apiMessages,
-        { role: 'assistant' as const, content: response.content },
-        {
-          role: 'user' as const,
-          content: `Here are the full skill details you requested:\n\n${skillDetails.join('\n\n')}\n\nReference these steps using from_skill_id and from_step_order rather than regenerating the config. If you design new reusable blocks, include them in skill_blueprints and reference them with from_skill_blueprint. Only include fields in override_fields if you explicitly changed them. Now generate the workflow-json.`,
-        },
-      ];
-
-      const secondResponse = await callAIByModel(modelId, '', {
-        temperature: 0.7,
-        maxTokens: 16000,
-        systemMessage: systemPrompt,
-        messages: followUpMessages,
-      });
-
-      if (!secondResponse.success) {
-        throw new Error(secondResponse.error || 'AI generation failed (second pass)');
-      }
-
-      const secondParsed = parseAssistantResponse(secondResponse.content);
-
-      if (!secondParsed.workflow) {
-        console.warn('[WorkflowAssistant] No workflow JSON extracted from second-pass AI response.');
-      }
-
-      return secondParsed;
-    }
-  }
-
-  if (!parsed.workflow) {
+  if (!parsed.workflow && !hasSkillRequest(parsed) && !initialHadSkillRequest) {
     console.warn('[WorkflowAssistant] No workflow JSON extracted from AI response. Response length:', response.content.length,
       '| Has workflow-json fence:', /```workflow-json/.test(response.content),
       '| Has json fence:', /```json/.test(response.content));
+
+    // One repair pass: ask the model to restate as parseable workflow-json or skill-request.
+    const repairPrompt = `Your previous response did not include parseable workflow JSON.
+Return one of these formats only:
+1) \`\`\`workflow-json ... \`\`\` with valid JSON, plus a short natural-language summary above it.
+2) \`\`\`skill-request ... \`\`\` with a JSON array of skill IDs if you need skill details first.
+
+Do NOT say "wait a moment" or "I will generate later". Produce the final result now.`;
+
+    const repairMessages: AssistantApiMessage[] = [
+      ...apiMessages,
+      { role: 'assistant', content: response.content },
+      { role: 'user', content: repairPrompt },
+    ];
+
+    const repairResponse = await callAIByModel(modelId, '', {
+      temperature: 0.2,
+      maxTokens: 12000,
+      systemMessage: systemPrompt,
+      messages: repairMessages,
+    });
+
+    if (repairResponse.success) {
+      let repaired = parseAssistantResponse(repairResponse.content);
+      repaired = await resolveSkillRequestIfNeeded(repaired, repairMessages, repairResponse.content, modelId, systemPrompt);
+      if (repaired.workflow || hasSkillRequest(repaired)) {
+        return repaired;
+      }
+      parsed = repaired;
+      console.warn('[WorkflowAssistant] Workflow repair pass also returned no parseable workflow JSON.');
+    } else {
+      console.warn('[WorkflowAssistant] Workflow repair pass failed:', repairResponse.error || 'unknown error');
+    }
+  }
+
+  if (!parsed.workflow && !hasSkillRequest(parsed)) {
+    return addMissingWorkflowHint(parsed, messages);
   }
 
   return parsed;

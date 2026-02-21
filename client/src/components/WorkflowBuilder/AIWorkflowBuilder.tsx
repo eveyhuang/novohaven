@@ -47,6 +47,13 @@ export function AIWorkflowBuilder() {
     inputRef.current?.focus();
   }, []);
 
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
+
   const handleSend = async () => {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
@@ -87,7 +94,8 @@ export function AIWorkflowBuilder() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Keep Enter for newline; use Cmd/Ctrl+Enter for quick send.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSend();
     }
@@ -253,8 +261,8 @@ export function AIWorkflowBuilder() {
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={t('aiBuilderPlaceholder')}
-                  className="flex-1 resize-none rounded-lg border border-secondary-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                  rows={2}
+                  className="flex-1 resize-none overflow-hidden rounded-lg border border-secondary-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                  rows={1}
                   disabled={isLoading}
                 />
                 <Button
