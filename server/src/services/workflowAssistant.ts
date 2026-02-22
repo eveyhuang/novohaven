@@ -59,7 +59,7 @@ export interface AssistantResponse {
 
 // Preferred models for the assistant (in order of preference)
 const PREFERRED_MODELS = [
-  'claude-opus-4-5',
+  'gemini-3-flash-preview',
   'gemini-3-pro-preview',
   'gpt-4o',
 ];

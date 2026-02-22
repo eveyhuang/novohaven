@@ -303,7 +303,7 @@ export class AgentRunner {
       round++;
 
       const request: CompletionRequest = {
-        model: agentConfig?.default_model || 'claude-sonnet-4-5-20250929',
+        model: agentConfig?.default_model || 'gemini-3-flash-preview',
         systemPrompt,
         messages: currentMessages,
         tools: toolDefs.length > 0 ? toolDefs : undefined,

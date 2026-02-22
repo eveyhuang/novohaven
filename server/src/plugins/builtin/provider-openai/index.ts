@@ -28,24 +28,16 @@ class OpenAIProvider implements ProviderPlugin {
   listModels(): ModelInfo[] {
     return [
       {
-        id: 'gpt-4o',
-        name: 'GPT-4o',
+        id: 'gpt-5.2',
+        name: 'GPT-5.2',
         provider: 'openai',
         supportsStreaming: true,
         supportsTools: true,
         contextWindow: 128000,
       },
       {
-        id: 'gpt-4-turbo',
-        name: 'GPT-4 Turbo',
-        provider: 'openai',
-        supportsStreaming: true,
-        supportsTools: true,
-        contextWindow: 128000,
-      },
-      {
-        id: 'gpt-4',
-        name: 'GPT-4',
+        id: 'gpt-5',
+        name: 'GPT-5',
         provider: 'openai',
         supportsStreaming: true,
         supportsTools: true,

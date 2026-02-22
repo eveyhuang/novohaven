@@ -293,6 +293,8 @@ export const AI_MODELS: AIModelInfo[] = [
   // Anthropic
   { id: 'claude-opus-4-6', name: 'Claude 4.6 Opus', provider: 'anthropic', maxTokens: 200000, supportsVision: true },
   // Google
+  { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', provider: 'google', maxTokens: 1000000, supportsVision: true },
+  { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', provider: 'google', maxTokens: 1000000, supportsVision: true },
   { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google', maxTokens: 1000000, supportsVision: true },
   { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google', maxTokens: 1000000, supportsVision: true },
   { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'google', maxTokens: 1000000, supportsVision: true },

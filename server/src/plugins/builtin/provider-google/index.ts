@@ -27,25 +27,18 @@ class GoogleProvider implements ProviderPlugin {
 
   listModels(): ModelInfo[] {
     return [
+      
       {
-        id: 'gemini-2.5-pro',
-        name: 'Gemini 2.5 Pro',
+        id: 'gemini-3-pro-preview',
+        name: 'Gemini 3 Pro',
         provider: 'google',
         supportsStreaming: true,
         supportsTools: true,
         contextWindow: 1000000,
       },
       {
-        id: 'gemini-2.5-flash-lite',
-        name: 'Gemini 2.5 Flash Lite',
-        provider: 'google',
-        supportsStreaming: true,
-        supportsTools: true,
-        contextWindow: 1000000,
-      },
-      {
-        id: 'gemini-2.5-flash',
-        name: 'Gemini 2.5 Flash',
+        id: 'gemini-3-flash-preview',
+        name: 'Gemini 3 Flash',
         provider: 'google',
         supportsStreaming: true,
         supportsTools: true,
@@ -53,7 +46,7 @@ class GoogleProvider implements ProviderPlugin {
       },
       {
         id: 'gemini-3-pro-image-preview',
-        name: 'Gemini 3 Pro Image',
+        name: 'Nanobanana',
         provider: 'google',
         supportsStreaming: true,
         supportsTools: false,
