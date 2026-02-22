@@ -1,7 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
-import { LanguageProvider } from './context/LanguageContext';
+import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { Layout, Notifications } from './components/common';
 import { Dashboard } from './components/Dashboard';
@@ -74,14 +74,7 @@ function App() {
             {/* 404 */}
             <Route
               path="*"
-              element={
-                <div className="text-center py-12">
-                  <h1 className="text-2xl font-bold text-secondary-900">Page Not Found</h1>
-                  <p className="text-secondary-600 mt-2">
-                    The page you're looking for doesn't exist.
-                  </p>
-                </div>
-              }
+              element={<NotFoundPage />}
             />
           </Routes>
         </Layout>
@@ -94,15 +87,30 @@ function App() {
 
 // Usage Dashboard Page wrapper
 function UsageDashboardPage() {
+  const { t } = useLanguage();
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-secondary-900">API Usage</h1>
+        <h1 className="text-2xl font-bold text-secondary-900">{t('usage')}</h1>
         <p className="text-secondary-600 mt-1">
-          Track your scraping usage and estimated costs
+          {t('usagePageSubtitle')}
         </p>
       </div>
       <UsageDashboard showBilling={true} />
+    </div>
+  );
+}
+
+function NotFoundPage() {
+  const { t } = useLanguage();
+
+  return (
+    <div className="text-center py-12">
+      <h1 className="text-2xl font-bold text-secondary-900">{t('pageNotFound')}</h1>
+      <p className="text-secondary-600 mt-2">
+        {t('pageNotFoundDesc')}
+      </p>
     </div>
   );
 }

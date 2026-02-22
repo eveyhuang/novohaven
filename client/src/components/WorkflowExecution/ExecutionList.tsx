@@ -125,9 +125,9 @@ export function ExecutionList() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-secondary-900">Executions</h1>
+          <h1 className="text-2xl font-bold text-secondary-900">{t('executionHistory')}</h1>
           <p className="text-secondary-600 mt-1">
-            View and manage your workflow executions
+            {t('executionHistorySubtitle')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -137,10 +137,10 @@ export function ExecutionList() {
             disabled={deletingAll || executions.length === 0}
             onClick={handleDeleteAll}
           >
-            Delete All
+            {t('deleteAllExecutions')}
           </Button>
           <Button onClick={() => navigate('/')}>
-            Start New Workflow
+            {t('startNewWorkflow')}
           </Button>
         </div>
       </div>
@@ -156,10 +156,10 @@ export function ExecutionList() {
         <Card>
           <CardBody className="text-center py-12">
             <p className="text-secondary-600 mb-4">
-              No executions yet. Start a workflow to see it here.
+              {t('startNewExecution')}
             </p>
             <Button onClick={() => navigate('/')}>
-              Go to Dashboard
+              {t('goToDashboard')}
             </Button>
           </CardBody>
         </Card>
@@ -177,7 +177,7 @@ export function ExecutionList() {
                   <div>
                     <h3 className="font-medium text-secondary-900">
                       <TranslatedText
-                        text={execution.recipe_name || `Recipe #${execution.recipe_id}`}
+                        text={execution.recipe_name || `${t('workflowLabel')} #${execution.recipe_id}`}
                       />
                     </h3>
                     <p className="text-sm text-secondary-500">
@@ -244,7 +244,7 @@ export function ExecutionList() {
               {t('confirmDeleteExecutionDesc')}
             </p>
             <p className="font-medium text-secondary-900">
-              <TranslatedText text={confirmDelete.recipe_name || `Recipe #${confirmDelete.recipe_id}`} /> - {t('execution')} #{confirmDelete.id}
+              <TranslatedText text={confirmDelete.recipe_name || `${t('workflowLabel')} #${confirmDelete.recipe_id}`} /> - {t('execution')} #{confirmDelete.id}
             </p>
             <div className="flex justify-end space-x-3 pt-4">
               <Button variant="ghost" onClick={() => setConfirmDelete(null)}>

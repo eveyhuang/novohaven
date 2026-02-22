@@ -78,23 +78,45 @@ export function OutputsGallery() {
     return content.substring(0, maxLength) + '...';
   };
 
-  const downloadContent = (output: OutputItem, format: 'txt' | 'md' | 'json') => {
+  const looksLikeCsv = (content: string): boolean => {
+    const text = String(content || '').trim();
+    if (!text) return false;
+    if (text.startsWith('{') || text.startsWith('[')) return false;
+    const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    if (lines.length < 2) return false;
+    return lines[0].includes(',') && lines[1].includes(',');
+  };
+
+  const downloadContent = (output: OutputItem, format: 'txt' | 'md' | 'json' | 'csv') => {
     const content = output.content;
     const mimeTypes: Record<string, string> = {
       txt: 'text/plain',
       md: 'text/markdown',
       json: 'application/json',
+      csv: 'text/csv',
     };
 
     const blob = new Blob([content], { type: mimeTypes[format] });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${output.stepName.replace(/\s+/g, '_')}_${output.id}.${format}`;
+    const fallbackName = `${output.stepName.replace(/\s+/g, '_')}_${output.id}.${format}`;
+    link.download = output.fileName && output.fileName.toLowerCase().endsWith(`.${format}`)
+      ? output.fileName
+      : fallbackName;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const downloadFileOutput = (output: OutputItem) => {
+    const isCsv = output.fileExtension === 'csv' || output.fileMimeType === 'text/csv' || looksLikeCsv(output.content);
+    if (isCsv) {
+      downloadContent(output, 'csv');
+      return;
+    }
+    downloadContent(output, 'txt');
   };
 
   const downloadImage = (base64: string, mimeType: string, index: number) => {
@@ -208,6 +230,8 @@ export function OutputsGallery() {
                       ? 'bg-purple-100 text-purple-700'
                       : output.manusFiles?.length
                       ? 'bg-orange-100 text-orange-700'
+                      : output.outputFormat === 'file'
+                      ? 'bg-orange-100 text-orange-700'
                       : output.outputFormat === 'json'
                       ? 'bg-blue-100 text-blue-700'
                       : output.outputFormat === 'markdown'
@@ -215,7 +239,7 @@ export function OutputsGallery() {
                       : 'bg-secondary-100 text-secondary-700'
                     }
                   `}>
-                    {output.generatedImages?.length ? t('image') : output.manusFiles?.length ? t('fileOutputs') : output.outputFormat}
+                    {output.generatedImages?.length ? t('image') : (output.manusFiles?.length || output.outputFormat === 'file') ? t('fileOutputs') : output.outputFormat}
                   </span>
                 </div>
 
@@ -364,6 +388,13 @@ export function OutputsGallery() {
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-medium text-secondary-700">{t('content')}</h3>
                   <div className="flex gap-2">
+                    {selectedOutput.outputFormat === 'file' && (
+                      <Button size="sm" variant="secondary" onClick={() => downloadFileOutput(selectedOutput)}>
+                        {selectedOutput.fileExtension === 'csv' || selectedOutput.fileMimeType === 'text/csv' || looksLikeCsv(selectedOutput.content)
+                          ? t('downloadCsv')
+                          : t('downloadText')}
+                      </Button>
+                    )}
                     {selectedOutput.outputFormat === 'json' && (
                       <Button size="sm" variant="secondary" onClick={() => downloadContent(selectedOutput, 'json')}>
                         {t('downloadJson')}
@@ -374,9 +405,11 @@ export function OutputsGallery() {
                         {t('downloadMarkdown')}
                       </Button>
                     )}
-                    <Button size="sm" variant="secondary" onClick={() => downloadContent(selectedOutput, 'txt')}>
-                      {t('downloadText')}
-                    </Button>
+                    {selectedOutput.outputFormat !== 'file' && (
+                      <Button size="sm" variant="secondary" onClick={() => downloadContent(selectedOutput, 'txt')}>
+                        {t('downloadText')}
+                      </Button>
+                    )}
                   </div>
                 </div>
                 <div className="bg-secondary-50 rounded-lg p-4 max-h-96 overflow-auto">

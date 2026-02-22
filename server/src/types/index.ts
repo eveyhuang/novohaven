@@ -287,9 +287,8 @@ export interface AIModelInfo {
 // Available AI Models
 export const AI_MODELS: AIModelInfo[] = [
   // OpenAI
-  { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', provider: 'openai', maxTokens: 128000, supportsVision: true },
-  { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai', maxTokens: 128000, supportsVision: true },
-  { id: 'gpt-4', name: 'GPT-4', provider: 'openai', maxTokens: 8192 },
+  { id: 'gpt-5.2', name: 'GPT-5.2', provider: 'openai', maxTokens: 128000, supportsVision: true },
+  { id: 'gpt-5', name: 'GPT-5', provider: 'openai', maxTokens: 8192, supportsVision: true },
   // Anthropic
   { id: 'claude-opus-4-6', name: 'Claude 4.6 Opus', provider: 'anthropic', maxTokens: 200000, supportsVision: true },
   // Google

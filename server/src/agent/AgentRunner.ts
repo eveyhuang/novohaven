@@ -155,7 +155,6 @@ export class AgentRunner {
     if (model.startsWith('claude') || model.startsWith('anthropic')) return 'provider-anthropic';
     if (model.startsWith('gpt') || model.startsWith('o1') || model.startsWith('o3')) return 'provider-openai';
     if (model.startsWith('gemini')) return 'provider-google';
-    if (model.startsWith('kimi') || model.startsWith('moonshot')) return 'provider-kimi';
     return 'provider-anthropic'; // default
   }
 
@@ -303,7 +302,7 @@ export class AgentRunner {
       round++;
 
       const request: CompletionRequest = {
-        model: agentConfig?.default_model || 'gemini-3-flash-preview',
+        model: agentConfig?.default_model || 'gpt-5',
         systemPrompt,
         messages: currentMessages,
         tools: toolDefs.length > 0 ? toolDefs : undefined,
@@ -311,7 +310,7 @@ export class AgentRunner {
       };
 
       let fullText = '';
-      let toolCalls: Array<{ id: string; name: string; args: Record<string, any> }> = [];
+      let toolCalls: Array<{ id: string; name: string; args: Record<string, any>; providerData?: Record<string, any> }> = [];
       const messageId = `msg-${Date.now()}-${round}`;
 
       // Stream the response

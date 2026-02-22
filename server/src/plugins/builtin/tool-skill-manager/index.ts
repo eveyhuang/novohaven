@@ -13,7 +13,7 @@ import { approveStep, startExecution } from '../../../services/workflowEngine';
 import {
   ToolPlugin, PluginManifest, ToolDefinition, ToolContext, ToolResult,
 } from '../../types';
-import { saveImageToDisk } from '../../../utils/uploadHelpers';
+import { getUploadsDir, saveImageToDisk } from '../../../utils/uploadHelpers';
 
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, '../../../../data/novohaven.db');
 
@@ -243,6 +243,7 @@ class SkillManagerPlugin implements ToolPlugin {
 
     const inputSpecs = this.collectInputSpecs(steps);
     const taskBoundaryId = this.getLatestTaskBoundaryId(context.sessionId);
+    const recentFileUploads = this.getRecentFileUploads(context.sessionId);
 
     // Resolve image inputs from conversation attachments
     const resolvedInputs = { ...inputs };
@@ -297,9 +298,19 @@ class SkillManagerPlugin implements ToolPlugin {
     );
     const resolvedImageAttachmentCount = this.countResolvedImageValues(resolvedInputs, inputSpecs);
 
+    // Auto-map uploaded files to declared file variables.
+    for (const [name, spec] of inputSpecs.entries()) {
+      if (spec.type !== 'file') continue;
+      if (!this.isInputValueMissing(resolvedInputs[name], spec.type)) continue;
+      const fileValue = this.buildFileInputValueFromUploads(name, recentFileUploads);
+      if (fileValue != null) {
+        resolvedInputs[name] = fileValue;
+      }
+    }
+
     // Keep file inputs from blocking execution when file content is attached or implied.
     for (const [name, spec] of inputSpecs.entries()) {
-      if (spec.type === 'file' && (resolvedInputs[name] == null || String(resolvedInputs[name]).trim() === '')) {
+      if (spec.type === 'file' && this.isInputValueMissing(resolvedInputs[name], spec.type)) {
         resolvedInputs[name] = '[file:provided_by_user]';
       }
     }
@@ -694,8 +705,55 @@ class SkillManagerPlugin implements ToolPlugin {
           }
         }
       }
+
+      // Fallback for script steps that read user inputs directly from input_data.get(...)
+      // but forgot to declare input_config variables.
+      for (const varName of this.extractScriptInputVars(step)) {
+        if (specs.has(varName)) continue;
+        specs.set(varName, {
+          type: this.inferInputTypeFromVarName(varName),
+          optional: false,
+        });
+      }
     }
     return specs;
+  }
+
+  private extractScriptInputVars(step: any): string[] {
+    if (String(step?.step_type || '').toLowerCase() !== 'script') return [];
+    let script = '';
+    try {
+      const execCfg = JSON.parse(step?.executor_config || '{}');
+      script = String(execCfg?.script || '');
+    } catch {
+      script = '';
+    }
+    if (!script) return [];
+
+    const vars = new Set<string>();
+    const getRegex = /input_data\.get\(\s*['"]([^'"]+)['"]/g;
+    const indexRegex = /input_data\[\s*['"]([^'"]+)['"]\s*\]/g;
+    let m: RegExpExecArray | null;
+
+    while ((m = getRegex.exec(script)) !== null) {
+      const name = String(m[1] || '').trim();
+      if (!name || name.startsWith('step_')) continue;
+      vars.add(name);
+    }
+    while ((m = indexRegex.exec(script)) !== null) {
+      const name = String(m[1] || '').trim();
+      if (!name || name.startsWith('step_')) continue;
+      vars.add(name);
+    }
+
+    return Array.from(vars);
+  }
+
+  private inferInputTypeFromVarName(varName: string): string {
+    const key = String(varName || '').toLowerCase();
+    if (/image|img|photo|picture|reference|sample/.test(key)) return 'image';
+    if (/file|files|csv|document|attachment/.test(key)) return 'file';
+    return 'text';
   }
 
   private parseAttachmentIndexes(value: any, attachmentCount: number): number[] {
@@ -1045,6 +1103,112 @@ class SkillManagerPlugin implements ToolPlugin {
     return null;
   }
 
+  private getRecentFileUploads(
+    sessionId: string,
+    limit: number = 120
+  ): Array<{ url: string; name?: string; mimeType?: string }> {
+    const rows = this.db!.prepare(
+      `SELECT id, metadata
+       FROM session_messages
+       WHERE session_id = ? AND role = 'user'
+       ORDER BY id DESC
+       LIMIT ?`
+    ).all(sessionId, limit) as Array<{ id: number; metadata: string | null }>;
+
+    let seenFile = false;
+    const batchInReverse: Array<Array<{ url: string; name?: string; mimeType?: string }>> = [];
+    for (const row of rows) {
+      const files = this.extractFileAttachmentRefs(row.metadata);
+      if (files.length > 0) {
+        seenFile = true;
+        batchInReverse.push(files);
+        continue;
+      }
+      if (seenFile) break;
+    }
+
+    if (!seenFile) return [];
+    const ordered: Array<{ url: string; name?: string; mimeType?: string }> = [];
+    for (let i = batchInReverse.length - 1; i >= 0; i -= 1) {
+      ordered.push(...batchInReverse[i]);
+    }
+    return ordered;
+  }
+
+  private extractFileAttachmentRefs(metadataRaw: string | null): Array<{ url: string; name?: string; mimeType?: string }> {
+    if (!metadataRaw) return [];
+    try {
+      const metadata = JSON.parse(metadataRaw);
+      const attachments = Array.isArray(metadata?.attachments) ? metadata.attachments : [];
+      return attachments
+        .filter((a: any) => a && a.type === 'file' && typeof a.url === 'string' && a.url.length > 0)
+        .map((a: any) => ({
+          url: String(a.url),
+          name: a.name ? String(a.name) : undefined,
+          mimeType: a.mimeType ? String(a.mimeType) : undefined,
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  private buildFileInputValueFromUploads(
+    varName: string,
+    uploads: Array<{ url: string; name?: string; mimeType?: string }>
+  ): Array<{ name: string; content: string }> | { name: string; content: string } | null {
+    if (!uploads.length) return null;
+
+    const normalized = uploads.map((item, idx) => {
+      const name = item.name || `${varName}_${idx + 1}.txt`;
+      const content = this.readUploadedFileContent(item.url, item.mimeType);
+      if (content == null) return null;
+      return { name, content };
+    }).filter(Boolean) as Array<{ name: string; content: string }>;
+
+    if (normalized.length === 0) return null;
+    if (/_files$/i.test(varName) || normalized.length > 1) return normalized;
+    return normalized[0];
+  }
+
+  private readUploadedFileContent(url: string, mimeType?: string): string | null {
+    const fullPath = this.resolveUploadUrlToAbsolutePath(url);
+    if (!fullPath) return null;
+
+    try {
+      const raw = fs.readFileSync(fullPath);
+      if (!raw || raw.length === 0) return '';
+
+      const ext = path.extname(fullPath).toLowerCase();
+      const mt = String(mimeType || '').toLowerCase();
+      const textLike = mt.startsWith('text/')
+        || mt.includes('json')
+        || mt.includes('csv')
+        || mt.includes('xml')
+        || mt.includes('yaml')
+        || new Set(['.txt', '.md', '.json', '.csv', '.tsv', '.xml', '.yaml', '.yml', '.log']).has(ext);
+
+      if (textLike) {
+        return raw.toString('utf8');
+      }
+
+      // Fallback for binary files.
+      return raw.toString('base64');
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveUploadUrlToAbsolutePath(url: string): string | null {
+    const raw = String(url || '').trim();
+    if (!raw.startsWith('/uploads/')) return null;
+    const rel = raw.replace(/^\/uploads\//, '');
+    const uploadsRoot = path.resolve(getUploadsDir());
+    const fullPath = path.resolve(path.join(uploadsRoot, rel));
+    if (!(fullPath === uploadsRoot || fullPath.startsWith(`${uploadsRoot}${path.sep}`))) return null;
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) return null;
+    return fullPath;
+  }
+
   private toPromptImageValue(attachment: { data: string; mimeType?: string }): string {
     const data = String(attachment?.data || '');
     if (!data) return '[image:missing_attachment_data]';
@@ -1208,6 +1372,13 @@ class SkillManagerPlugin implements ToolPlugin {
       'SELECT id, step_order FROM recipe_steps WHERE recipe_id = ?'
     ).all(recipeId) as Array<{ id: number; step_order: number }>;
     const existingByOrder = new Map(existingSteps.map((s) => [s.step_order, s.id]));
+    const desiredOrders = new Set(steps.map((s) => Number(s.step_order)));
+
+    for (const existing of existingSteps) {
+      if (!desiredOrders.has(Number(existing.step_order))) {
+        this.db!.prepare('DELETE FROM recipe_steps WHERE id = ?').run(existing.id);
+      }
+    }
 
     for (const step of steps) {
       const existingId = existingByOrder.get(step.step_order);

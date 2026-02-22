@@ -1,6 +1,5 @@
 import { callAIByModel, getAvailableModels } from './aiService';
 import { getAllExecutors } from '../executors/registry';
-import { AI_MODELS } from '../types';
 
 // Types for the assistant
 export interface ConversationMessage {
@@ -59,9 +58,11 @@ export interface AssistantResponse {
 
 // Preferred models for the assistant (in order of preference)
 const PREFERRED_MODELS = [
+  'gpt-5',
+  'gpt-5.2',
+  'gpt-4o',
   'gemini-3-flash-preview',
   'gemini-3-pro-preview',
-  'gpt-4o',
 ];
 
 type AssistantApiMessage = { role: 'user' | 'assistant'; content: string };
@@ -136,7 +137,7 @@ Example:
   }
 
   // Gather available executors
-  const executors = getAllExecutors().filter((e) => e.type !== 'scraping');
+  const executors = getAllExecutors().filter((e) => e.type !== 'scraping' && e.type !== 'manus');
   const executorDescriptions = executors.map(e => {
     const schema = e.getConfigSchema();
     const fields = schema.fields.map(f =>
@@ -213,6 +214,8 @@ ${skillSection}
    - Keep prompts concise — avoid lengthy examples or verbose formatting guidelines that inflate the JSON size
 
 7. **For non-AI steps**, provide complete executor_config with all required fields.
+   - For script steps that consume uploaded files, assume inputs are inline content (string) or arrays of objects like \`[{name, content}]\`, not local filesystem paths.
+   - Parse CSV/JSON from content (for example using Python \`io.StringIO\`) and gracefully handle both single-file and multi-file input.
 
 8. **Browser steps are stateless across workflow steps (CRITICAL).**
    - A browser step does NOT inherit page/session state from a previous browser step.
@@ -281,11 +284,15 @@ function normalizeGeneratedStep(step: any, index: number): GeneratedStep {
       ? outputFormat
       : 'text';
 
+  const cfg = toExecutorConfigObject(step?.executor_config);
+  const cfgModel = typeof cfg.ai_model === 'string' ? cfg.ai_model.trim() : '';
+  const cfgPrompt = typeof cfg.prompt_template === 'string' ? cfg.prompt_template.trim() : '';
+
   return {
     step_name: step?.step_name || `Step ${index + 1}`,
     step_type: step?.step_type === 'scraping' ? 'browser' : (step?.step_type || 'ai'),
-    ai_model: step?.ai_model || '',
-    prompt_template: step?.prompt_template || '',
+    ai_model: step?.ai_model || cfgModel || '',
+    prompt_template: step?.prompt_template || cfgPrompt || '',
     output_format: normalizedOutput,
     executor_config: step?.executor_config,
     from_skill_id: step?.from_skill_id || step?.from_template_id,
@@ -295,6 +302,28 @@ function normalizeGeneratedStep(step: any, index: number): GeneratedStep {
     from_step_order: step?.from_step_order,
     override_fields: step?.override_fields,
   };
+}
+
+function getDefaultAssistantAiModel(): string {
+  try {
+    const available = getAvailableModels().filter((m) => !m.supportsImageGeneration);
+    if (available.length > 0) return available[0].id;
+  } catch {
+    // Ignore and fall back.
+  }
+  return 'gpt-4o';
+}
+
+function isLikelyChineseStepName(text: string): boolean {
+  return /[\u4e00-\u9fff]/.test(text || '');
+}
+
+function defaultAiPromptForStep(stepName: string): string {
+  const name = String(stepName || 'AI Step').trim();
+  if (isLikelyChineseStepName(name)) {
+    return `请完成步骤「${name}」。基于已提供输入与前序步骤输出，进行结构化分析并输出清晰结论。`;
+  }
+  return `Complete step "${name}" using provided inputs and prior step outputs. Return structured, actionable analysis.`;
 }
 
 function normalizeInputSpecs(inputs: any): GeneratedInputSpec[] {
@@ -522,9 +551,73 @@ function applyFileOutputHints(steps: GeneratedStep[]): GeneratedStep[] {
   });
 }
 
+function applyBlueprintReferenceHydration(workflow: GeneratedWorkflow): GeneratedStep[] {
+  const blueprints = workflow.skill_blueprints || [];
+  if (!blueprints.length) return workflow.steps || [];
+
+  const byAlias = new Map<string, GeneratedSkillBlueprint>();
+  for (const bp of blueprints) {
+    const key = String(bp?.key || '').trim().toLowerCase();
+    const name = String(bp?.name || '').trim().toLowerCase();
+    if (key) byAlias.set(key, bp);
+    if (name) byAlias.set(name, bp);
+  }
+
+  return (workflow.steps || []).map((step) => {
+    const alias = String(step.from_skill_blueprint || step.from_skill_name || '').trim().toLowerCase();
+    if (!alias) return step;
+    const bp = byAlias.get(alias);
+    if (!bp || !Array.isArray(bp.steps) || bp.steps.length === 0) return step;
+
+    const sourceOrder = Number(step.from_step_order || 1);
+    const sourceStep = bp.steps[sourceOrder - 1];
+    if (!sourceStep) return step;
+
+    const hydrated: GeneratedStep = { ...step };
+    if (!String(hydrated.ai_model || '').trim() && String(sourceStep.ai_model || '').trim()) {
+      hydrated.ai_model = sourceStep.ai_model;
+    }
+    if (!String(hydrated.prompt_template || '').trim() && String(sourceStep.prompt_template || '').trim()) {
+      hydrated.prompt_template = sourceStep.prompt_template;
+    }
+    if ((!hydrated.executor_config || Object.keys(hydrated.executor_config).length === 0) && sourceStep.executor_config) {
+      hydrated.executor_config = { ...sourceStep.executor_config };
+    }
+    return hydrated;
+  });
+}
+
+function applyAiStepDefaults(steps: GeneratedStep[]): GeneratedStep[] {
+  const defaultModel = getDefaultAssistantAiModel();
+  return steps.map((step) => {
+    if (step.step_type !== 'ai') return step;
+    const cfg = toExecutorConfigObject(step.executor_config);
+    const cfgModel = String(cfg.ai_model || '').trim();
+    const cfgPrompt = String(cfg.prompt_template || '').trim();
+    const fallbackPrompt = defaultAiPromptForStep(step.step_name || 'AI Step');
+    const existingPrompt = String(step.prompt_template || '').trim();
+
+    const aiModel = String(step.ai_model || '').trim() || cfgModel || defaultModel;
+    const promptTemplate = (
+      !existingPrompt
+      || existingPrompt === fallbackPrompt
+    )
+      ? (cfgPrompt || existingPrompt || fallbackPrompt)
+      : existingPrompt;
+
+    return {
+      ...step,
+      ai_model: aiModel,
+      prompt_template: promptTemplate,
+    };
+  });
+}
+
 function normalizeGeneratedWorkflowStructure(workflow: GeneratedWorkflow): GeneratedWorkflow {
   // Preserve explicit multi-step browser decompositions from the model.
   // Over-merging can hide intent and make iterative fixing harder in AI Workflow Builder.
+  workflow.steps = applyBlueprintReferenceHydration(workflow);
+  workflow.steps = applyAiStepDefaults(workflow.steps || []);
   workflow.steps = applyBrowserExecutionSafety(workflow.steps || [], workflow.requiredInputs || []);
   workflow.steps = applyFileOutputHints(workflow.steps || []);
   return workflow;
@@ -951,6 +1044,15 @@ export async function saveWorkflowGraph(
   userId: number,
   asSkill: boolean = false
 ): Promise<{ entityType: 'skill' | 'workflow'; skillId?: number; workflowId?: number; createdSkillIds?: number[] }> {
+  if (asSkill) {
+    const hasUnsupportedSkillStepType = (workflow.steps || []).some(
+      (step) => String(step?.step_type || 'ai').trim().toLowerCase() === 'manus'
+    );
+    if (hasUnsupportedSkillStepType) {
+      throw new Error('Step type "manus" is no longer supported for skills');
+    }
+  }
+
   const { getDatabase } = await import('../models/database');
   const db = getDatabase();
 
@@ -1050,6 +1152,39 @@ export async function saveWorkflowGraph(
             mergedExecutorConfig = JSON.stringify(step.executor_config);
           }
         }
+      }
+
+      if (mergedStepType === 'ai') {
+        const execConfigObj = toExecutorConfigObject(mergedExecutorConfig);
+        const cfgAiModel = String(execConfigObj.ai_model || '').trim();
+        const cfgPrompt = String(execConfigObj.prompt_template || '').trim();
+        const fallbackPrompt = defaultAiPromptForStep(step.step_name || 'AI Step');
+        const normalizedMergedPrompt = String(mergedPrompt || '').trim();
+
+        if (!String(mergedAiModel || '').trim() && cfgAiModel) {
+          mergedAiModel = cfgAiModel;
+        }
+        if ((!normalizedMergedPrompt || normalizedMergedPrompt === fallbackPrompt) && cfgPrompt) {
+          mergedPrompt = cfgPrompt;
+        }
+
+        let modelConfigObj: Record<string, any> = {};
+        try {
+          const parsed = JSON.parse(mergedModelConfig || '{}');
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            modelConfigObj = parsed;
+          }
+        } catch {
+          modelConfigObj = {};
+        }
+
+        const modelConfigKeys: Array<keyof Record<string, any>> = ['temperature', 'maxTokens', 'topP', 'systemMessage'];
+        for (const key of modelConfigKeys) {
+          if (modelConfigObj[key] === undefined && execConfigObj[key] !== undefined) {
+            modelConfigObj[key] = execConfigObj[key];
+          }
+        }
+        mergedModelConfig = JSON.stringify(modelConfigObj);
       }
 
       if (!mergedInputConfig || mergedInputConfig === '{}' || mergedInputConfig === '') {

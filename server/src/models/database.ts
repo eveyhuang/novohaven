@@ -321,17 +321,17 @@ export function initializeDatabase(): void {
     run(`INSERT INTO agent_configs (name, description, default_model, system_prompt, allowed_tools, allowed_channels)
       VALUES (?, ?, ?, ?, ?, ?)`,
       ['Default Agent', 'Default agent configuration',
-       'gemini-3-flash-preview',
+       'gpt-5',
        'You are a helpful AI assistant with access to skills and workflows. When a user asks you to do something, search for relevant skills first. If a skill exists, use it. If not, help the user directly or propose creating a new skill.',
        '["tool-browser","tool-bash","tool-fileops","tool-skill-manager"]',
        '["channel-web","channel-lark"]']);
   }
 
-  // Update default agent config to use Gemini 3 Flash Preview
+  // Update default agent config to use GPT-5
   const currentDefault = getOne('SELECT default_model FROM agent_configs WHERE name = ?', ['Default Agent']);
-  if (currentDefault && currentDefault.default_model !== 'gemini-3-flash-preview') {
-    run('UPDATE agent_configs SET default_model = ? WHERE name = ?', ['gemini-3-flash-preview', 'Default Agent']);
-    console.log('[Database] Updated default agent model to gemini-3-flash-preview');
+  if (currentDefault && currentDefault.default_model !== 'gpt-5') {
+    run('UPDATE agent_configs SET default_model = ? WHERE name = ?', ['gpt-5', 'Default Agent']);
+    console.log('[Database] Updated default agent model to gpt-5');
   }
 }
 

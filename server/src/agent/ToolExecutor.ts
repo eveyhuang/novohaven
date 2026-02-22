@@ -65,22 +65,23 @@ export class ToolExecutor {
   async execute(toolName: string, args: Record<string, any>): Promise<ToolResult> {
     const resolvedToolName = this.toolNameMap.get(toolName) || toolName;
 
-    // Check built-in tools first (names use _ but accept : for back-compat)
-    const normalized = resolvedToolName.replace(':', '_');
-    if (normalized.startsWith('skill_') || normalized.startsWith('approval_')) {
-      return this.executeBuiltIn(normalized, args);
-    }
+    for (const candidate of this.expandToolNameCandidates(toolName, resolvedToolName)) {
+      // Check built-in tools first (names use _ but accept : for back-compat)
+      const normalized = candidate.replace(':', '_');
+      if (normalized.startsWith('skill_') || normalized.startsWith('approval_')) {
+        return this.executeBuiltIn(normalized, args);
+      }
 
-    // Find the plugin that owns this tool
-    for (const [, plugin] of this.toolPlugins) {
-      const tools = plugin.getTools();
-      const matched = tools.find((t) =>
-        t.name === resolvedToolName
-        || t.name === toolName
-        || this.normalizeComparableName(t.name) === this.normalizeComparableName(resolvedToolName)
-      );
-      if (matched) {
-        return plugin.execute(matched.name, args, this.context);
+      // Find the plugin that owns this tool
+      for (const [, plugin] of this.toolPlugins) {
+        const tools = plugin.getTools();
+        const matched = tools.find((t) =>
+          t.name === candidate
+          || this.normalizeComparableName(t.name) === this.normalizeComparableName(candidate)
+        );
+        if (matched) {
+          return plugin.execute(matched.name, args, this.context);
+        }
       }
     }
 
@@ -272,5 +273,25 @@ export class ToolExecutor {
       .replace(/[^a-zA-Z0-9_]/g, '_')
       .replace(/_+/g, '_')
       .toLowerCase();
+  }
+
+  private expandToolNameCandidates(original: string, resolved: string): string[] {
+    const candidates = new Set<string>();
+    const add = (name: string) => {
+      const trimmed = String(name || '').trim();
+      if (trimmed) candidates.add(trimmed);
+    };
+
+    const addDerived = (name: string) => {
+      add(name);
+      if (name.includes(':')) add(name.slice(name.lastIndexOf(':') + 1));
+      if (name.includes('.')) add(name.slice(name.lastIndexOf('.') + 1));
+      if (name.includes('/')) add(name.slice(name.lastIndexOf('/') + 1));
+    };
+
+    addDerived(resolved);
+    addDerived(original);
+
+    return Array.from(candidates);
   }
 }

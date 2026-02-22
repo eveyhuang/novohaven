@@ -43,8 +43,45 @@ interface ParsedOutput {
     base64: string;
     mimeType: string;
   }>;
+  fileName?: string;
+  fileExtension?: string;
+  fileMimeType?: string;
   manusFiles?: ManusFileOutput[];
   manusTaskId?: string;
+}
+
+function looksLikeCsv(content: string): boolean {
+  const text = String(content || '').trim();
+  if (!text) return false;
+  if (text.startsWith('{') || text.startsWith('[')) return false;
+  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) return false;
+  const header = lines[0];
+  const second = lines[1];
+  const hasCommaHeader = header.includes(',');
+  const hasCommaSecond = second.includes(',');
+  return hasCommaHeader && hasCommaSecond;
+}
+
+function inferFileDetails(outputFormat: string, content: string, stepName: string, id: number): {
+  fileName?: string;
+  fileExtension?: string;
+  fileMimeType?: string;
+} {
+  if (outputFormat !== 'file') return {};
+  const baseName = String(stepName || 'output').replace(/[^\w\u4e00-\u9fff-]+/g, '_');
+  if (looksLikeCsv(content)) {
+    return {
+      fileExtension: 'csv',
+      fileMimeType: 'text/csv',
+      fileName: `${baseName}_${id}.csv`,
+    };
+  }
+  return {
+    fileExtension: 'txt',
+    fileMimeType: 'text/plain',
+    fileName: `${baseName}_${id}.txt`,
+  };
 }
 
 interface AgentFileRecord {
@@ -69,6 +106,14 @@ router.get('/', (req: Request, res: Response) => {
         parsedData = { content: output.output_data };
       }
 
+      const content = parsedData.content || '';
+      const fileDetails = inferFileDetails(
+        output.output_format || 'text',
+        content,
+        output.step_name || 'output',
+        output.id
+      );
+
       return {
         id: output.id,
         executionId: output.execution_id,
@@ -78,8 +123,9 @@ router.get('/', (req: Request, res: Response) => {
         outputFormat: output.output_format || 'text',
         aiModel: output.ai_model_used,
         executedAt: output.executed_at,
-        content: parsedData.content || '',
+        content,
         generatedImages: parsedData.generatedImages,
+        ...fileDetails,
       };
     });
 
@@ -166,7 +212,7 @@ router.get('/', (req: Request, res: Response) => {
       markdown: allOutputs.filter(o => o.outputFormat === 'markdown' && !o.generatedImages?.length && !o.manusFiles?.length),
       json: allOutputs.filter(o => o.outputFormat === 'json' && !o.generatedImages?.length),
       images: allOutputs.filter(o => o.generatedImages && o.generatedImages.length > 0),
-      files: allOutputs.filter(o => o.manusFiles && o.manusFiles.length > 0),
+      files: allOutputs.filter(o => (o.manusFiles && o.manusFiles.length > 0) || o.outputFormat === 'file'),
     };
 
     res.json(categorized);

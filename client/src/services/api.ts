@@ -590,6 +590,9 @@ export interface OutputItem {
   aiModel: string;
   executedAt: string;
   content: string;
+  fileName?: string;
+  fileExtension?: string;
+  fileMimeType?: string;
   generatedImages?: Array<{
     base64: string;
     mimeType: string;

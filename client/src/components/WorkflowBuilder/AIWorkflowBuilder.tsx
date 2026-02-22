@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Card, CardBody, Modal } from '../common';
+import { Button, Card, CardBody, Modal, DynamicInput } from '../common';
 import { useLanguage } from '../../context/LanguageContext';
 import api, {
   AssistantMessage,
@@ -8,7 +8,9 @@ import api, {
   GeneratedWorkflow,
   GeneratedStep,
   GeneratedInputSpec,
+  GeneratedSkillBlueprint,
 } from '../../services/api';
+import { AIModel, InputType } from '../../types';
 
 // Step type icons (matching the server executor registry)
 const STEP_TYPE_ICONS: Record<string, string> = {
@@ -171,6 +173,101 @@ function inferRequiredInputsFromWorkflow(workflow: GeneratedWorkflow | null): Ge
   return Array.from(byName.values());
 }
 
+function normalizeInputType(rawType: string | undefined): InputType {
+  const value = String(rawType || '').trim();
+  if (value === 'textarea' || value === 'url_list' || value === 'image' || value === 'file') {
+    return value as InputType;
+  }
+  return 'text';
+}
+
+function isLikelyChineseText(text: string): boolean {
+  return /[\u4e00-\u9fff]/.test(text || '');
+}
+
+function defaultAIPrompt(stepName: string): string {
+  const name = String(stepName || 'AI Step').trim();
+  if (isLikelyChineseText(name)) {
+    return `请完成步骤「${name}」。基于已提供的输入和前序步骤输出，进行结构化分析并输出清晰结论。`;
+  }
+  return `Complete step "${name}" using provided inputs and prior step outputs. Return structured, actionable analysis.`;
+}
+
+function isGenericAiPrompt(stepName: string, prompt: string): boolean {
+  const text = String(prompt || '').trim();
+  if (!text) return true;
+  if (text === defaultAIPrompt(stepName).trim()) return true;
+  if (/^请完成步骤「.*」/.test(text)) return true;
+  if (/^Complete step ".*"/.test(text)) return true;
+  return false;
+}
+
+function normalizeWorkflowForEditor(workflow: GeneratedWorkflow, fallbackAiModel: string): GeneratedWorkflow {
+  const blueprintMap = new Map<string, GeneratedSkillBlueprint>();
+  for (const bp of workflow.skill_blueprints || []) {
+    const key = String(bp?.key || '').trim().toLowerCase();
+    const name = String(bp?.name || '').trim().toLowerCase();
+    if (key) blueprintMap.set(key, bp);
+    if (name) blueprintMap.set(name, bp);
+  }
+
+  const steps = (workflow.steps || []).map((step) => {
+    const normalizedStep: GeneratedStep = {
+      ...step,
+      executor_config: step.executor_config ? { ...step.executor_config } : step.executor_config,
+    };
+
+    // Hydrate fields from local skill blueprint reference if this step omitted them.
+    const ref = String(step.from_skill_blueprint || step.from_skill_name || '').trim().toLowerCase();
+    if (ref && blueprintMap.has(ref)) {
+      const bp = blueprintMap.get(ref)!;
+      const sourceOrder = Number(step.from_step_order || 1);
+      const source = (bp.steps || [])[sourceOrder - 1];
+      if (source) {
+        if (!String(normalizedStep.ai_model || '').trim() && String(source.ai_model || '').trim()) {
+          normalizedStep.ai_model = source.ai_model;
+        }
+        if (!String(normalizedStep.prompt_template || '').trim() && String(source.prompt_template || '').trim()) {
+          normalizedStep.prompt_template = source.prompt_template;
+        }
+        if ((!normalizedStep.executor_config || Object.keys(normalizedStep.executor_config).length === 0) && source.executor_config) {
+          normalizedStep.executor_config = { ...source.executor_config };
+        }
+      }
+    }
+
+    // Ensure AI steps always have an editable model + prompt in preview.
+    if (normalizedStep.step_type === 'ai') {
+      const cfg = normalizedStep.executor_config && typeof normalizedStep.executor_config === 'object'
+        ? normalizedStep.executor_config as Record<string, any>
+        : {};
+      const cfgModel = String(cfg.ai_model || '').trim();
+      const cfgPrompt = String(cfg.prompt_template || '').trim();
+      const currentPrompt = String(normalizedStep.prompt_template || '').trim();
+
+      if (!String(normalizedStep.ai_model || '').trim() && cfgModel) {
+        normalizedStep.ai_model = cfgModel;
+      }
+      if (cfgPrompt && isGenericAiPrompt(normalizedStep.step_name || 'AI Step', currentPrompt)) {
+        normalizedStep.prompt_template = cfgPrompt;
+      }
+      if (!String(normalizedStep.ai_model || '').trim()) {
+        normalizedStep.ai_model = fallbackAiModel;
+      }
+      if (!String(normalizedStep.prompt_template || '').trim()) {
+        normalizedStep.prompt_template = defaultAIPrompt(normalizedStep.step_name || 'AI Step');
+      }
+    }
+
+    return normalizedStep;
+  });
+
+  return {
+    ...workflow,
+    steps,
+  };
+}
+
 export function AIWorkflowBuilder() {
   const navigate = useNavigate();
   const { t } = useLanguage();
@@ -181,7 +278,8 @@ export function AIWorkflowBuilder() {
   const [editingStep, setEditingStep] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
-  const [testInputs, setTestInputs] = useState<Record<string, string>>({});
+  const [testInputs, setTestInputs] = useState<Record<string, any>>({});
+  const [aiModels, setAiModels] = useState<AIModel[]>([]);
   const [activeTestContext, setActiveTestContext] = useState<ActiveTestContext | null>(null);
   const [handledReviewActions, setHandledReviewActions] = useState<Record<string, 'approved' | 'rejected'>>({});
   const [pendingRejectAction, setPendingRejectAction] = useState<ReviewAction | null>(null);
@@ -204,11 +302,28 @@ export function AIWorkflowBuilder() {
   }, []);
 
   useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const { all } = await api.getAIModels();
+        setAiModels(all || []);
+      } catch {
+        setAiModels([]);
+      }
+    };
+    loadModels();
+  }, []);
+
+  useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
+
+  const defaultAiModel = useMemo(
+    () => aiModels.find((m) => m.available)?.id || aiModels[0]?.id || 'gpt-4o',
+    [aiModels]
+  );
 
   const effectiveRequiredInputs = useMemo(
     () => inferRequiredInputsFromWorkflow(currentWorkflow),
@@ -222,9 +337,20 @@ export function AIWorkflowBuilder() {
     }
 
     setTestInputs((prev) => {
-      const next: Record<string, string> = {};
+      const next: Record<string, any> = {};
       for (const spec of effectiveRequiredInputs) {
-        next[spec.name] = prev[spec.name] ?? '';
+        if (prev[spec.name] !== undefined) {
+          next[spec.name] = prev[spec.name];
+          continue;
+        }
+        const type = normalizeInputType(spec.type);
+        if (type === 'url_list') {
+          next[spec.name] = [];
+        } else if (type === 'image' || type === 'file') {
+          next[spec.name] = null;
+        } else {
+          next[spec.name] = '';
+        }
       }
       return next;
     });
@@ -264,17 +390,56 @@ export function AIWorkflowBuilder() {
   const buildTestInputData = (requiredSpecs: GeneratedInputSpec[]): Record<string, any> => {
     const inputData: Record<string, any> = {};
     for (const spec of requiredSpecs || []) {
-      const raw = String(testInputs[spec.name] ?? '').trim();
-      if (!raw) continue;
+      const type = normalizeInputType(spec.type);
+      const value = testInputs[spec.name];
 
-      if (spec.type === 'url_list') {
-        inputData[spec.name] = raw
-          .split(/\r?\n|,/)
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0);
+      if (type === 'url_list') {
+        if (Array.isArray(value)) {
+          const urls = value.map((item) => String(item || '').trim()).filter((item) => item.length > 0);
+          if (urls.length > 0) inputData[spec.name] = urls;
+        } else {
+          const raw = String(value ?? '').trim();
+          if (!raw) continue;
+          inputData[spec.name] = raw
+            .split(/\r?\n|,/)
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+        }
         continue;
       }
 
+      if (type === 'file') {
+        if (value && typeof value === 'object') {
+          const content = String(value.content || value.base64 || '').trim();
+          if (!content) continue;
+          inputData[spec.name] = content;
+          if (value.name) {
+            inputData[`${spec.name}_filename`] = String(value.name);
+          }
+          continue;
+        }
+        const raw = String(value ?? '').trim();
+        if (!raw) continue;
+        inputData[spec.name] = raw;
+        continue;
+      }
+
+      if (type === 'image') {
+        if (value && typeof value === 'object' && value.base64) {
+          inputData[spec.name] = String(value.base64);
+          if (value.name) {
+            inputData[`${spec.name}_description`] = `[Image: ${String(value.name)}]`;
+          }
+          continue;
+        }
+        const raw = String(value ?? '').trim();
+        if (!raw) continue;
+        inputData[spec.name] = raw;
+        continue;
+      }
+
+      const raw = String(value ?? '').trim();
+      if (!raw) continue;
       inputData[spec.name] = raw;
     }
     return inputData;
@@ -358,6 +523,46 @@ export function AIWorkflowBuilder() {
     return '';
   };
 
+  const looksLikeStepOutputError = (text: string): boolean => {
+    const value = String(text || '').trim();
+    if (!value) return false;
+    return (
+      /^(error|exception|traceback|failed)\b/i.test(value)
+      || /\b(error processing|script exited with code|failed to|cannot navigate)\b/i.test(value)
+    );
+  };
+
+  const getExecutionCompletionPreview = async (
+    executionId: number
+  ): Promise<{ preview: string; errorStep: { stepOrder: number; stepName: string; errorLine: string } | null }> => {
+    const detail = await api.getExecution(executionId);
+    const steps = Array.isArray(detail?.step_executions) ? detail.step_executions : [];
+    const completed = steps
+      .filter((step: any) => step?.status === 'completed')
+      .sort((a: any, b: any) => Number(a?.step_order || 0) - Number(b?.step_order || 0));
+
+    let preview = '';
+    let errorStep: { stepOrder: number; stepName: string; errorLine: string } | null = null;
+
+    for (const step of completed) {
+      const outputPreview = extractStepOutputPreview(step);
+      if (!outputPreview) continue;
+
+      preview = `Step ${Number(step?.step_order || 0)} (${String(step?.step_name || `Step ${step?.step_order || '?'}`)})\n${outputPreview}`;
+
+      if (!errorStep && looksLikeStepOutputError(outputPreview)) {
+        const firstLine = outputPreview.split('\n')[0] || outputPreview;
+        errorStep = {
+          stepOrder: Number(step?.step_order || 0),
+          stepName: String(step?.step_name || `Step ${step?.step_order || '?'}`),
+          errorLine: firstLine.trim(),
+        };
+      }
+    }
+
+    return { preview, errorStep };
+  };
+
   const getPendingReviewAction = async (executionId: number): Promise<ReviewAction | null> => {
     const detail = await api.getExecution(executionId);
     const steps = Array.isArray(detail?.step_executions) ? detail.step_executions : [];
@@ -380,7 +585,32 @@ export function AIWorkflowBuilder() {
     inputData: Record<string, any>
   ): Promise<void> => {
     if (status.status === 'completed') {
+      let completionPreview = '';
+      let completionError: { stepOrder: number; stepName: string; errorLine: string } | null = null;
+      try {
+        const insight = await getExecutionCompletionPreview(executionId);
+        completionPreview = insight.preview;
+        completionError = insight.errorStep;
+      } catch {
+        // Best effort; still report completion if detail fetch fails.
+      }
+
+      if (completionError) {
+        const failureSummary = `Step ${completionError.stepOrder} (${completionError.stepName}): ${completionError.errorLine}`;
+        appendAssistantMessage(`${t('aiBuilderTestFailed')} #${executionId}\n${failureSummary}`);
+        if (completionPreview) {
+          appendAssistantMessage(`${t('aiBuilderFinalOutputPreview')}\n${completionPreview}`);
+        }
+        appendAssistantMessage(t('aiBuilderAutoFixing'));
+        setActiveTestContext(null);
+        await requestWorkflowFixFromFailure(workflowSnapshot, executionId, inputData, failureSummary);
+        return;
+      }
+
       appendAssistantMessage(`${t('aiBuilderTestPassed')} #${executionId}`);
+      if (completionPreview) {
+        appendAssistantMessage(`${t('aiBuilderFinalOutputPreview')}\n${completionPreview}`);
+      }
       setActiveTestContext(null);
       return;
     }
@@ -535,11 +765,14 @@ export function AIWorkflowBuilder() {
       );
 
       const resolvedWorkflow = response.workflow || parseWorkflowFromAssistantText(response.message);
+      const normalizedWorkflow = resolvedWorkflow
+        ? normalizeWorkflowForEditor(resolvedWorkflow, defaultAiModel)
+        : null;
 
       const assistantMessage: ChatMessage = {
         role: 'assistant',
         content: response.message,
-        workflow: resolvedWorkflow || undefined,
+        workflow: normalizedWorkflow || undefined,
         suggestions: response.suggestions,
       };
 
@@ -547,8 +780,8 @@ export function AIWorkflowBuilder() {
       setMessages(withAssistant);
       messagesRef.current = withAssistant;
 
-      if (resolvedWorkflow) {
-        setCurrentWorkflow(resolvedWorkflow);
+      if (normalizedWorkflow) {
+        setCurrentWorkflow(normalizedWorkflow);
       }
     } catch (err: any) {
       setError(err.message || t('aiBuilderFixFailed'));
@@ -575,11 +808,14 @@ export function AIWorkflowBuilder() {
       );
 
       const resolvedWorkflow = response.workflow || parseWorkflowFromAssistantText(response.message);
+      const normalizedWorkflow = resolvedWorkflow
+        ? normalizeWorkflowForEditor(resolvedWorkflow, defaultAiModel)
+        : null;
 
       const assistantMessage: ChatMessage = {
         role: 'assistant',
         content: response.message,
-        workflow: resolvedWorkflow || undefined,
+        workflow: normalizedWorkflow || undefined,
         suggestions: response.suggestions,
       };
 
@@ -587,8 +823,8 @@ export function AIWorkflowBuilder() {
       setMessages(withAssistant);
       messagesRef.current = withAssistant;
 
-      if (resolvedWorkflow) {
-        setCurrentWorkflow(resolvedWorkflow);
+      if (normalizedWorkflow) {
+        setCurrentWorkflow(normalizedWorkflow);
       }
     } catch (err: any) {
       setError(err.message || 'Failed to generate response');
@@ -610,7 +846,7 @@ export function AIWorkflowBuilder() {
     inputRef.current?.focus();
   };
 
-  const handleTestInputChange = (name: string, value: string) => {
+  const handleTestInputChange = (name: string, value: any) => {
     setTestInputs((prev) => ({ ...prev, [name]: value }));
   };
 
@@ -618,8 +854,29 @@ export function AIWorkflowBuilder() {
     if (!currentWorkflow || isTesting || isLoading || isSaving || !!activeTestContext) return;
 
     const missingInputs = effectiveRequiredInputs
-      .map((spec) => spec.name)
-      .filter((name) => !String(testInputs[name] ?? '').trim());
+      .filter((spec) => {
+        const type = normalizeInputType(spec.type);
+        const value = testInputs[spec.name];
+        if (type === 'url_list') {
+          return !Array.isArray(value) || value.map((v: any) => String(v || '').trim()).filter((v: string) => v.length > 0).length === 0;
+        }
+        if (type === 'file') {
+          if (!value) return true;
+          if (typeof value === 'object') {
+            return !String(value.content || value.base64 || '').trim();
+          }
+          return !String(value).trim();
+        }
+        if (type === 'image') {
+          if (!value) return true;
+          if (typeof value === 'object') {
+            return !String(value.base64 || '').trim();
+          }
+          return !String(value).trim();
+        }
+        return !String(value ?? '').trim();
+      })
+      .map((spec) => spec.name);
 
     if (missingInputs.length > 0) {
       setError(`${t('aiBuilderMissingTestInputs')}: ${missingInputs.join(', ')}`);
@@ -997,6 +1254,7 @@ export function AIWorkflowBuilder() {
                       <StepCard
                         key={index}
                         step={step}
+                        aiModels={aiModels}
                         index={index}
                         isEditing={editingStep === index}
                         onToggleEdit={() =>
@@ -1024,32 +1282,28 @@ export function AIWorkflowBuilder() {
                     <p className="text-xs font-medium text-secondary-600">{t('aiBuilderTestInputs')}</p>
                     <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                       {effectiveRequiredInputs.map((spec) => {
-                        const isLong = spec.type === 'textarea' || spec.type === 'url_list';
+                        const type = normalizeInputType(spec.type);
+                        const config = {
+                          type,
+                          label: spec.name,
+                          placeholder: spec.description || '',
+                          description: spec.description || '',
+                          acceptedFileTypes: type === 'file' ? ['.csv', '.xlsx', '.json', '.txt'] : undefined,
+                          minUrls: type === 'url_list' ? 1 : undefined,
+                          maxUrls: type === 'url_list' ? 20 : undefined,
+                        };
                         return (
                           <div key={spec.name}>
-                            <label className="block text-xs text-secondary-500 mb-1">
-                              {spec.name}
-                              <span className="ml-1 text-secondary-400">({spec.type})</span>
-                            </label>
-                            {isLong ? (
-                              <textarea
-                                value={testInputs[spec.name] || ''}
-                                onChange={(e) => handleTestInputChange(spec.name, e.target.value)}
-                                rows={spec.type === 'url_list' ? 3 : 2}
-                                placeholder={spec.description || ''}
-                                className="w-full border border-secondary-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
-                                disabled={isTesting || isLoading || isSaving}
-                              />
-                            ) : (
-                              <input
-                                type="text"
-                                value={testInputs[spec.name] || ''}
-                                onChange={(e) => handleTestInputChange(spec.name, e.target.value)}
-                                placeholder={spec.description || ''}
-                                className="w-full border border-secondary-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
-                                disabled={isTesting || isLoading || isSaving}
-                              />
-                            )}
+                            <DynamicInput
+                              name={spec.name}
+                              config={config as any}
+                              value={testInputs[spec.name]}
+                              onChange={(value) => handleTestInputChange(spec.name, value)}
+                              t={t}
+                            />
+                            <p className="mt-1 text-[11px] text-secondary-400">
+                              ({spec.type || 'text'})
+                            </p>
                           </div>
                         );
                       })}
@@ -1126,6 +1380,7 @@ export function AIWorkflowBuilder() {
 // Step card component
 interface StepCardProps {
   step: GeneratedStep;
+  aiModels: AIModel[];
   index: number;
   isEditing: boolean;
   onToggleEdit: () => void;
@@ -1140,6 +1395,7 @@ interface StepCardProps {
 
 function StepCard({
   step,
+  aiModels,
   index,
   isEditing,
   onToggleEdit,
@@ -1239,12 +1495,26 @@ function StepCard({
                 <label className="block text-xs font-medium text-secondary-500 mb-1">
                   {t('aiModel')}
                 </label>
-                <input
-                  type="text"
-                  value={step.ai_model}
-                  onChange={e => onUpdate({ ai_model: e.target.value })}
-                  className="w-full border border-secondary-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
-                />
+                {aiModels.length > 0 ? (
+                  <select
+                    value={step.ai_model || ''}
+                    onChange={e => onUpdate({ ai_model: e.target.value })}
+                    className="w-full border border-secondary-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  >
+                    {aiModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}{model.available === false ? ` (${t('notConfigured')})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={step.ai_model}
+                    onChange={e => onUpdate({ ai_model: e.target.value })}
+                    className="w-full border border-secondary-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  />
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-secondary-500 mb-1">

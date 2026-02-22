@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth';
-import { callAI, getAvailableModels, isProviderConfigured } from '../services/aiService';
-import { TestAIRequest, AI_MODELS } from '../types';
+import { callAI, getAllModels, getAvailableModels, isProviderConfigured } from '../services/aiService';
+import { TestAIRequest } from '../types';
 
 const router = Router();
 
@@ -12,7 +12,7 @@ router.use(authMiddleware);
 router.get('/models', (req: Request, res: Response) => {
   try {
     const availableModels = getAvailableModels();
-    const allModels = AI_MODELS.map(model => ({
+    const allModels = getAllModels().map(model => ({
       ...model,
       available: isProviderConfigured(model.provider),
     }));
@@ -61,7 +61,7 @@ router.post('/test', async (req: Request, res: Response) => {
     }
 
     // Validate model belongs to provider
-    const modelInfo = AI_MODELS.find(m => m.id === model && m.provider === provider);
+    const modelInfo = getAllModels().find(m => m.id === model && m.provider === provider);
     if (!modelInfo && provider !== 'mock') {
       res.status(400).json({
         error: `Model ${model} is not available for provider ${provider}`,

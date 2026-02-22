@@ -20,7 +20,7 @@ export interface BuiltPrompt {
     content: string;
     attachments?: MessageAttachment[];
     toolCallId?: string;
-    toolCalls?: Array<{ id: string; name: string; args: Record<string, any> }>;
+    toolCalls?: Array<{ id: string; name: string; args: Record<string, any>; providerData?: Record<string, any> }>;
   }>;
 }
 
@@ -88,6 +88,7 @@ export class PromptBuilder {
           'If an image input supports multiple images, confirm whether the user wants to add more images before executing.',
           'When executing with multiple images for one input, pass imageInputs as an index array (for example {"product_images":[1,2]}).',
           'If the user asks to continue/repeat (for example "same for this one"), reuse missing required inputs from recent successful execution memory in the current task.',
+          'If the user uploads files and a matching workflow/skill is already identified, call skill_execute directly instead of browsing files with file_read/file_list first.',
           'If all required inputs are already available, execute immediately instead of asking for more clarification.',
         ].join('\n')
       );

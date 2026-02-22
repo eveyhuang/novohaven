@@ -104,7 +104,12 @@ export interface CompletionRequest {
     content: string;
     attachments?: MessageAttachment[];
     toolCallId?: string;
-    toolCalls?: Array<{ id: string; name: string; args: Record<string, any> }>;
+    toolCalls?: Array<{
+      id: string;
+      name: string;
+      args: Record<string, any>;
+      providerData?: Record<string, any>;
+    }>;
   }>;
   tools?: ToolDefinition[];
   maxTokens?: number;
@@ -114,7 +119,12 @@ export interface CompletionRequest {
 export interface StreamEvent {
   type: 'text' | 'tool_call' | 'tool_result' | 'done' | 'error';
   text?: string;
-  toolCall?: { id: string; name: string; args: Record<string, any> };
+  toolCall?: {
+    id: string;
+    name: string;
+    args: Record<string, any>;
+    providerData?: Record<string, any>;
+  };
   error?: string;
 }
 

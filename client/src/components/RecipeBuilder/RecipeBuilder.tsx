@@ -693,14 +693,14 @@ export function RecipeBuilder() {
       <Modal
         isOpen={showStepSelector}
         onClose={() => setShowStepSelector(false)}
-        title="Select Skill Step"
+        title={t('selectTemplateStep')}
         size="lg"
       >
-        <p className="text-sm text-secondary-600 mb-4">Choose a skill step to add into this workflow.</p>
+        <p className="text-sm text-secondary-600 mb-4">{t('selectTemplateDesc')}</p>
         <div className="space-y-2 max-h-96 overflow-y-auto">
           {availableSkills.length === 0 ? (
             <p className="text-secondary-600 text-center py-4">
-              No skills available. Create a skill first.
+              {t('noTemplatesAvailable')}
             </p>
           ) : (
             availableSkills.map((skill) => {

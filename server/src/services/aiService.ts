@@ -1,12 +1,63 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { AIProvider, AIResponse, AIServiceConfig, AI_MODELS, ImageData, GeneratedImage } from '../types';
+import { AIProvider, AIResponse, AIServiceConfig, AI_MODELS, AIModelInfo, ImageData, GeneratedImage } from '../types';
 
 // Initialize clients (lazy initialization)
 let openaiClient: OpenAI | null = null;
 let anthropicClient: Anthropic | null = null;
 let googleClient: GoogleGenerativeAI | null = null;
+
+function getAllKnownModels(): AIModelInfo[] {
+  // Prefer plugin-provided models when available, with static fallback per provider.
+  try {
+    // Lazy require to avoid hard plugin dependency during early boot.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { pluginRegistry } = require('../plugins/registry') as { pluginRegistry: { getAllProviders: () => Map<string, any> } };
+    const providers = pluginRegistry.getAllProviders();
+
+    const pluginModels: AIModelInfo[] = [];
+    for (const [, provider] of providers) {
+      try {
+        const listed = provider.listModels?.() || [];
+        for (const model of listed) {
+          const fallback = AI_MODELS.find((m) => m.id === model.id);
+          const mappedProvider = String(model.provider || fallback?.provider || '').trim() as AIProvider;
+          if (!mappedProvider) continue;
+          pluginModels.push({
+            id: String(model.id),
+            name: String(model.name || model.id),
+            provider: mappedProvider,
+            maxTokens: Number(model.contextWindow || fallback?.maxTokens || 8192),
+            supportsVision: fallback?.supportsVision,
+            supportsImageGeneration: fallback?.supportsImageGeneration,
+          });
+        }
+      } catch {
+        // Ignore a broken provider and continue with others.
+      }
+    }
+
+    if (pluginModels.length > 0) {
+      const dedup = new Map<string, AIModelInfo>();
+      for (const model of pluginModels) {
+        dedup.set(model.id, model);
+      }
+
+      // Keep static fallback only for providers that have no plugin models loaded.
+      const providersWithPluginModels = new Set(pluginModels.map((m) => m.provider));
+      for (const model of AI_MODELS) {
+        if (providersWithPluginModels.has(model.provider)) continue;
+        if (!dedup.has(model.id)) dedup.set(model.id, model);
+      }
+      return Array.from(dedup.values());
+    }
+  } catch {
+    // Fall back to static list below.
+  }
+
+  return AI_MODELS;
+}
 
 function getOpenAIClient(): OpenAI {
   if (!openaiClient) {
@@ -43,11 +94,17 @@ function getGoogleClient(): GoogleGenerativeAI {
 
 // Get provider for a model
 export function getProviderForModel(modelId: string): AIProvider {
-  const model = AI_MODELS.find(m => m.id === modelId);
-  if (!model) {
-    throw new Error(`Unknown model: ${modelId}`);
-  }
-  return model.provider;
+  const allModels = getAllKnownModels();
+  const model = allModels.find(m => m.id === modelId);
+  if (model) return model.provider;
+
+  const lowered = String(modelId || '').toLowerCase();
+  if (lowered.startsWith('gpt') || lowered.startsWith('o1') || lowered.startsWith('o3')) return 'openai';
+  if (lowered.startsWith('claude')) return 'anthropic';
+  if (lowered.startsWith('gemini')) return 'google';
+  if (lowered.startsWith('mock')) return 'mock';
+
+  throw new Error(`Unknown model: ${modelId}`);
 }
 
 // OpenAI implementation
@@ -215,14 +272,40 @@ async function callGoogle(
     let content: string;
 
     if (config.messages && config.messages.length > 0) {
-      // Multi-turn mode using chat
-      const history = config.messages.slice(0, -1).map(msg => ({
-        role: msg.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: msg.content }],
-      }));
-      const lastMessage = config.messages[config.messages.length - 1];
+      // Multi-turn mode using chat.
+      // Gemini requires valid role ordering, so merge consecutive same-role turns
+      // and ensure the next message sent is always from user role.
+      const collapsed: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+      for (const msg of config.messages) {
+        const role: 'user' | 'model' = msg.role === 'assistant' ? 'model' : 'user';
+        const text = String(msg.content ?? '').trim();
+        if (!text) continue;
+
+        if (collapsed.length === 0 && role === 'model') {
+          // Drop orphan assistant/model turns at the beginning.
+          continue;
+        }
+
+        const prev = collapsed[collapsed.length - 1];
+        if (prev && prev.role === role) {
+          prev.parts[0].text = `${prev.parts[0].text}\n\n${text}`;
+        } else {
+          collapsed.push({ role, parts: [{ text }] });
+        }
+      }
+
+      let lastUserMessage = String(prompt || '').trim();
+      let history = collapsed;
+      const lastTurn = collapsed[collapsed.length - 1];
+      if (lastTurn?.role === 'user') {
+        lastUserMessage = lastTurn.parts[0].text;
+        history = collapsed.slice(0, -1);
+      } else if (!lastUserMessage) {
+        lastUserMessage = 'Continue.';
+      }
+
       const chat = generativeModel.startChat({ history });
-      const result = await chat.sendMessage(lastMessage.content);
+      const result = await chat.sendMessage(lastUserMessage);
       content = result.response.text();
     } else {
       // Legacy single-prompt mode
@@ -592,22 +675,26 @@ export function isProviderConfigured(provider: AIProvider): boolean {
 
 // Get available models (only those with configured API keys)
 export function getAvailableModels() {
-  return AI_MODELS.filter(model => isProviderConfigured(model.provider));
+  return getAllKnownModels().filter(model => isProviderConfigured(model.provider));
+}
+
+export function getAllModels() {
+  return getAllKnownModels();
 }
 
 // Check if a model supports vision
 export function modelSupportsVision(modelId: string): boolean {
-  const model = AI_MODELS.find(m => m.id === modelId);
+  const model = getAllKnownModels().find(m => m.id === modelId);
   return model?.supportsVision ?? false;
 }
 
 // Check if a model supports image generation
 export function modelSupportsImageGeneration(modelId: string): boolean {
-  const model = AI_MODELS.find(m => m.id === modelId);
+  const model = getAllKnownModels().find(m => m.id === modelId);
   return model?.supportsImageGeneration ?? false;
 }
 
 // Get model info
 export function getModelInfo(modelId: string) {
-  return AI_MODELS.find(m => m.id === modelId);
+  return getAllKnownModels().find(m => m.id === modelId);
 }

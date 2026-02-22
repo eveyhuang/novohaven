@@ -43,8 +43,8 @@ const DEFAULT_INPUT_CONFIG: InputTypeConfig = {
   description: '',
 };
 
-const BUSINESS_EXECUTOR_TYPES = new Set(['ai', 'manus', 'browser']);
-const EXECUTOR_DISPLAY_ORDER = ['ai', 'manus', 'browser', 'script', 'http', 'transform'];
+const BUSINESS_EXECUTOR_TYPES = new Set(['ai', 'browser']);
+const EXECUTOR_DISPLAY_ORDER = ['ai', 'browser', 'script', 'http', 'transform'];
 
 export function SkillEditor() {
   const { id } = useParams();
@@ -142,12 +142,21 @@ export function SkillEditor() {
       console.log('DEBUG SkillEditor - Full API response:', data);
       console.log('DEBUG SkillEditor - First step:', step);
       console.log('DEBUG SkillEditor - step_type value:', step?.step_type);
+      const normalizedStepType = step?.step_type === 'scraping'
+        ? 'browser'
+        : step?.step_type === 'manus'
+          ? 'ai'
+          : step?.step_type;
+      const normalizedModel = step?.ai_model && step.ai_model !== 'manus:agent'
+        ? step.ai_model
+        : 'mock';
+
       setTemplate({
         name: data.name,
         description: data.description || '',
         step_name: step?.step_name || data.name,
-        step_type: (step?.step_type === 'scraping' ? 'browser' : step?.step_type as StepType) || 'ai',
-        ai_model: step?.ai_model || 'mock',
+        step_type: (normalizedStepType as StepType) || 'ai',
+        ai_model: normalizedModel,
         prompt_template: step?.prompt_template || '',
         output_format: step?.output_format || 'text',
         model_config: step?.model_config || JSON.stringify({ temperature: 0.7, maxTokens: 2000 }),
@@ -336,7 +345,7 @@ export function SkillEditor() {
 
     // Non-AI templates can't be tested in the same way
     if (template.step_type !== 'ai') {
-      setTestError('Only AI skills can be tested directly. Please run the skill in a workflow to test.');
+      setTestError(t('onlyAiSkillsDirectTest'));
       return;
     }
 
@@ -501,8 +510,8 @@ export function SkillEditor() {
       setError(t('templateNameRequired'));
       return;
     }
-    // Require prompt_template for AI and Manus templates
-    if ((template.step_type === 'ai' || template.step_type === 'manus') && !template.prompt_template) {
+    // Require prompt_template for AI templates
+    if (template.step_type === 'ai' && !template.prompt_template) {
       setError(t('promptTemplateRequired'));
       return;
     }
@@ -772,69 +781,6 @@ export function SkillEditor() {
                 {t('usageTrackingDescription')}
               </p>
             </div>
-          </CardBody>
-        </Card>
-      ) : template.step_type === 'manus' ? (
-        /* Manus Agent Configuration */
-        <Card>
-          <CardHeader>
-            <div className="flex items-center space-x-2">
-              <span className="text-2xl">🧠</span>
-              <h2 className="font-semibold text-secondary-900">{t('manusTemplate.configuration')}</h2>
-            </div>
-          </CardHeader>
-          <CardBody className="space-y-4">
-            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-              <p className="text-sm text-purple-700">
-                {t('manusTemplate.description')}
-              </p>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-sm font-medium text-secondary-700">
-                  {t('promptTemplate')}
-                </label>
-                <button
-                  onClick={() => setShowVariableHelp(true)}
-                  className="text-sm text-primary-600 hover:text-primary-700"
-                >
-                  {t('variableHelp')}
-                </button>
-              </div>
-              <textarea
-                ref={promptTextAreaRef}
-                value={template.prompt_template}
-                onChange={(e) => setTemplate({ ...template, prompt_template: e.target.value })}
-                placeholder={t('manusTemplate.promptPlaceholder')}
-                rows={12}
-                className="w-full px-3 py-2 border border-secondary-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm"
-              />
-              <p className="mt-1 text-sm text-secondary-500">
-                {t('manusTemplate.promptHelp')}
-              </p>
-            </div>
-
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-              <h5 className="text-sm font-medium text-yellow-800 mb-2">{t('howItWorks')}</h5>
-              <ul className="text-sm text-yellow-700 space-y-1">
-                <li>• {t('manusTemplate.howItWorks1')}</li>
-                <li>• {t('manusTemplate.howItWorks2')}</li>
-                <li>• {t('manusTemplate.howItWorks3')}</li>
-              </ul>
-            </div>
-
-            <Select
-              label={t('outputFormat')}
-              value={template.output_format}
-              onChange={(e) => setTemplate({ ...template, output_format: e.target.value as any })}
-              options={[
-                { value: 'text', label: t('plainText') },
-                { value: 'markdown', label: t('markdown') },
-                { value: 'json', label: t('json') },
-                { value: 'file', label: 'File' },
-              ]}
-            />
           </CardBody>
         </Card>
       ) : template.step_type === 'ai' ? (

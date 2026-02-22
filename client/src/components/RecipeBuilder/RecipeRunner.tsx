@@ -100,8 +100,8 @@ export function RecipeRunner() {
         if (step.step_type === 'scraping' && !step.input_config) {
           configs['urls'] = {
             type: 'url_list',
-            label: 'Product URLs',
-            placeholder: 'Enter product URLs (one per line)',
+            label: t('productUrls'),
+            placeholder: t('productUrlsPlaceholder'),
           };
           if (!('urls' in initialValues)) {
             initialValues['urls'] = [''];
@@ -321,7 +321,7 @@ export function RecipeRunner() {
 
   const removeStep = (index: number) => {
     if (localSteps.length <= 1) {
-      setError('Recipe must have at least one step');
+      setError(t('recipeMustHaveStep'));
       return;
     }
     const newSteps = localSteps.filter((_, i) => i !== index);
@@ -415,7 +415,7 @@ export function RecipeRunner() {
       (s.step_type === 'ai' || !s.step_type) && (!s.prompt_template || !s.prompt_template.trim())
     );
     if (emptyPromptSteps.length > 0) {
-      setError('All AI steps must have a prompt template');
+      setError(t('allStepsMustHavePrompt'));
       return null;
     }
 
@@ -589,7 +589,7 @@ export function RecipeRunner() {
                     </h4>
                     <p className="text-sm text-secondary-500">
                       {step.step_type === 'scraping'
-                        ? 'Browser Scraping'
+                        ? t('browserScraping')
                         : models.find(m => m.id === step.ai_model)?.name || step.ai_model}
                     </p>
                   </div>
@@ -638,14 +638,14 @@ export function RecipeRunner() {
                       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <div className="flex items-center space-x-2 mb-2">
                           <span className="text-2xl">🌐</span>
-                          <h4 className="font-medium text-blue-800">Browser Scraping</h4>
+                          <h4 className="font-medium text-blue-800">{t('browserScraping')}</h4>
                         </div>
                         <p className="text-sm text-blue-700">
-                          Puppeteer-based browser automation extracts reviews directly from e-commerce sites.
+                          {t('browserScrapingDescription')}
                         </p>
                       </div>
                       <div className="bg-secondary-50 rounded-lg p-4">
-                        <h5 className="text-sm font-medium text-secondary-700 mb-2">Supported Platforms</h5>
+                        <h5 className="text-sm font-medium text-secondary-700 mb-2">{t('supportedPlatforms')}</h5>
                         <div className="flex space-x-2">
                           <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded border border-purple-200">
                             🛋️ Wayfair
@@ -658,9 +658,9 @@ export function RecipeRunner() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
                           <div>
-                            <h5 className="text-sm font-medium text-amber-800 mb-1">Required Input</h5>
+                            <h5 className="text-sm font-medium text-amber-800 mb-1">{t('requiredInput')}</h5>
                             <p className="text-sm text-amber-700">
-                              This step requires <strong>Product URLs</strong> to be provided in the Input Values section above.
+                              {t('browserRequiredInputHintPrefix')} <strong>{t('productUrls')}</strong> {t('browserRequiredInputHintSuffix')}
                             </p>
                           </div>
                         </div>
