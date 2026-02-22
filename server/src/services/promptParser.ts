@@ -221,6 +221,20 @@ function isBase64Image(value: any): boolean {
          (value.length > 100 && /^[A-Za-z0-9+/=]+$/.test(value.substring(0, 100)));
 }
 
+function extractImageValues(value: any): string[] {
+  if (typeof value === 'string') {
+    return isBase64Image(value) ? [value] : [];
+  }
+  if (Array.isArray(value)) {
+    const images: string[] = [];
+    for (const item of value) {
+      if (typeof item === 'string' && isBase64Image(item)) images.push(item);
+    }
+    return images;
+  }
+  return [];
+}
+
 // Extract media type from base64 data URL
 function extractMediaType(base64: string): ImageData['mediaType'] {
   if (base64.startsWith('data:image/jpeg')) return 'image/jpeg';
@@ -246,19 +260,30 @@ export function compilePrompt(
     switch (variable.type) {
       case 'user_input':
         const inputValue = context.userInputs[variable.name];
+        const imageValues = extractImageValues(inputValue);
 
         // Check if this is image data
-        if (isBase64Image(inputValue)) {
-          // Extract the image and add to images array
-          images.push({
-            base64: inputValue,
-            mediaType: extractMediaType(inputValue),
-          });
+        if (imageValues.length > 0) {
+          // Extract image(s) and add to images array
+          for (const imageValue of imageValues) {
+            images.push({
+              base64: imageValue,
+              mediaType: extractMediaType(imageValue),
+            });
+          }
           // Replace the variable with a reference to the attached image
-          resolvedValue = `[See attached image: ${variable.name}]`;
-        } else if (inputValue === undefined || inputValue === '') {
+          resolvedValue = imageValues.length === 1
+            ? `[See attached image: ${variable.name}]`
+            : `[See attached images: ${variable.name} (${imageValues.length})]`;
+        } else if (
+          inputValue === undefined ||
+          inputValue === '' ||
+          (Array.isArray(inputValue) && inputValue.length === 0)
+        ) {
           unresolvedVariables.push(variable.name);
           resolvedValue = `[User input "${variable.name}" required]`;
+        } else if (Array.isArray(inputValue)) {
+          resolvedValue = inputValue.map((v) => String(v)).join('\n');
         } else {
           resolvedValue = String(inputValue);
         }

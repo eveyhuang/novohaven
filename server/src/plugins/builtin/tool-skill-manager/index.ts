@@ -60,27 +60,27 @@ class SkillManagerPlugin implements ToolPlugin {
       },
       {
         name: 'skill_execute',
-        description: 'Execute a skill or workflow by ID with given inputs. For image inputs, map the variable name to the attachment index (0-based) from the user\'s uploaded images using imageInputs.',
+        description: 'Execute a skill or workflow by ID with given inputs. For image inputs, map the variable name to attachment index/indices (0-based) from user uploads using imageInputs.',
         parameters: {
           type: 'object',
           properties: {
             skillId: { type: 'number', description: 'Skill or workflow ID' },
             skillType: { type: 'string', enum: ['skill', 'workflow'] },
             inputs: { type: 'object', description: 'Text input variables (key=variable name, value=text)' },
-            imageInputs: { type: 'object', description: 'Image input variables. Map variable name to attachment index (e.g., {"reference_image": 0, "product_images": 1}). Index refers to the user\'s uploaded images in order.' },
+            imageInputs: { type: 'object', description: 'Image input variables. Map variable name to one index or an array of indices (e.g., {"reference_image": 0, "product_images": [1,2]}). Indices refer to uploaded images in order.' },
           },
           required: ['skillId', 'skillType'],
         },
       },
       {
         name: 'skill_test',
-        description: 'Test a skill with inputs without saving results. For image inputs, use imageInputs to map variable names to attachment indices.',
+        description: 'Test a skill with inputs without saving results. For image inputs, use imageInputs to map variable names to one index or array of indices.',
         parameters: {
           type: 'object',
           properties: {
             skillId: { type: 'number', description: 'Skill ID to test' },
             inputs: { type: 'object', description: 'Text input variables' },
-            imageInputs: { type: 'object', description: 'Image input variables mapped to attachment indices (e.g., {"reference_image": 0})' },
+            imageInputs: { type: 'object', description: 'Image input variables mapped to index/indices (e.g., {"reference_image": 0, "product_images": [1,2]})' },
           },
           required: ['skillId'],
         },
@@ -242,28 +242,60 @@ class SkillManagerPlugin implements ToolPlugin {
     }
 
     const inputSpecs = this.collectInputSpecs(steps);
+    const taskBoundaryId = this.getLatestTaskBoundaryId(context.sessionId);
 
     // Resolve image inputs from conversation attachments
     const resolvedInputs = { ...inputs };
     const attachments = context.attachments || [];
+    const imageIndexByVar = new Map<string, number[]>();
+    const explicitlyUsedIndexes = new Set<number>();
     for (const [varName, idx] of Object.entries(imageInputs)) {
-      const attachIdx = typeof idx === 'number' ? idx : parseInt(idx as string, 10);
-      const attachment = attachments[attachIdx];
-      if (attachment) {
-        resolvedInputs[varName] = this.toPromptImageValue(attachment);
-      } else {
-        resolvedInputs[varName] = `[image:missing_attachment_${attachIdx}]`;
-      }
+      const mappedIndexes = this.parseAttachmentIndexes(idx, attachments.length);
+      imageIndexByVar.set(varName, mappedIndexes);
+      mappedIndexes.forEach((i) => explicitlyUsedIndexes.add(i));
+      resolvedInputs[varName] = this.buildImageInputValueFromIndexes(mappedIndexes, attachments);
     }
 
     // If there's a single image variable and at least one uploaded image,
-    // auto-map it when the model omits/uses the wrong image input key.
+    // auto-map all images when the model omits/uses the wrong image input key.
     const imageVars = Array.from(inputSpecs.entries())
       .filter(([, spec]) => spec.type === 'image')
       .map(([name]) => name);
     if (imageVars.length === 1 && attachments.length > 0 && !resolvedInputs[imageVars[0]]) {
-      resolvedInputs[imageVars[0]] = this.toPromptImageValue(attachments[0]);
+      const allIndexes = Array.from({ length: attachments.length }, (_, i) => i);
+      imageIndexByVar.set(imageVars[0], allIndexes);
+      allIndexes.forEach((i) => explicitlyUsedIndexes.add(i));
+      resolvedInputs[imageVars[0]] = this.buildImageInputValueFromIndexes(allIndexes, attachments);
     }
+
+    // If user intent clearly indicates combining multiple uploaded images into one output,
+    // merge any unmapped images into the non-reference image input.
+    if (this.userWantsImageCombination(context.sessionId) && attachments.length > 0) {
+      const remainingIndexes = Array.from({ length: attachments.length }, (_, i) => i)
+        .filter((idx) => !explicitlyUsedIndexes.has(idx));
+      if (remainingIndexes.length > 0) {
+        const mergeVar = this.pickCombinationTargetImageVar(inputSpecs, imageIndexByVar);
+        if (mergeVar) {
+          const existing = imageIndexByVar.get(mergeVar) || [];
+          const merged = [...existing, ...remainingIndexes];
+          imageIndexByVar.set(mergeVar, merged);
+          remainingIndexes.forEach((i) => explicitlyUsedIndexes.add(i));
+          resolvedInputs[mergeVar] = this.buildImageInputValueFromIndexes(merged, attachments);
+        }
+      }
+    }
+
+    // Reuse inputs from latest successful execution of the same asset in this task segment.
+    // This enables continuation requests like "same for this one" without re-uploading all prior inputs.
+    this.applyExecutionMemoryFallback(
+      context.sessionId,
+      parentType,
+      skillId,
+      taskBoundaryId,
+      resolvedInputs,
+      inputSpecs
+    );
+    const resolvedImageAttachmentCount = this.countResolvedImageValues(resolvedInputs, inputSpecs);
 
     // Keep file inputs from blocking execution when file content is attached or implied.
     for (const [name, spec] of inputSpecs.entries()) {
@@ -292,13 +324,7 @@ class SkillManagerPlugin implements ToolPlugin {
           // references implicitly; don't block execution solely on missing structured text.
           return false;
         }
-        const v = resolvedInputs[name];
-        if (v == null) return true;
-        if (typeof v === 'string') {
-          if (spec.type === 'image') return v.includes('[image:missing_attachment_');
-          return v.trim().length === 0;
-        }
-        return false;
+        return this.isInputValueMissing(resolvedInputs[name], spec.type);
       });
 
     if (missingRequired.length > 0) {
@@ -329,10 +355,29 @@ class SkillManagerPlugin implements ToolPlugin {
     }
 
     const executionId = startResult.executionId;
+    this.setSessionActiveExecution(context.sessionId, executionId);
     const settled = await this.waitForExecutionToSettle(executionId, context.userId, 120000);
-    const imageCount = Object.keys(imageInputs).length;
+    this.storeExecutionMemorySnapshot({
+      sessionId: context.sessionId,
+      taskBoundaryId,
+      assetType: parentType,
+      assetId: skillId,
+      assetName: skill.name,
+      executionId,
+      executionStatus: settled.status,
+      inputs: resolvedInputs,
+      stepExecutions: settled.stepExecutions,
+    });
+    if (['completed', 'failed', 'cancelled'].includes(settled.status)) {
+      this.setSessionActiveExecution(context.sessionId, null);
+    }
+    const imageCount = resolvedImageAttachmentCount;
     const inputSummary = Object.keys(resolvedInputs).length > 0
-      ? `\nInputs: ${Object.entries(resolvedInputs).map(([k, v]) => `${k}=${typeof v === 'string' && v.length > 60 ? v.substring(0, 60) + '...' : v}`).join(', ')}`
+      ? `\nInputs: ${Object.entries(resolvedInputs).map(([k, v]) => {
+          if (Array.isArray(v)) return `${k}=[${v.length} value(s)]`;
+          if (typeof v === 'string' && v.length > 60) return `${k}=${v.substring(0, 60)}...`;
+          return `${k}=${String(v)}`;
+        }).join(', ')}`
       : '';
 
     if (settled.timedOut) {
@@ -447,10 +492,13 @@ class SkillManagerPlugin implements ToolPlugin {
     const attachments = context?.attachments || [];
     const resolvedInputs = { ...inputs };
     for (const [varName, idx] of Object.entries(imageInputs)) {
-      const attachIdx = typeof idx === 'number' ? idx : parseInt(idx as string, 10);
-      resolvedInputs[varName] = attachments[attachIdx]
-        ? `[image: user attachment #${attachIdx + 1}]`
-        : `[image: missing attachment #${attachIdx + 1}]`;
+      const mappedIndexes = this.parseAttachmentIndexes(idx, attachments.length);
+      const values = mappedIndexes.map((attachIdx) => (
+        attachments[attachIdx]
+          ? `[image: user attachment #${attachIdx + 1}]`
+          : `[image: missing attachment #${attachIdx + 1}]`
+      ));
+      resolvedInputs[varName] = values.length <= 1 ? (values[0] || '[image: missing attachment #1]') : values;
     }
 
     // Build a preview of what would happen
@@ -648,6 +696,318 @@ class SkillManagerPlugin implements ToolPlugin {
       }
     }
     return specs;
+  }
+
+  private parseAttachmentIndexes(value: any, attachmentCount: number): number[] {
+    const allIndexes = Array.from({ length: Math.max(0, attachmentCount) }, (_, i) => i);
+    const dedup = new Set<number>();
+    const out: number[] = [];
+    const add = (n: number) => {
+      if (!Number.isFinite(n)) return;
+      const idx = Math.trunc(n);
+      if (idx < 0) return;
+      if (!dedup.has(idx)) {
+        dedup.add(idx);
+        out.push(idx);
+      }
+    };
+
+    if (typeof value === 'number') {
+      add(value);
+      return out;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === 'number') add(item);
+        else if (typeof item === 'string') {
+          const parsed = Number.parseInt(item.trim(), 10);
+          if (!Number.isNaN(parsed)) add(parsed);
+        }
+      }
+      return out;
+    }
+
+    if (typeof value === 'string') {
+      const raw = value.trim();
+      if (!raw) return out;
+      if (raw === '*' || raw.toLowerCase() === 'all') return allIndexes;
+
+      if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
+        try {
+          const parsed = JSON.parse(raw);
+          return this.parseAttachmentIndexes(parsed, attachmentCount);
+        } catch {
+          // fall through to delimiter parsing
+        }
+      }
+
+      for (const token of raw.split(/[,\s|]+/)) {
+        if (!token) continue;
+        const parsed = Number.parseInt(token, 10);
+        if (!Number.isNaN(parsed)) add(parsed);
+      }
+      return out;
+    }
+
+    if (value && typeof value === 'object') {
+      const obj = value as Record<string, any>;
+      if (obj.all === true) return allIndexes;
+      if (Array.isArray(obj.indexes)) return this.parseAttachmentIndexes(obj.indexes, attachmentCount);
+      if (obj.index != null) return this.parseAttachmentIndexes(obj.index, attachmentCount);
+    }
+
+    return out;
+  }
+
+  private buildImageInputValueFromIndexes(
+    indexes: number[],
+    attachments: Array<{ data: string; mimeType?: string }>
+  ): string | string[] {
+    if (!indexes || indexes.length === 0) return '[image:missing_attachment_0]';
+    const values = indexes.map((attachIdx) => {
+      const attachment = attachments[attachIdx];
+      if (!attachment) return `[image:missing_attachment_${attachIdx}]`;
+      return this.toPromptImageValue(attachment);
+    });
+    return values.length === 1 ? values[0] : values;
+  }
+
+  private countResolvedImageValues(
+    resolvedInputs: Record<string, any>,
+    inputSpecs: Map<string, { type: string; optional: boolean; label?: string }>
+  ): number {
+    let count = 0;
+    for (const [varName, spec] of inputSpecs.entries()) {
+      if (spec.type !== 'image') continue;
+      const value = resolvedInputs[varName];
+      if (typeof value === 'string') {
+        if (!value.startsWith('[image:missing_attachment_')) count += 1;
+        continue;
+      }
+      if (Array.isArray(value)) {
+        count += value.filter(
+          (v) => typeof v === 'string' && !v.startsWith('[image:missing_attachment_')
+        ).length;
+      }
+    }
+    return count;
+  }
+
+  private isInputValueMissing(value: any, type: string): boolean {
+    if (value == null) return true;
+    if (type === 'image') {
+      if (Array.isArray(value)) {
+        if (value.length === 0) return true;
+        const hasValidImage = value.some(
+          (item) => typeof item === 'string' && !item.includes('[image:missing_attachment_')
+        );
+        return !hasValidImage;
+      }
+      if (typeof value === 'string') return value.includes('[image:missing_attachment_') || value.trim().length === 0;
+      return true;
+    }
+    if (typeof value === 'string') return value.trim().length === 0;
+    if (Array.isArray(value)) return value.length === 0;
+    return false;
+  }
+
+  private setSessionActiveExecution(sessionId: string, executionId: number | null): void {
+    try {
+      this.db!.prepare(
+        'UPDATE sessions SET active_execution_id = ?, last_active_at = CURRENT_TIMESTAMP WHERE id = ?'
+      ).run(executionId, sessionId);
+    } catch {
+      // Best-effort context hint; ignore if sessions table is unavailable.
+    }
+  }
+
+  private getLatestTaskBoundaryId(sessionId: string, scanLimit: number = 500): number | null {
+    const rows = this.db!.prepare(
+      `SELECT id, metadata
+       FROM session_messages
+       WHERE session_id = ?
+       ORDER BY id DESC
+       LIMIT ?`
+    ).all(sessionId, scanLimit) as Array<{ id: number; metadata: string | null }>;
+
+    for (const row of rows) {
+      if (!row.metadata) continue;
+      try {
+        const metadata = JSON.parse(row.metadata);
+        if (metadata?.taskBoundary === true) return Number(row.id);
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private applyExecutionMemoryFallback(
+    sessionId: string,
+    assetType: 'skill' | 'workflow',
+    assetId: number,
+    taskBoundaryId: number | null,
+    resolvedInputs: Record<string, any>,
+    inputSpecs: Map<string, { type: string; optional: boolean; label?: string }>
+  ): void {
+    const memory = this.getLatestExecutionMemory(sessionId, assetType, assetId, taskBoundaryId);
+    if (!memory) return;
+    const cachedInputs = memory.inputs;
+    if (!cachedInputs || typeof cachedInputs !== 'object') return;
+
+    for (const [name, spec] of inputSpecs.entries()) {
+      const currentValue = resolvedInputs[name];
+      if (!this.isInputValueMissing(currentValue, spec.type)) continue;
+      const cachedValue = (cachedInputs as Record<string, any>)[name];
+      if (this.isInputValueMissing(cachedValue, spec.type)) continue;
+      resolvedInputs[name] = cachedValue;
+    }
+  }
+
+  private getLatestExecutionMemory(
+    sessionId: string,
+    assetType: 'skill' | 'workflow',
+    assetId: number,
+    taskBoundaryId: number | null
+  ): { inputs: Record<string, any>; stepOutputs: any[] } | null {
+    let rows: Array<{ task_boundary_id: number | null; inputs_json: string; step_outputs_json: string; execution_status?: string | null }>;
+    try {
+      rows = this.db!.prepare(
+        `SELECT task_boundary_id, inputs_json, step_outputs_json, execution_status
+         FROM session_execution_memory
+         WHERE session_id = ? AND asset_type = ? AND asset_id = ?
+         ORDER BY id DESC
+         LIMIT 40`
+      ).all(sessionId, assetType, assetId) as Array<{ task_boundary_id: number | null; inputs_json: string; step_outputs_json: string; execution_status?: string | null }>;
+    } catch {
+      return null;
+    }
+
+    if (rows.length === 0) return null;
+    const scoped = rows.filter((r) => {
+      if (taskBoundaryId == null) return r.task_boundary_id == null;
+      return Number(r.task_boundary_id) === Number(taskBoundaryId);
+    });
+    const candidates = scoped.length > 0 ? scoped : rows;
+    const preferred = candidates.find((r) => String(r.execution_status || '').toLowerCase() === 'completed') || candidates[0];
+    if (!preferred) return null;
+
+    try {
+      const inputs = JSON.parse(preferred.inputs_json || '{}');
+      const stepOutputs = JSON.parse(preferred.step_outputs_json || '[]');
+      return {
+        inputs: inputs && typeof inputs === 'object' ? inputs : {},
+        stepOutputs: Array.isArray(stepOutputs) ? stepOutputs : [],
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private storeExecutionMemorySnapshot(opts: {
+    sessionId: string;
+    taskBoundaryId: number | null;
+    assetType: 'skill' | 'workflow';
+    assetId: number;
+    assetName?: string;
+    executionId: number;
+    executionStatus: string;
+    inputs: Record<string, any>;
+    stepExecutions: any[];
+  }): void {
+    const { sessionId, taskBoundaryId, assetType, assetId, assetName, executionId, executionStatus, inputs, stepExecutions } = opts;
+    try {
+      const stepOutputs = (stepExecutions || []).map((step: any) => ({
+        stepOrder: Number(step?.step_order || 0),
+        status: String(step?.status || ''),
+        content: this.extractStepOutputContent(step?.output_data),
+      }));
+      const latestSummary = this.extractLatestContent(stepExecutions);
+
+      this.db!.prepare(
+        `INSERT INTO session_execution_memory (
+           session_id, task_boundary_id, asset_type, asset_id, asset_name,
+           execution_id, execution_status, inputs_json, step_outputs_json, latest_output_summary
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        sessionId,
+        taskBoundaryId,
+        assetType,
+        assetId,
+        assetName || null,
+        executionId,
+        executionStatus || null,
+        JSON.stringify(inputs || {}),
+        JSON.stringify(stepOutputs),
+        latestSummary || null
+      );
+
+      // Keep only a bounded number of memory snapshots per session/asset to control DB size.
+      this.db!.prepare(
+        `DELETE FROM session_execution_memory
+         WHERE id IN (
+           SELECT id
+           FROM session_execution_memory
+           WHERE session_id = ? AND asset_type = ? AND asset_id = ?
+           ORDER BY id DESC
+           LIMIT -1 OFFSET 20
+         )`
+      ).run(sessionId, assetType, assetId);
+    } catch (error) {
+      console.warn('[tool-skill-manager] Failed to persist execution memory snapshot:', error);
+    }
+  }
+
+  private extractStepOutputContent(rawOutputData: string | null | undefined): string {
+    if (!rawOutputData) return '';
+    try {
+      const parsed = JSON.parse(rawOutputData);
+      let content = '';
+      if (typeof parsed?.content === 'string') content = parsed.content;
+      else if (parsed?.content != null) content = JSON.stringify(parsed.content);
+      else content = JSON.stringify(parsed);
+      return content.length > 8000 ? `${content.slice(0, 8000)}...` : content;
+    } catch {
+      const text = String(rawOutputData);
+      return text.length > 8000 ? `${text.slice(0, 8000)}...` : text;
+    }
+  }
+
+  private getLatestUserMessageText(sessionId: string): string {
+    const row = this.db!.prepare(
+      `SELECT content
+       FROM session_messages
+       WHERE session_id = ? AND role = 'user'
+       ORDER BY id DESC
+       LIMIT 1`
+    ).get(sessionId) as { content?: string } | undefined;
+    return String(row?.content || '');
+  }
+
+  private userWantsImageCombination(sessionId: string): boolean {
+    const text = this.getLatestUserMessageText(sessionId).toLowerCase();
+    if (!text) return false;
+    return /(combine|together|single image|one image|merge|both|all uploaded)/i.test(text)
+      || /(同一张|一起|合成|融合|两张|多张)/.test(text);
+  }
+
+  private pickCombinationTargetImageVar(
+    inputSpecs: Map<string, { type: string; optional: boolean; label?: string }>,
+    imageIndexByVar: Map<string, number[]>
+  ): string | null {
+    const imageVars = Array.from(inputSpecs.entries())
+      .filter(([, spec]) => spec.type === 'image')
+      .map(([name]) => name);
+    if (imageVars.length === 0) return null;
+
+    const nonReferenceVars = imageVars.filter(
+      (name) => !/(reference|style|样本|参考)/i.test(name)
+    );
+    const candidates = nonReferenceVars.length > 0 ? nonReferenceVars : imageVars;
+
+    const mappedCandidate = candidates.find((name) => (imageIndexByVar.get(name) || []).length > 0);
+    return mappedCandidate || candidates[0] || null;
   }
 
   private getPinnedTaskSelection(

@@ -205,6 +205,23 @@ export function initializeDatabase(): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS session_execution_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      task_boundary_id INTEGER,
+      asset_type TEXT NOT NULL CHECK(asset_type IN ('skill','workflow')),
+      asset_id INTEGER NOT NULL,
+      asset_name TEXT,
+      execution_id INTEGER,
+      execution_status TEXT,
+      inputs_json TEXT NOT NULL DEFAULT '{}',
+      step_outputs_json TEXT NOT NULL DEFAULT '[]',
+      latest_output_summary TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS agent_configs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -245,6 +262,18 @@ export function initializeDatabase(): void {
     )
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_execution_memory_session ON session_execution_memory(session_id, created_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_execution_memory_asset ON session_execution_memory(session_id, asset_type, asset_id, created_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_execution_memory_execution ON session_execution_memory(execution_id)');
+
   // Insert mock user for MVP and get the user ID
   let mockUserId: number;
   const mockUser = getOne("SELECT id FROM users WHERE email = 'demo@novohaven.com'");
@@ -271,8 +300,20 @@ export function initializeDatabase(): void {
   // Run migrations (recipes → skills/workflows)
   runMigrations();
 
-  // Seed default skills
-  seedDefaultSkills(mockUserId);
+  // Seed default skills only once across all restarts/processes.
+  // We claim a one-time seed lock row so concurrent initializers do not reseed.
+  const defaultSkillsSeedKey = 'default_skills_seeded_v1';
+  const seedClaim = run(
+    'INSERT OR IGNORE INTO app_metadata (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+    [defaultSkillsSeedKey, 'claimed']
+  );
+  if (seedClaim.changes > 0) {
+    seedDefaultSkills(mockUserId);
+    run(
+      'UPDATE app_metadata SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?',
+      ['completed', defaultSkillsSeedKey]
+    );
+  }
 
   // Seed default agent config
   const defaultAgent = getOne('SELECT id FROM agent_configs WHERE name = ?', ['Default Agent']);
@@ -574,58 +615,6 @@ Be specific and technical. Include real-world imperfections that give the image 
     'Analyze photography style, camera settings, lighting, and composition for AI image generation reference',
     mockUserId,
     imageStyleAnalyzerSteps
-  );
-
-  // Skill: Product Image Generator
-
-  const imageGenInputConfig = JSON.stringify({
-    variables: {
-      product_images: {
-        type: 'image',
-        label: 'Product Reference Images',
-        description: 'Upload one or more product images to use as reference for AI generation',
-        maxImageSize: 10
-      },
-      requirements: {
-        type: 'file',
-        label: 'Image Requirements (JSON)',
-        description: 'Upload a JSON file with detailed requirements for the generated images',
-        acceptedFileTypes: ['.json']
-      }
-    }
-  });
-
-  const imageGenSteps = [
-    {
-      step_order: 1,
-      step_name: 'Generate Product Images',
-      ai_model: 'gemini-3-pro-image-preview',
-      prompt_template: `Generate a professional product photography image based on the following specifications.
-
-Product Reference: {{product_images}}
-
-Requirements from JSON specification:
-{{requirements}}
-
-Create a high-quality, professional product image that:
-1. Showcases the product clearly and attractively
-2. Follows the style, lighting, and composition requirements specified
-3. Has a clean, professional background as specified
-4. Maintains accurate product details and proportions
-5. Is suitable for e-commerce and marketing use
-
-Generate the image according to the exact specifications provided in the requirements.`,
-      output_format: 'image',
-      model_config: JSON.stringify({ numberOfImages: 1, aspectRatio: '1:1' }),
-      input_config: imageGenInputConfig
-    }
-  ];
-
-  upsertSkillDefinition(
-    'Product Image Generator',
-    'Generate professional product images using AI based on reference images and detailed requirements',
-    mockUserId,
-    imageGenSteps
   );
 
   // Skill: Review Analyzer

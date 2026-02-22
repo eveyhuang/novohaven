@@ -84,6 +84,10 @@ export class PromptBuilder {
           'Use clear user-facing input labels (for example "product URL") and avoid raw placeholders like `{{product_url}}` in user-visible messages.',
           'Only ask for inputs that are declared as required by the selected skill/workflow.',
           'Do not ask for extra fields (such as "requirements") unless the tool explicitly reports them as missing required inputs.',
+          'For image inputs that may include multiple images, support collecting multiple uploads for the same input.',
+          'If an image input supports multiple images, confirm whether the user wants to add more images before executing.',
+          'When executing with multiple images for one input, pass imageInputs as an index array (for example {"product_images":[1,2]}).',
+          'If the user asks to continue/repeat (for example "same for this one"), reuse missing required inputs from recent successful execution memory in the current task.',
           'If all required inputs are already available, execute immediately instead of asking for more clarification.',
         ].join('\n')
       );
@@ -113,6 +117,11 @@ export class PromptBuilder {
     const taskSelectionContext = this.getTaskSelectionContext(sessionId);
     if (taskSelectionContext) {
       systemParts.push(`\n## Selected Asset\n${taskSelectionContext}`);
+    }
+
+    const executionMemoryContext = this.getSessionExecutionMemoryContext(sessionId);
+    if (executionMemoryContext) {
+      systemParts.push(`\n## Session Execution Memory\n${executionMemoryContext}`);
     }
 
     // Layer 5: Company standards summary
@@ -338,23 +347,27 @@ export class PromptBuilder {
     if (!session?.active_execution_id) return null;
 
     const execution = this.db.prepare(
-      'SELECT * FROM executions WHERE id = ?'
+      'SELECT * FROM workflow_executions WHERE id = ?'
     ).get(session.active_execution_id) as any;
 
-    if (!execution || execution.status === 'completed' || execution.status === 'failed') return null;
+    if (!execution || ['completed', 'failed', 'cancelled'].includes(String(execution.status || ''))) return null;
 
     // Get current step info
     const steps = this.db.prepare(
-      'SELECT * FROM step_executions WHERE execution_id = ? ORDER BY step_order ASC'
+      `SELECT se.*, rs.step_name
+       FROM step_executions se
+       LEFT JOIN recipe_steps rs ON rs.id = se.step_id
+       WHERE se.execution_id = ?
+       ORDER BY se.step_order ASC`
     ).all(execution.id) as any[];
 
-    const currentStep = steps.find((s: any) => s.status === 'running' || s.status === 'pending_review');
+    const currentStep = steps.find((s: any) => ['running', 'awaiting_review', 'pending'].includes(String(s.status || '')));
     const completedCount = steps.filter((s: any) => s.status === 'completed').length;
 
     let context = `Workflow execution #${execution.id} is in progress (${completedCount}/${steps.length} steps complete).`;
     if (currentStep) {
-      context += `\nCurrent step: "${currentStep.step_name}" (${currentStep.status})`;
-      if (currentStep.status === 'pending_review') {
+      context += `\nCurrent step: "${currentStep.step_name || `Step ${currentStep.step_order}`}" (${currentStep.status})`;
+      if (currentStep.status === 'awaiting_review') {
         context += '\nThis step needs human approval. Ask the user to review.';
       }
     }
@@ -387,6 +400,83 @@ export class PromptBuilder {
     return null;
   }
 
+  private getSessionExecutionMemoryContext(sessionId: string, maxEntries: number = 3): string | null {
+    type MemoryRow = {
+      task_boundary_id: number | null;
+      asset_type: string;
+      asset_id: number;
+      asset_name: string | null;
+      execution_id: number | null;
+      execution_status: string | null;
+      inputs_json: string;
+      step_outputs_json: string;
+      latest_output_summary: string | null;
+      created_at: string;
+    };
+
+    let rows: MemoryRow[] = [];
+    try {
+      rows = this.db.prepare(
+        `SELECT task_boundary_id, asset_type, asset_id, asset_name, execution_id,
+                execution_status, inputs_json, step_outputs_json, latest_output_summary, created_at
+         FROM session_execution_memory
+         WHERE session_id = ?
+         ORDER BY id DESC
+         LIMIT 20`
+      ).all(sessionId) as MemoryRow[];
+    } catch {
+      return null;
+    }
+    if (rows.length === 0) return null;
+
+    const boundaryId = this.getLatestTaskBoundaryId(sessionId);
+    const scopedRows = rows.filter((row) => {
+      if (boundaryId == null) return row.task_boundary_id == null;
+      return Number(row.task_boundary_id) === Number(boundaryId);
+    });
+    const sourceRows = scopedRows.length > 0 ? scopedRows : rows;
+    const selected = sourceRows
+      .filter((row) => String(row.execution_status || '').toLowerCase() === 'completed')
+      .slice(0, maxEntries);
+    if (selected.length === 0) return null;
+
+    const lines: string[] = [
+      'Use these recent completed execution memories in this task segment when the user requests continuation (for example "same as before").',
+      'Prefer reusing missing required inputs from the latest matching workflow/skill execution unless user overrides them.',
+      'Recent executions:',
+    ];
+
+    for (const row of selected) {
+      let inputs: Record<string, any> = {};
+      let stepOutputs: Array<{ stepOrder?: number; content?: string }> = [];
+      try {
+        const parsed = JSON.parse(row.inputs_json || '{}');
+        if (parsed && typeof parsed === 'object') inputs = parsed;
+      } catch {}
+      try {
+        const parsed = JSON.parse(row.step_outputs_json || '[]');
+        if (Array.isArray(parsed)) stepOutputs = parsed;
+      } catch {}
+
+      const inputSummary = Object.entries(inputs)
+        .slice(0, 6)
+        .map(([key, value]) => `${this.humanizeInputName(key)}=${this.summarizeMemoryValue(value)}`)
+        .join(', ');
+      const stepPreview = (stepOutputs.find((s) => Number(s?.stepOrder) === 1)?.content || row.latest_output_summary || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 240);
+
+      lines.push(
+        `- [${row.asset_type} #${row.asset_id}] ${row.asset_name || 'Unnamed'} | execution #${row.execution_id || 'n/a'} | status ${row.execution_status || 'unknown'} | created ${row.created_at}`
+      );
+      if (inputSummary) lines.push(`  Reusable inputs: ${inputSummary}`);
+      if (stepPreview) lines.push(`  Step output hint: ${stepPreview}${stepPreview.length >= 240 ? '...' : ''}`);
+    }
+
+    return lines.join('\n');
+  }
+
   private getLatestTaskBoundaryId(sessionId: string, scanLimit: number = 500): number | null {
     const rows = this.db.prepare(
       `SELECT id, metadata
@@ -408,6 +498,31 @@ export class PromptBuilder {
       }
     }
     return null;
+  }
+
+  private summarizeMemoryValue(value: any): string {
+    if (typeof value === 'string') {
+      if (value.startsWith('data:image/')) return '[cached image]';
+      const normalized = value.replace(/\s+/g, ' ').trim();
+      return normalized.length > 80 ? `${normalized.slice(0, 80)}...` : normalized;
+    }
+    if (Array.isArray(value)) {
+      const imageCount = value.filter((item) => typeof item === 'string' && String(item).startsWith('data:image/')).length;
+      if (imageCount > 0) return `[${imageCount} cached image(s)]`;
+      return `[${value.length} item(s)]`;
+    }
+    if (value == null) return 'none';
+    const text = String(value);
+    return text.length > 80 ? `${text.slice(0, 80)}...` : text;
+  }
+
+  private humanizeInputName(varName: string): string {
+    const normalized = String(varName || 'input')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return 'Input';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
   }
 
   /**
