@@ -13,19 +13,38 @@ export interface ScriptConfig {
   timeout?: number; // ms, default 60000
 }
 
+function normalizeRuntimeAlias(runtime: unknown): ScriptConfig['runtime'] {
+  const value = String(runtime || '').trim().toLowerCase();
+  if (value === 'node' || value === 'nodejs' || value === 'node.js' || value === 'javascript' || value === 'js') {
+    return 'node';
+  }
+  if (value === 'python3' || value === 'python' || value === 'py') {
+    return 'python3';
+  }
+  return 'python3';
+}
+
 function parseScriptConfig(step: RecipeStep): ScriptConfig {
   const defaults: ScriptConfig = { runtime: 'python3', script: '', timeout: 60000 };
 
   if (step.executor_config) {
     try {
-      return { ...defaults, ...JSON.parse(step.executor_config) };
+      const parsed = { ...defaults, ...JSON.parse(step.executor_config) };
+      return {
+        ...parsed,
+        runtime: normalizeRuntimeAlias(parsed.runtime),
+      };
     } catch {
       // fall through
     }
   }
 
   // Fallback: use prompt_template as inline script
-  return { ...defaults, script: step.prompt_template || '' };
+  return {
+    ...defaults,
+    runtime: normalizeRuntimeAlias(defaults.runtime),
+    script: step.prompt_template || '',
+  };
 }
 
 export class ScriptExecutor implements StepExecutor {

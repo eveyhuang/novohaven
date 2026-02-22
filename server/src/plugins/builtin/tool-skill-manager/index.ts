@@ -146,82 +146,69 @@ class SkillManagerPlugin implements ToolPlugin {
 
   private async search(args: Record<string, any>): Promise<ToolResult> {
     const { query, type = 'all', limit = 5 } = args;
-    const words = query.toLowerCase().split(/\s+/).filter((w: string) => w.length > 2);
-
-    if (words.length === 0) {
+    const normalizedQuery = String(query || '').trim().toLowerCase();
+    const tokens = this.tokenizeQuery(normalizedQuery);
+    if (!normalizedQuery || tokens.length === 0) {
       return { success: false, output: 'Search query too short' };
     }
 
-    const results: any[] = [];
-
+    const candidates: Array<any> = [];
     if (type === 'all' || type === 'skill') {
-      const likeClause = words.map(() => '(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)').join(' OR ');
-      const params = words.flatMap((w: string) => [`%${w}%`, `%${w}%`]);
-
       const skills = this.db!.prepare(`
         SELECT id, name, description, 'skill' as type, status, tags
-        FROM skills WHERE status = 'active' AND (${likeClause})
-        LIMIT ?
-      `).all(...params, limit) as any[];
-      results.push(...skills);
+        FROM skills WHERE status = 'active'
+        ORDER BY updated_at DESC
+        LIMIT 200
+      `).all() as any[];
+      candidates.push(...skills);
     }
-
     if (type === 'all' || type === 'workflow') {
-      const likeClause = words.map(() => '(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)').join(' OR ');
-      const params = words.flatMap((w: string) => [`%${w}%`, `%${w}%`]);
-
       const workflows = this.db!.prepare(`
         SELECT id, name, description, 'workflow' as type, status, tags
-        FROM workflows WHERE status = 'active' AND (${likeClause})
-        LIMIT ?
-      `).all(...params, limit) as any[];
-      results.push(...workflows);
+        FROM workflows WHERE status = 'active'
+        ORDER BY updated_at DESC
+        LIMIT 200
+      `).all() as any[];
+      candidates.push(...workflows);
     }
 
-    if (results.length === 0) {
+    if (candidates.length === 0) {
       return { success: true, output: 'No matching skills or workflows found.' };
     }
 
-    const formatted = results.map((r: any) => {
+    const ranked = candidates.map((candidate) => {
       const steps = this.db!.prepare(
         'SELECT step_name, step_type, input_config, prompt_template FROM skill_steps WHERE parent_id = ? AND parent_type = ? ORDER BY step_order'
-      ).all(r.id, r.type) as any[];
-      const stepSummary = steps.map((s: any) => `${s.step_name} (${s.step_type})`).join(' → ');
+      ).all(candidate.id, candidate.type) as any[];
 
-      // Extract required inputs from input_config and prompt template variables
+      const score = this.scoreAssetRelevance(normalizedQuery, tokens, candidate, steps);
+      const inputSpecs = this.collectInputSpecs(steps);
+
       const inputs: string[] = [];
-      for (const step of steps) {
-        // Parse input_config for typed variables
-        try {
-          const config = JSON.parse(step.input_config || '{}');
-          if (config.variables) {
-            for (const [varName, varDef] of Object.entries(config.variables) as any[]) {
-              const typeLabel = varDef.type || 'text';
-              const desc = varDef.description || varDef.label || '';
-              inputs.push(`{{${varName}}} (${typeLabel})${desc ? ': ' + desc : ''}`);
-            }
-          }
-        } catch {}
-        // Also extract {{variable}} patterns from prompt template
-        if (step.prompt_template) {
-          const vars = step.prompt_template.match(/\{\{([^}]+)\}\}/g) || [];
-          for (const v of vars) {
-            const name = v.replace(/\{\{|\}\}/g, '');
-            if (!inputs.some(i => i.includes(`{{${name}}}`)) && !name.startsWith('step_')) {
-              inputs.push(`{{${name}}} (text)`);
-            }
-          }
-        }
+      for (const [varName, spec] of inputSpecs.entries()) {
+        const opt = spec.optional ? ', optional' : '';
+        const label = spec.label ? `: ${spec.label}` : '';
+        inputs.push(`{{${varName}}} (${spec.type}${opt})${label}`);
       }
 
-      let result = `[${r.type} #${r.id}] ${r.name}: ${r.description || 'No description'}\n  Steps: ${stepSummary || 'none'}`;
+      const stepSummary = steps.map((s: any) => `${s.step_name} (${s.step_type})`).join(' → ');
+      let result = `[${candidate.type} #${candidate.id}] ${candidate.name}: ${candidate.description || 'No description'}\n  Steps: ${stepSummary || 'none'}`;
       if (inputs.length > 0) {
         result += `\n  Required inputs: ${inputs.join(', ')}`;
       }
-      return result;
+      return { score, result };
     });
 
-    return { success: true, output: formatted.join('\n\n') };
+    const filtered = ranked
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.max(1, Number(limit) || 5));
+
+    if (filtered.length === 0) {
+      return { success: true, output: 'No matching skills or workflows found.' };
+    }
+
+    return { success: true, output: filtered.map((r) => r.result).join('\n\n') };
   }
 
   private async executeSkill(args: Record<string, any>, context: ToolContext): Promise<ToolResult> {
@@ -304,7 +291,10 @@ class SkillManagerPlugin implements ToolPlugin {
       });
 
     if (missingRequired.length > 0) {
-      const requiredList = missingRequired
+      const first = missingRequired[0];
+      const firstInput = `{{${first.name}}} (${first.spec.type}${first.spec.label ? `: ${first.spec.label}` : ''})`;
+      const remainingList = missingRequired
+        .slice(1)
         .map(({ name, spec }) => `{{${name}}} (${spec.type}${spec.label ? `: ${spec.label}` : ''})`)
         .join(', ');
       const optionalList = Array.from(inputSpecs.entries())
@@ -313,7 +303,7 @@ class SkillManagerPlugin implements ToolPlugin {
         .join(', ');
       return {
         success: false,
-        output: `Missing required inputs for ${parentType} "${skill.name}": ${requiredList}.${optionalList ? ` Optional inputs: ${optionalList}.` : ''}`,
+        output: `Missing required inputs for ${parentType} "${skill.name}". Ask the user for this one first: ${firstInput}.${remainingList ? ` Remaining required inputs (ask later, one-by-one): ${remainingList}.` : ''}${optionalList ? ` Optional inputs: ${optionalList}.` : ''}`,
       };
     }
 
@@ -351,11 +341,28 @@ class SkillManagerPlugin implements ToolPlugin {
       };
     }
 
+    const expectsCsvArtifact = this.isCsvArtifactRequired(skill, steps, resolvedInputs);
+    const csvFromArtifacts = this.findCsvArtifactInStepOutputs(settled.stepExecutions);
+
     const latestContent = this.extractLatestContent(settled.stepExecutions);
     if (!latestContent) {
       const imageUrls = this.extractAndSaveGeneratedImages(
         settled.stepExecutions, executionId, context.sessionId
       );
+      if (expectsCsvArtifact) {
+        if (csvFromArtifacts) {
+          return {
+            success: true,
+            output: `Execution #${executionId} for ${parentType} "${skill.name}" completed.\nCSV file: ${csvFromArtifacts.path}`,
+            metadata: { executionId, status: settled.status, csvPath: csvFromArtifacts.path },
+          };
+        }
+        return {
+          success: false,
+          output: `Execution #${executionId} for ${parentType} "${skill.name}" completed but no CSV artifact was produced. Expected a CSV output file.`,
+          metadata: { executionId, status: settled.status },
+        };
+      }
       return {
         success: true,
         output: `Execution #${executionId} for ${parentType} "${skill.name}" completed successfully${imageUrls.length > 0 ? ` with ${imageUrls.length} image(s)` : ' but returned no textual output'}.`,
@@ -373,6 +380,20 @@ class SkillManagerPlugin implements ToolPlugin {
         success: true,
         output: `Execution #${executionId} for ${parentType} "${skill.name}" completed.\nCSV file: ${csv.path}\n\nPreview:\n\`\`\`csv\n${csv.preview}\n\`\`\``,
         metadata: { executionId, status: settled.status, csvPath: csv.path },
+      };
+    }
+    if (expectsCsvArtifact) {
+      if (csvFromArtifacts) {
+        return {
+          success: true,
+          output: `Execution #${executionId} for ${parentType} "${skill.name}" completed.\nCSV file: ${csvFromArtifacts.path}`,
+          metadata: { executionId, status: settled.status, csvPath: csvFromArtifacts.path },
+        };
+      }
+      return {
+        success: false,
+        output: `Execution #${executionId} for ${parentType} "${skill.name}" completed but no CSV artifact was produced. Expected a CSV output file.`,
+        metadata: { executionId, status: settled.status },
       };
     }
 
@@ -618,6 +639,116 @@ class SkillManagerPlugin implements ToolPlugin {
     return specs;
   }
 
+  private tokenizeQuery(query: string): string[] {
+    const normalized = String(query || '').toLowerCase().trim();
+    if (!normalized) return [];
+
+    const tokens = new Set<string>();
+    const ascii = normalized.split(/[^a-z0-9_]+/).filter((t) => t.length >= 2);
+    ascii.forEach((t) => tokens.add(t));
+
+    const cjkChunks = normalized.match(/[\u3400-\u9fff]+/g) || [];
+    for (const chunk of cjkChunks) {
+      if (chunk.length >= 2) {
+        tokens.add(chunk);
+      }
+      if (chunk.length >= 3) {
+        for (let i = 0; i <= chunk.length - 2; i++) {
+          tokens.add(chunk.slice(i, i + 2));
+        }
+      }
+    }
+
+    if (tokens.size === 0 && normalized.length >= 2) {
+      tokens.add(normalized);
+    }
+    return Array.from(tokens);
+  }
+
+  private scoreAssetRelevance(query: string, tokens: string[], candidate: any, steps: any[]): number {
+    const name = String(candidate?.name || '').toLowerCase();
+    const desc = String(candidate?.description || '').toLowerCase();
+    const tags = this.parseTags(candidate?.tags);
+    const tagsText = tags.join(' ').toLowerCase();
+    const stepText = steps
+      .map((s: any) => `${s.step_name || ''} ${s.step_type || ''} ${s.prompt_template || ''}`)
+      .join(' ')
+      .toLowerCase();
+    const blob = `${name} ${desc} ${tagsText} ${stepText}`;
+
+    let score = 0;
+    if (name && query && name.includes(query)) score += 80;
+    if (desc && query && desc.includes(query)) score += 30;
+    if (tagsText && query && tagsText.includes(query)) score += 35;
+
+    for (const token of tokens) {
+      if (name.includes(token)) score += 18;
+      if (desc.includes(token)) score += 10;
+      if (tagsText.includes(token)) score += 14;
+      if (stepText.includes(token)) score += 8;
+    }
+
+    const expectsCsv = /\bcsv\b|comma[-\s]?separated|spreadsheet|表格|导出|输出文件|趋势候选池/.test(query);
+    if (expectsCsv) {
+      if (/\bcsv\b|comma[-\s]?separated|\.csv|导出|表格/.test(blob)) {
+        score += 14;
+      } else {
+        score -= 6;
+      }
+    }
+
+    const hasWorkflowHint = /\bworkflow\b|pipeline|multi[-\s]?step|流程|链路|阶段/.test(query);
+    if (hasWorkflowHint && candidate.type === 'workflow') score += 8;
+
+    // Penalize unrelated matches caused by generic words.
+    if (score < 18) return 0;
+    return score;
+  }
+
+  private parseTags(raw: any): string[] {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.map((t) => String(t));
+    try {
+      const parsed = JSON.parse(String(raw));
+      if (Array.isArray(parsed)) return parsed.map((t) => String(t));
+    } catch {}
+    return [];
+  }
+
+  private isCsvArtifactRequired(skill: any, steps: any[], inputs: Record<string, any>): boolean {
+    const signalText = [
+      skill?.name || '',
+      skill?.description || '',
+      ...steps.map((s: any) => `${s.step_name || ''} ${s.prompt_template || ''} ${s.executor_config || ''}`),
+      ...Object.entries(inputs).map(([k, v]) => `${k}:${String(v)}`),
+    ].join(' ').toLowerCase();
+
+    return /\bcsv\b|comma[-\s]?separated|\.csv|导出csv|输出csv|生成csv|表格/.test(signalText);
+  }
+
+  private findCsvArtifactInStepOutputs(stepExecutions: any[]): { path: string } | null {
+    for (const step of stepExecutions) {
+      if (!step?.output_data) continue;
+      try {
+        const parsed = JSON.parse(step.output_data);
+        const files = parsed?.files || parsed?.manusFiles || parsed?.output?.files;
+        if (Array.isArray(files)) {
+          const csv = files.find((f: any) => {
+            const name = String(f?.name || '').toLowerCase();
+            const url = String(f?.url || '').toLowerCase();
+            return name.endsWith('.csv') || url.endsWith('.csv');
+          });
+          if (csv) {
+            return { path: csv.url || csv.name };
+          }
+        }
+      } catch {
+        // Ignore malformed output_data.
+      }
+    }
+    return null;
+  }
+
   private ensureExecutionRecipe(
     skill: any,
     skillType: 'skill' | 'workflow',
@@ -790,25 +921,30 @@ class SkillManagerPlugin implements ToolPlugin {
     skillName: string
   ): { path: string; preview: string } | null {
     let parsed: any;
+    let csv: string | null = null;
     try {
       parsed = JSON.parse(content);
+      const rows = this.extractRowsForCsv(parsed);
+      if (rows.length > 0) {
+        const headerSet = new Set<string>();
+        for (const row of rows) {
+          Object.keys(row).forEach((k) => headerSet.add(k));
+        }
+        const headers = Array.from(headerSet);
+
+        csv = [
+          headers.join(','),
+          ...rows.map((row) => headers.map((h) => this.escapeCsvValue(row[h])).join(',')),
+        ].join('\n');
+      }
     } catch {
-      return null;
+      // Fallback: support direct CSV text content.
+      if (this.looksLikeCsv(content)) {
+        csv = content.trim();
+      }
     }
 
-    const rows = this.extractRowsForCsv(parsed);
-    if (rows.length === 0) return null;
-
-    const headerSet = new Set<string>();
-    for (const row of rows) {
-      Object.keys(row).forEach((k) => headerSet.add(k));
-    }
-    const headers = Array.from(headerSet);
-
-    const csv = [
-      headers.join(','),
-      ...rows.map((row) => headers.map((h) => this.escapeCsvValue(row[h])).join(',')),
-    ].join('\n');
+    if (!csv || !csv.trim()) return null;
 
     const safeSkill = String(skillName || 'skill')
       .toLowerCase()
@@ -820,6 +956,27 @@ class SkillManagerPlugin implements ToolPlugin {
 
     const preview = csv.split('\n').slice(0, 8).join('\n');
     return { path: csvPath, preview };
+  }
+
+  private looksLikeCsv(text: string): boolean {
+    const lines = String(text || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length < 2) return false;
+
+    const first = lines[0];
+    if (!first.includes(',')) return false;
+    const expectedCols = first.split(',').length;
+    if (expectedCols < 2) return false;
+
+    let consistentRows = 0;
+    for (let i = 1; i < Math.min(lines.length, 8); i++) {
+      if (lines[i].includes(',') && lines[i].split(',').length >= Math.max(2, expectedCols - 1)) {
+        consistentRows += 1;
+      }
+    }
+    return consistentRows >= 1;
   }
 
   private extractRowsForCsv(data: any): Array<Record<string, any>> {

@@ -28,8 +28,8 @@ export function extractVariables(promptTemplate: string): ParsedVariable[] {
       type: 'unknown',
     };
 
-    // Check if it's a step output reference (e.g., step_1_output, step_2_output)
-    const stepMatch = varName.match(/^step_(\d+)_output$/);
+    // Check if it's a step output reference (e.g., step_1_output or step_1_output.url)
+    const stepMatch = varName.match(/^step_(\d+)_output(?:\..+)?$/);
     if (stepMatch) {
       parsedVar.type = 'previous_step';
       parsedVar.stepNumber = parseInt(stepMatch[1], 10);

@@ -262,8 +262,9 @@ class ApiClient {
   }
 
   // Executor endpoints
-  async getExecutors(): Promise<ExecutorInfo[]> {
-    return this.request<ExecutorInfo[]>('/executors');
+  async getExecutors(mode: 'all' | 'business' = 'all'): Promise<ExecutorInfo[]> {
+    const query = mode === 'all' ? '' : `?mode=${mode}`;
+    return this.request<ExecutorInfo[]>(`/executors${query}`);
   }
 
   // Health check
@@ -545,7 +546,7 @@ class ApiClient {
   async assistantSave(
     workflow: GeneratedWorkflow,
     asSkill?: boolean
-  ): Promise<{ success: boolean; entityType: 'skill' | 'workflow'; skillId?: number; workflowId?: number; message: string }> {
+  ): Promise<{ success: boolean; entityType: 'skill' | 'workflow'; skillId?: number; workflowId?: number; createdSkillIds?: number[]; message: string }> {
     return this.request('/assistant/save', {
       method: 'POST',
       body: JSON.stringify({ workflow, asSkill }),
@@ -616,18 +617,36 @@ export interface GeneratedStep {
   step_type: string;
   ai_model: string;
   prompt_template: string;
-  output_format: 'text' | 'json' | 'markdown' | 'image';
+  output_format: 'text' | 'json' | 'markdown' | 'image' | 'file';
   executor_config?: Record<string, any>;
   from_skill_id?: number;
+  from_skill_blueprint?: string;
+  from_skill_name?: string;
   from_step_order?: number;
   override_fields?: string[];
+}
+
+export interface GeneratedInputSpec {
+  name: string;
+  type: string;
+  description: string;
+}
+
+export interface GeneratedSkillBlueprint {
+  key?: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  requiredInputs?: GeneratedInputSpec[];
+  steps: GeneratedStep[];
 }
 
 export interface GeneratedWorkflow {
   name: string;
   description: string;
   steps: GeneratedStep[];
-  requiredInputs: { name: string; type: string; description: string }[];
+  requiredInputs: GeneratedInputSpec[];
+  skill_blueprints?: GeneratedSkillBlueprint[];
 }
 
 export interface AssistantResponse {

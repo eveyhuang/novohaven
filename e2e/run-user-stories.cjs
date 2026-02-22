@@ -2,12 +2,15 @@
 /* eslint-disable no-console */
 const fs = require('fs/promises');
 const path = require('path');
+const { execSync } = require('child_process');
 const { chromium } = require('playwright');
 
 const BASE_URL = 'http://localhost:3000';
 const API_URL = 'http://localhost:3001/api';
 const RESULTS_PATH = path.join(process.cwd(), 'e2e', 'story-results.json');
-const DOC_PATH = path.join(process.cwd(), 'docs', 'user-stories-web-tests.md');
+const DOC_PATH = process.env.STORY_DOC_PATH
+  ? path.resolve(process.cwd(), process.env.STORY_DOC_PATH)
+  : path.join(process.cwd(), 'docs', 'user-stories-web-tests.md');
 const ARTIFACT_DIR = path.join(process.cwd(), 'e2e', 'artifacts');
 const FIXTURE_DIR = path.join(process.cwd(), 'e2e', 'fixtures');
 const selectedIds = (() => {
@@ -24,6 +27,9 @@ const state = {
   workflowRecipeId: null,
   skillExecutionId: null,
   workflowExecutionId: null,
+  pr2GeneratedWorkflow: null,
+  pr2CreatedWorkflowId: null,
+  pr2CreatedSkillIds: [],
 };
 
 const results = [];
@@ -306,7 +312,7 @@ async function getDraftCount() {
 
 async function expectedStoryIdsFromDoc() {
   const doc = await fs.readFile(DOC_PATH, 'utf8');
-  return [...doc.matchAll(/^###\s+([A-Z]{2}-\d+[a-z]?)/gm)].map((m) => m[1]);
+  return [...doc.matchAll(/^###\s+([A-Za-z0-9-]+)/gm)].map((m) => m[1]);
 }
 
 function addMissingResultEntries(expectedIds) {
@@ -385,6 +391,68 @@ async function addVariable(page, varName, label) {
   await page.locator('#field-label').first().fill(label);
 }
 
+function collectToolCalls(messages) {
+  const calls = [];
+  for (const msg of messages || []) {
+    if (!msg?.tool_calls) continue;
+    try {
+      const parsed = typeof msg.tool_calls === 'string' ? JSON.parse(msg.tool_calls) : msg.tool_calls;
+      if (Array.isArray(parsed)) calls.push(...parsed);
+    } catch {}
+  }
+  return calls;
+}
+
+function parseToolArgs(call) {
+  if (!call) return {};
+  if (call.args && typeof call.args === 'object') return call.args;
+  if (call.arguments && typeof call.arguments === 'object') return call.arguments;
+  const raw = call.args || call.arguments;
+  if (typeof raw !== 'string') return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function getLatestSessionDetail() {
+  const sessions = await api('GET', '/sessions');
+  if (!Array.isArray(sessions) || sessions.length === 0) {
+    throw new Error('No sessions found.');
+  }
+  return api('GET', `/sessions/${sessions[0].id}`);
+}
+
+async function waitForExecutionSettled(executionId, timeoutMs = 120000, autoApprove = true) {
+  const start = Date.now();
+  const approved = new Set();
+
+  while (Date.now() - start < timeoutMs) {
+    const detail = await api('GET', `/executions/${executionId}`);
+    const status = String(detail.status || '').toLowerCase();
+    const steps = Array.isArray(detail.step_executions) ? detail.step_executions : [];
+
+    if (autoApprove) {
+      for (const step of steps) {
+        const stepStatus = String(step.status || '').toLowerCase();
+        if ((stepStatus === 'awaiting_review' || stepStatus === 'pending_review') && !approved.has(step.id)) {
+          await api('POST', `/executions/${executionId}/steps/${step.id}/approve`, {});
+          approved.add(step.id);
+        }
+      }
+    }
+
+    if (['completed', 'failed', 'cancelled'].includes(status)) {
+      return detail;
+    }
+
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  throw new Error(`Execution ${executionId} did not settle within ${timeoutMs}ms.`);
+}
+
 async function main() {
   await ensureDirs();
   await writeFixtures();
@@ -398,6 +466,414 @@ async function main() {
   try {
     await ensureEnglish(page);
     await ensureAgentAssets();
+
+    await runStory(page, 'IP-PR1-01', 'Default Skill Builder hides technical step types', async () => {
+      await ensureEnglish(page);
+      await page.goto(`${BASE_URL}/skills/new`, { waitUntil: 'domcontentloaded' });
+      await page.getByRole('heading', { name: /Create a Skill|Create a Template/i }).first().waitFor({ timeout: 12000 });
+
+      const advancedToggle = page.getByRole('button', { name: /Show Advanced\/Internal|Hide Advanced\/Internal/i }).first();
+      if (!(await advancedToggle.count())) {
+        throw new Error('Advanced/Internal toggle was not rendered on skill builder.');
+      }
+      const toggleLabel = ((await advancedToggle.textContent()) || '').trim();
+      if (/Hide Advanced\/Internal/i.test(toggleLabel)) {
+        await advancedToggle.click();
+        await page.waitForTimeout(250);
+      }
+
+      const aiVisible = await page.locator('button:has-text("AI Model")').count();
+      const browserVisible = await page.locator('button:has-text("Browser")').count();
+      const scriptVisible = await page.locator('button:has-text("Script")').count();
+      const httpVisible = await page.locator('button:has-text("HTTP Request")').count();
+      const transformVisible = await page.locator('button:has-text("Data Transform")').count();
+
+      if (aiVisible === 0 || browserVisible === 0) {
+        throw new Error('Expected business step types were not visible in default mode.');
+      }
+      if (scriptVisible > 0 || httpVisible > 0 || transformVisible > 0) {
+        throw new Error(`Technical step types were visible in default mode. Script=${scriptVisible}, HTTP=${httpVisible}, Transform=${transformVisible}`);
+      }
+
+      return 'Default mode showed business step types and hid Script/HTTP Request/Data Transform.';
+    });
+
+    await runStory(page, 'IP-PR1-02', 'Advanced/Internal toggle reveals technical executors', async () => {
+      await ensureEnglish(page);
+      await page.goto(`${BASE_URL}/skills/new`, { waitUntil: 'domcontentloaded' });
+      const advancedToggle = page.getByRole('button', { name: /Show Advanced\/Internal|Hide Advanced\/Internal/i }).first();
+      if (!(await advancedToggle.count())) {
+        throw new Error('Advanced/Internal toggle was not rendered on skill builder.');
+      }
+
+      const toggleLabel = ((await advancedToggle.textContent()) || '').trim();
+      if (/Show Advanced\/Internal/i.test(toggleLabel)) {
+        await advancedToggle.click();
+      }
+      await page.waitForTimeout(300);
+
+      const scriptVisible = await page.locator('button:has-text("Script")').count();
+      const httpVisible = await page.locator('button:has-text("HTTP Request")').count();
+      const transformVisible = await page.locator('button:has-text("Data Transform")').count();
+
+      if (scriptVisible === 0 || httpVisible === 0 || transformVisible === 0) {
+        throw new Error(`Advanced mode did not reveal all technical step types. Script=${scriptVisible}, HTTP=${httpVisible}, Transform=${transformVisible}`);
+      }
+
+      const created = await api('POST', '/skills', {
+        name: `IP PR1 Script Skill ${Date.now()}`,
+        description: 'Created by automation to validate advanced technical skill support.',
+        steps: [
+          {
+            step_name: 'Echo Script',
+            step_type: 'script',
+            ai_model: '',
+            prompt_template: '',
+            input_config: JSON.stringify({ variables: {} }),
+            output_format: 'text',
+            model_config: '{}',
+            executor_config: JSON.stringify({
+              runtime: 'node',
+              script: "process.stdout.write('ok');",
+              timeout: 10000,
+            }),
+          },
+        ],
+      });
+      if (!created?.id) {
+        throw new Error('Failed to create technical script skill via API after enabling advanced mode.');
+      }
+
+      return `Advanced mode exposed technical types and created script skill #${created.id}.`;
+    });
+
+    await runStory(page, 'IP-PR1-03', 'Business executor API filter returns non-technical subset', async () => {
+      const business = await api('GET', '/executors?mode=business');
+      const all = await api('GET', '/executors');
+      const businessTypes = new Set((business || []).map((e) => e.type));
+      const allTypes = new Set((all || []).map((e) => e.type));
+
+      for (const required of ['ai', 'scraping', 'manus', 'browser']) {
+        if (!businessTypes.has(required)) {
+          throw new Error(`Business executor list missing required type "${required}".`);
+        }
+      }
+      for (const hidden of ['script', 'http', 'transform']) {
+        if (businessTypes.has(hidden)) {
+          throw new Error(`Business executor list unexpectedly includes "${hidden}".`);
+        }
+        if (!allTypes.has(hidden)) {
+          throw new Error(`Unfiltered executor list missing expected type "${hidden}".`);
+        }
+      }
+      return `mode=business returned [${Array.from(businessTypes).join(', ')}], while full list has ${all.length} executor types.`;
+    });
+
+    await runStory(page, 'IP-PR2-01', 'Assistant decomposes Chinese SOP into reusable skill blueprints', async () => {
+      const generated = await api('POST', '/assistant/generate', {
+        messages: [
+          {
+            role: 'user',
+            content: '调查“智能家居”趋势，先在Wayfair和Amazon提取关键词，再到Google Trends验证过去12个月趋势，输出CSV。',
+          },
+        ],
+      });
+
+      if (!generated?.workflow) {
+        throw new Error(`Assistant did not return workflow object. Response keys: ${Object.keys(generated || {}).join(', ')}`);
+      }
+      if (!Array.isArray(generated.workflow.steps) || generated.workflow.steps.length === 0) {
+        throw new Error('Generated workflow had no steps.');
+      }
+      const blueprints = generated.workflow.skill_blueprints || [];
+      if (!Array.isArray(blueprints) || blueprints.length === 0) {
+        throw new Error('Generated workflow did not include reusable skill blueprints.');
+      }
+
+      state.pr2GeneratedWorkflow = generated.workflow;
+      return `Assistant generated ${generated.workflow.steps.length} steps with ${blueprints.length} reusable skill blueprint(s).`;
+    });
+
+    await runStory(page, 'IP-PR2-02', 'Assistant save creates workflow plus reusable skills', async () => {
+      if (!state.pr2GeneratedWorkflow) {
+        const generated = await api('POST', '/assistant/generate', {
+          messages: [
+            { role: 'user', content: 'Build a market research workflow and output CSV.' },
+          ],
+        });
+        state.pr2GeneratedWorkflow = generated.workflow;
+      }
+      if (!state.pr2GeneratedWorkflow) {
+        throw new Error('No generated workflow available to save.');
+      }
+
+      const saved = await api('POST', '/assistant/save', {
+        workflow: state.pr2GeneratedWorkflow,
+        asSkill: false,
+      });
+
+      if (!saved?.workflowId) {
+        throw new Error(`Assistant save did not return workflowId. Response: ${JSON.stringify(saved)}`);
+      }
+      if (!Array.isArray(saved.createdSkillIds) || saved.createdSkillIds.length === 0) {
+        throw new Error(`Assistant save did not return createdSkillIds. Response: ${JSON.stringify(saved)}`);
+      }
+
+      const skills = await api('GET', '/skills');
+      const createdSet = new Set(saved.createdSkillIds.map((id) => Number(id)));
+      const foundCount = skills.filter((s) => createdSet.has(Number(s.id))).length;
+      if (foundCount === 0) {
+        throw new Error(`No created reusable skills were found in /skills for ids: ${saved.createdSkillIds.join(', ')}`);
+      }
+
+      state.pr2CreatedWorkflowId = Number(saved.workflowId);
+      state.pr2CreatedSkillIds = saved.createdSkillIds.map((id) => Number(id));
+      return `Saved workflow #${saved.workflowId} and confirmed ${foundCount}/${saved.createdSkillIds.length} created reusable skill(s).`;
+    });
+
+    await runStory(page, 'IP-PR3-01', 'Agent routes short analyst prompt to an existing workflow', async () => {
+      if (!state.pr2CreatedWorkflowId) {
+        throw new Error('Missing workflow precondition from IP-PR2-02.');
+      }
+      const workflows = await api('GET', '/workflows');
+      const targetWorkflow = workflows.find((w) => Number(w.id) === Number(state.pr2CreatedWorkflowId));
+      if (!targetWorkflow) {
+        throw new Error(`Workflow #${state.pr2CreatedWorkflowId} no longer exists.`);
+      }
+
+      await startFreshChat(page);
+      await sendChatMessage(page, '调查智能家居趋势，给我美国过去12个月上升关键词CSV');
+      const reply = await waitForAnyAssistantFeedback(page, 65000);
+
+      const detail = await getLatestSessionDetail();
+      const toolCalls = collectToolCalls(detail.messages || []);
+      const searchCall = toolCalls.find((c) => String(c.name || '').toLowerCase() === 'skill_search');
+      const executeCall = toolCalls.find((c) => String(c.name || '').toLowerCase() === 'skill_execute');
+      const executeArgs = parseToolArgs(executeCall);
+      const usedTargetWorkflow = executeArgs
+        && String(executeArgs.skillType || '').toLowerCase() === 'workflow'
+        && Number(executeArgs.skillId) === Number(state.pr2CreatedWorkflowId);
+
+      if (!searchCall) {
+        throw new Error(`Agent did not call skill_search. Reply="${reply}"`);
+      }
+      if (!usedTargetWorkflow && !reply.includes(targetWorkflow.name)) {
+        throw new Error(`Agent did not clearly route to workflow #${state.pr2CreatedWorkflowId}. Reply="${reply}"`);
+      }
+
+      return `Agent called skill_search and routed toward workflow #${state.pr2CreatedWorkflowId} (${targetWorkflow.name}).`;
+    });
+
+    await runStory(page, 'IP-PR3-02', 'Agent asks only required inputs and skips optional', async () => {
+      const skillName = `IP Required Optional Skill ${Date.now()}`;
+      const created = await api('POST', '/skills', {
+        name: skillName,
+        description: 'Used to validate required vs optional input gating.',
+        steps: [
+          {
+            step_name: 'Required Optional Check',
+            step_type: 'ai',
+            ai_model: 'gpt-4o',
+            prompt_template: 'Analyze keyword {{keyword}}. Optional notes: {{notes}}.',
+            input_config: JSON.stringify({
+              variables: {
+                keyword: { type: 'text', label: 'Keyword' },
+                notes: { type: 'textarea', label: 'Notes', optional: true },
+              },
+            }),
+            output_format: 'markdown',
+            model_config: '{}',
+            executor_config: '{}',
+          },
+        ],
+      });
+
+      const beforeExecutions = (await api('GET', '/executions')).length;
+      await startFreshChat(page);
+      await sendChatMessage(page, `Run ${skillName}`);
+      const firstReply = await waitForAnyAssistantFeedback(page, 45000);
+      if (!/keyword|required|missing|provide/i.test(firstReply)) {
+        throw new Error(`Agent did not ask for required input "keyword". Reply="${firstReply}"`);
+      }
+
+      await sendChatMessage(page, 'keyword: smart home');
+      await page.waitForTimeout(6000);
+      const secondReply = await waitForAnyAssistantFeedback(page, 30000);
+      const afterExecutions = (await api('GET', '/executions')).length;
+
+      if (afterExecutions <= beforeExecutions) {
+        throw new Error(`No execution started after required input. before=${beforeExecutions}, after=${afterExecutions}, reply="${secondReply}"`);
+      }
+      if (/provide.*notes|required.*notes|missing.*notes/i.test(secondReply)) {
+        throw new Error(`Agent incorrectly blocked on optional "notes". Reply="${secondReply}"`);
+      }
+
+      return `Agent requested required input and execution count increased ${beforeExecutions} -> ${afterExecutions} without requiring optional notes.`;
+    });
+
+    await runStory(page, 'IP-PR3-03', 'CSV request fails when skill returns no CSV artifact', async () => {
+      const skillName = `IP Fake CSV Skill ${Date.now()}`;
+      const created = await api('POST', '/skills', {
+        name: skillName,
+        description: 'Intentionally returns plain text to validate CSV artifact enforcement.',
+        steps: [
+          {
+            step_name: 'Text Only Output',
+            step_type: 'ai',
+            ai_model: 'gpt-4o',
+            prompt_template: 'Return exactly this sentence: Task completed in text only.',
+            input_config: JSON.stringify({ variables: {} }),
+            output_format: 'text',
+            model_config: '{}',
+            executor_config: '{}',
+          },
+        ],
+      });
+
+      await startFreshChat(page);
+      await sendChatMessage(page, `Use existing skill "${skillName}" and return a CSV file.`);
+      const reply = await waitForAnyAssistantFeedback(page, 65000);
+      const detail = await getLatestSessionDetail();
+      const toolCalls = collectToolCalls(detail.messages || []);
+      const executeCalls = toolCalls.filter((c) => String(c.name || '').toLowerCase() === 'skill_execute');
+      const matchedExecute = executeCalls.find((c) => Number(parseToolArgs(c).skillId) === Number(created.id));
+
+      if (!matchedExecute) {
+        throw new Error(`Agent did not call skill_execute for ${skillName}. Reply="${reply}"`);
+      }
+      if (hasCsvSignal(reply)) {
+        throw new Error(`Agent reported CSV success even though the skill returns text only. Reply="${reply}"`);
+      }
+      if (!/failed|missing|csv|artifact|did not complete|error/i.test(reply)) {
+        throw new Error(`Expected CSV artifact failure signal was not present. Reply="${reply}"`);
+      }
+
+      return `Agent executed text-only skill #${created.id} and surfaced CSV-artifact failure instead of false CSV success.`;
+    });
+
+    await runStory(page, 'IP-PR4-01', 'Browser executor runs navigate/click/scroll/extract flow', async () => {
+      const skillName = `IP Browser Executor Skill ${Date.now()}`;
+      const created = await api('POST', '/skills', {
+        name: skillName,
+        description: 'Browser executor smoke test on example.com -> iana.',
+        steps: [
+          {
+            step_name: 'Browser Extract',
+            step_type: 'browser',
+            ai_model: '',
+            prompt_template: '',
+            input_config: JSON.stringify({ variables: {} }),
+            output_format: 'json',
+            model_config: '{}',
+            executor_config: JSON.stringify({
+              startUrl: 'https://example.com',
+              actions: [
+                { type: 'wait', selector: 'a' },
+                { type: 'click', selector: 'a' },
+                { type: 'wait', selector: 'h1' },
+                { type: 'scroll', amount: 300 },
+              ],
+              extractors: [
+                { name: 'heading', selector: 'h1', multiple: false },
+                { name: 'firstParagraph', selector: 'p', multiple: false },
+              ],
+              defaultWaitMs: 500,
+              defaultTimeoutMs: 30000,
+              maxItems: 5,
+            }),
+          },
+        ],
+      });
+
+      const started = await api('POST', '/executions', {
+        skill_id: created.id,
+        input_data: {},
+      });
+      if (!started?.executionId) {
+        throw new Error(`Failed to start execution for browser skill #${created.id}.`);
+      }
+      const detail = await waitForExecutionSettled(started.executionId, 150000, true);
+      if (String(detail.status).toLowerCase() !== 'completed') {
+        throw new Error(`Browser execution ${started.executionId} did not complete. Status=${detail.status}`);
+      }
+
+      const firstStep = (detail.step_executions || [])[0];
+      const rawContent = firstStep?.output?.content || '';
+      let parsed;
+      try {
+        parsed = JSON.parse(rawContent);
+      } catch {
+        parsed = null;
+      }
+      if (!parsed?.extracted?.heading || !parsed?.extracted?.firstParagraph) {
+        throw new Error(`Browser output missing expected extracted keys. Raw content: ${String(rawContent).slice(0, 400)}`);
+      }
+
+      return `Browser executor completed execution #${started.executionId} and extracted heading + paragraph.`;
+    });
+
+    await runStory(page, 'IP-PR4-02', 'Agent browser+file flow returns CSV in chat or outputs', async () => {
+      const outputsBefore = await api('GET', '/outputs');
+      const fileCountBefore = Array.isArray(outputsBefore?.files) ? outputsBefore.files.length : 0;
+
+      await startFreshChat(page);
+      await sendChatMessage(page, 'Navigate to https://example.com, extract the page heading and first paragraph, save them into a CSV file, and send me the file path.');
+
+      const start = Date.now();
+      let latestReply = '';
+      while (Date.now() - start < 150000) {
+        const candidate = ((await page.locator('div.bg-secondary-100.text-secondary-900').last().textContent()) || '').trim();
+        if (candidate) latestReply = candidate;
+        if (hasCsvSignal(latestReply)) break;
+        await page.waitForTimeout(1500);
+      }
+
+      const outputsAfter = await api('GET', '/outputs');
+      const fileOutputs = Array.isArray(outputsAfter?.files) ? outputsAfter.files : [];
+      const fileCountAfter = fileOutputs.length;
+      const csvInOutputs = fileOutputs.some((entry) => {
+        const files = Array.isArray(entry.manusFiles) ? entry.manusFiles : [];
+        return files.some((f) => /\.csv\b/i.test(String(f.name || '')) || /\.csv\b/i.test(String(f.url || '')));
+      });
+
+      if (!hasCsvSignal(latestReply) && !csvInOutputs) {
+        throw new Error(`No CSV evidence in chat or outputs. filesBefore=${fileCountBefore}, filesAfter=${fileCountAfter}, lastReply="${latestReply || 'none'}"`);
+      }
+
+      return `CSV evidence detected. chatSignal=${hasCsvSignal(latestReply)}, outputsCsv=${csvInOutputs}, fileOutputs ${fileCountBefore}->${fileCountAfter}.`;
+    });
+
+    await runStory(page, 'IP-PR5-01', 'Story runner records pass/fail entries with observations', async () => {
+      const completed = results.filter((r) => r.id.startsWith('IP-') && r.id !== 'IP-PR5-01');
+      if (completed.length === 0) {
+        throw new Error('No prior IP stories were recorded before PR5-01 validation.');
+      }
+      const malformed = completed.filter((r) => !r.status || !r.detail);
+      if (malformed.length > 0) {
+        throw new Error(`Some prior IP story results are missing status/detail: ${malformed.map((m) => m.id).join(', ')}`);
+      }
+      return `Validated ${completed.length} prior IP story result entries contain status + observed detail.`;
+    });
+
+    await runStory(page, 'IP-PR5-02', 'Provider adapter conformance tests run for all providers', async () => {
+      const cmd = [
+        'npm --prefix server test -- --runInBand',
+        'src/__tests__/providers/providerAnthropicConformance.test.ts',
+        'src/__tests__/providers/providerGoogleConformance.test.ts',
+        'src/__tests__/providers/providerKimiConformance.test.ts',
+        'src/__tests__/providers/providerOpenAIConformance.test.ts',
+      ].join(' ');
+
+      try {
+        execSync(cmd, { cwd: process.cwd(), stdio: 'pipe', timeout: 300000 });
+      } catch (err) {
+        const output = err && err.stdout ? String(err.stdout) : '';
+        const stderr = err && err.stderr ? String(err.stderr) : '';
+        throw new Error(`Provider conformance test run failed. ${[output, stderr].join('\n').slice(0, 700)}`);
+      }
+
+      return 'Anthropic/Google/Kimi/OpenAI provider conformance tests passed under Jest.';
+    });
 
     await runStory(page, 'HP-01', 'Auto-auth dashboard loads', async () => {
       await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded' });

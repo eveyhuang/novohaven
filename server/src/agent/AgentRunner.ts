@@ -33,7 +33,7 @@ export class AgentRunner {
   private promptBuilder: PromptBuilder;
   private toolExecutor: ToolExecutor | null = null;
   private pendingApprovals = new Map<string, PendingApproval>();
-  private maxToolRounds = 10;
+  private maxToolRounds = Math.max(1, parseInt(process.env.AGENT_MAX_TOOL_ROUNDS || '20', 10));
   private ready: Promise<void>;
 
   constructor(sessionId: string) {
@@ -251,38 +251,10 @@ export class AgentRunner {
       }
     }
 
-    // Pass current message attachments to ToolExecutor so tools can access them
-    if (this.toolExecutor && inboundAttachments?.length) {
-      const toolAttachments = inboundAttachments
-        .filter(a => a.type === 'image')
-        .map(a => {
-          const url = a.url || '';
-          const dataUrlMatch = url.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          if (dataUrlMatch) {
-            return {
-              type: 'image' as const,
-              mimeType: dataUrlMatch[1],
-              data: dataUrlMatch[2],
-            };
-          }
-          if (url.startsWith('/uploads/')) {
-            try {
-              const uploadsRoot = getUploadsDir();
-              const relPath = url.replace(/^\/uploads\//, '');
-              const filePath = require('path').join(uploadsRoot, relPath);
-              const base64Data = fs.readFileSync(filePath).toString('base64');
-              return {
-                type: 'image' as const,
-                mimeType: a.mimeType || 'image/png',
-                data: base64Data,
-              };
-            } catch (err) {
-              console.error('[AgentRunner] Failed to read upload for tool context:', err);
-              return { type: 'image' as const, mimeType: a.mimeType || 'image/png', data: '' };
-            }
-          }
-          return { type: 'image' as const, mimeType: a.mimeType || 'image/png', data: url };
-        });
+    // Pass recent image batch to ToolExecutor so multi-turn input collection can map images reliably.
+    // This keeps the latest contiguous image-upload block available across follow-up text turns.
+    if (this.toolExecutor) {
+      const toolAttachments = this.getRecentToolImageBatch();
       this.toolExecutor.setAttachments(toolAttachments);
     }
 
@@ -295,11 +267,12 @@ export class AgentRunner {
     }
 
     let round = 0;
+    let toolRounds = 0;
     let currentMessages = [...messages];
     let pendingImageUrls: string[] = [];
     let pendingGeneratedFiles: Array<{ name: string; url: string; mimeType?: string; type?: string; size?: number }> = [];
 
-    while (round < this.maxToolRounds) {
+    while (true) {
       round++;
 
       const request: CompletionRequest = {
@@ -362,6 +335,12 @@ export class AgentRunner {
         return;
       }
 
+      // Enforce a hard cap on tool rounds, but allow a final non-tool response turn.
+      if (toolRounds >= this.maxToolRounds) {
+        break;
+      }
+      toolRounds++;
+
       // Persist assistant message with tool calls
       this.db.prepare(`
         INSERT INTO session_messages (session_id, role, content, tool_calls)
@@ -417,9 +396,98 @@ export class AgentRunner {
     }
 
     // Max rounds exceeded
-    const msg = 'Reached maximum tool execution rounds. Please try a simpler request.';
+    const msg = `Reached maximum tool execution rounds (${this.maxToolRounds}). Please try a simpler request.`;
     this.sendResponse(msg);
     this.persistAssistantMessage(msg);
+  }
+
+  private getRecentToolImageBatch(limit = 120): MessageAttachment[] {
+    type Row = { id: number; metadata: string | null };
+    const rows = this.db.prepare(
+      `SELECT id, metadata
+       FROM session_messages
+       WHERE session_id = ? AND role = 'user'
+       ORDER BY id DESC
+       LIMIT ?`
+    ).all(this.sessionId, limit) as Row[];
+
+    // Collect the most recent contiguous block of user messages that include image attachments.
+    // Example: [text(requirements), image, image, text(restart)] -> keep the two images.
+    let seenImage = false;
+    const batchInReverse: Array<Array<{ url: string; mimeType?: string }>> = [];
+    for (const row of rows) {
+      const images = this.extractImageAttachmentRefs(row.metadata);
+      if (images.length > 0) {
+        seenImage = true;
+        batchInReverse.push(images);
+        continue;
+      }
+      if (seenImage) break;
+    }
+
+    if (!seenImage) return [];
+
+    const orderedRefs: Array<{ url: string; mimeType?: string }> = [];
+    for (let i = batchInReverse.length - 1; i >= 0; i--) {
+      orderedRefs.push(...batchInReverse[i]);
+    }
+
+    const attachments: MessageAttachment[] = [];
+    for (const ref of orderedRefs) {
+      const parsed = this.toMessageAttachment(ref.url, ref.mimeType);
+      if (parsed?.data) attachments.push(parsed);
+    }
+    return attachments;
+  }
+
+  private extractImageAttachmentRefs(metadataRaw: string | null): Array<{ url: string; mimeType?: string }> {
+    if (!metadataRaw) return [];
+    try {
+      const metadata = JSON.parse(metadataRaw);
+      const attachments = Array.isArray(metadata?.attachments) ? metadata.attachments : [];
+      return attachments
+        .filter((a: any) => a && a.type === 'image' && typeof a.url === 'string' && a.url.length > 0)
+        .map((a: any) => ({ url: String(a.url), mimeType: a.mimeType ? String(a.mimeType) : undefined }));
+    } catch {
+      return [];
+    }
+  }
+
+  private toMessageAttachment(url: string, mimeType?: string): MessageAttachment | null {
+    if (!url) return null;
+
+    const dataUrlMatch = url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+    if (dataUrlMatch) {
+      return {
+        type: 'image',
+        mimeType: dataUrlMatch[1],
+        data: dataUrlMatch[2],
+      };
+    }
+
+    if (url.startsWith('/uploads/')) {
+      try {
+        const uploadsRoot = getUploadsDir();
+        const relPath = url.replace(/^\/uploads\//, '');
+        const filePath = path.join(uploadsRoot, relPath);
+        const base64Data = fs.readFileSync(filePath).toString('base64');
+        return {
+          type: 'image',
+          mimeType: mimeType || 'image/png',
+          data: base64Data,
+        };
+      } catch (err) {
+        console.error('[AgentRunner] Failed to read upload for tool context:', err);
+        return null;
+      }
+    }
+
+    // Fallback for unknown storage format.
+    return {
+      type: 'image',
+      mimeType: mimeType || 'image/png',
+      data: url,
+    };
   }
 
   /**

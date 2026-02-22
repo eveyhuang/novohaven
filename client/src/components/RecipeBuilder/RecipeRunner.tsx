@@ -138,6 +138,7 @@ export function RecipeRunner() {
     const inputs = new Set<string>();
     const optionalInputs = new Set<string>();
     const variableRegex = /\{\{([^}]+)\}\}/g;
+    const isStepOutputReference = (value: string): boolean => /^step_\d+_output(?:\..+)?$/i.test(String(value || '').trim());
 
     const standardNames = [
       'brand_voice', 'amazon_requirements', 'social_media_guidelines',
@@ -153,6 +154,9 @@ export function RecipeRunner() {
             // Handle both array format and object format
             if (Array.isArray(config.variables)) {
               for (const variable of config.variables) {
+                const source = String(variable?.source || '').trim();
+                if (source && source !== 'user_input') continue;
+                if (isStepOutputReference(source)) continue;
                 if (variable.optional === true || variable.required === false) {
                   optionalInputs.add(variable.name);
                 }
@@ -160,6 +164,9 @@ export function RecipeRunner() {
             } else {
               for (const [varName, varConfig] of Object.entries(config.variables)) {
                 const cfg = varConfig as any;
+                const source = String(cfg?.source || '').trim();
+                if (source && source !== 'user_input') continue;
+                if (isStepOutputReference(source)) continue;
                 if (cfg.optional === true) {
                   optionalInputs.add(varName);
                 }
@@ -185,7 +192,7 @@ export function RecipeRunner() {
               if (Array.isArray(config.variables)) {
                 // Array format: [{ name: 'product_urls', source: 'user_input', ... }]
                 for (const variable of config.variables) {
-                  if (variable.source === 'user_input' && variable.required !== false && variable.optional !== true) {
+                  if (variable.source === 'user_input' && variable.required !== false && variable.optional !== true && !isStepOutputReference(variable.name)) {
                     inputs.add(variable.name);
                     foundInputs = true;
                   }
@@ -194,8 +201,11 @@ export function RecipeRunner() {
                 // Object format: { product_urls: { type: 'url_list', ... } }
                 for (const [varName, varConfig] of Object.entries(config.variables)) {
                   const cfg = varConfig as any;
+                  const source = String(cfg?.source || '').trim();
+                  if (source && source !== 'user_input') continue;
+                  if (isStepOutputReference(source)) continue;
                   // Skip optional variables
-                  if (cfg.optional !== true) {
+                  if (cfg.optional !== true && !isStepOutputReference(varName)) {
                     inputs.add(varName);
                     foundInputs = true;
                   }
@@ -220,7 +230,7 @@ export function RecipeRunner() {
       while ((match = variableRegex.exec(template)) !== null) {
         const varName = match[1].trim();
         // Skip step outputs, company standards, and optional fields
-        if (!varName.match(/^step_\d+_output$/) &&
+        if (!isStepOutputReference(varName) &&
             !standardNames.some(s => varName.toLowerCase().includes(s.replace(/_/g, ''))) &&
             !optionalInputs.has(varName)) {
           inputs.add(varName);
@@ -236,6 +246,7 @@ export function RecipeRunner() {
   const allInputs = useMemo(() => {
     const allVars = new Set<string>();
     const variableRegex = /\{\{([^}]+)\}\}/g;
+    const isStepOutputReference = (value: string): boolean => /^step_\d+_output(?:\..+)?$/i.test(String(value || '').trim());
 
     const standardNames = [
       'brand_voice', 'amazon_requirements', 'social_media_guidelines',
@@ -250,13 +261,19 @@ export function RecipeRunner() {
           if (config.variables) {
             if (Array.isArray(config.variables)) {
               for (const variable of config.variables) {
-                if (variable.source === 'user_input') {
+                if (variable.source === 'user_input' && !isStepOutputReference(variable.name)) {
                   allVars.add(variable.name);
                 }
               }
             } else {
-              for (const varName of Object.keys(config.variables)) {
-                allVars.add(varName);
+              for (const [varName, varConfig] of Object.entries(config.variables)) {
+                const cfg = varConfig as any;
+                const source = String(cfg?.source || '').trim();
+                if (source && source !== 'user_input') continue;
+                if (isStepOutputReference(source)) continue;
+                if (!isStepOutputReference(varName)) {
+                  allVars.add(varName);
+                }
               }
             }
           }
@@ -271,7 +288,7 @@ export function RecipeRunner() {
         const template = step.prompt_template || '';
         while ((match = variableRegex.exec(template)) !== null) {
           const varName = match[1].trim();
-          if (!varName.match(/^step_\d+_output$/) &&
+          if (!isStepOutputReference(varName) &&
               !standardNames.some(s => varName.toLowerCase().includes(s.replace(/_/g, '')))) {
             allVars.add(varName);
           }

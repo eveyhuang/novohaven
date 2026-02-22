@@ -9,7 +9,7 @@ A gateway-based, plugin-driven AI agent platform that connects messaging channel
 │   Control Interfaces │    │  Messaging Channels   │
 │                     │    │                      │
 │  React Web UI       │    │  Lark Bot            │
-│  (localhost:3000)   │    │  (webhook receiver)  │
+│  (localhost:3000)   │    │  (websocket/webhook) │
 └────────┬────────────┘    └──────────┬───────────┘
          │ REST + SSE                 │ Normalized messages
          ▼                            ▼
@@ -139,7 +139,7 @@ novohaven-app/
 │   │   │   ├── loader.ts                # Manifest-based plugin discovery
 │   │   │   ├── builtin/                 # Built-in plugins
 │   │   │   │   ├── channel-web/         # Web UI channel (REST + SSE)
-│   │   │   │   ├── channel-lark/        # Lark bot channel (webhooks)
+│   │   │   │   ├── channel-lark/        # Lark bot channel (websocket + webhook)
 │   │   │   │   ├── provider-anthropic/  # Claude models
 │   │   │   │   ├── provider-openai/     # GPT models
 │   │   │   │   ├── provider-google/     # Gemini models
@@ -173,7 +173,7 @@ NovoHaven uses a plugin architecture with 4 categories. Each plugin has a `manif
 
 | Type | Purpose | Built-in Plugins |
 |------|---------|------------------|
-| **Channel** | Messaging adapters that normalize platform-specific messages | `channel-web` (REST + SSE), `channel-lark` (webhooks) |
+| **Channel** | Messaging adapters that normalize platform-specific messages | `channel-web` (REST + SSE), `channel-lark` (websocket + webhook) |
 | **Tool** | Agent-callable capabilities exposed as LLM tools | `tool-skill-manager`, `tool-browser`, `tool-bash`, `tool-fileops` |
 | **Memory** | Search and vector indexing for skill discovery | `memory-sqlite-vec` |
 | **Provider** | LLM backends for streaming completions | `provider-anthropic`, `provider-openai`, `provider-google` |
@@ -362,7 +362,7 @@ The agent can search for relevant skills, execute workflows, test skills, propos
 |--------|------|-------------|
 | `POST` | `/channels/channel-web/message` | Send message to agent (web) |
 | `GET` | `/channels/channel-web/stream` | SSE stream for responses (web) |
-| `POST` | `/channels/channel-lark/webhook` | Lark event subscription webhook |
+| `POST` | `/channels/channel-lark/webhook` | Lark event subscription webhook (optional in webhook mode) |
 
 ### Legacy Endpoints (preserved)
 
@@ -383,7 +383,9 @@ The `channel-lark` plugin enables bot interactions in Lark (group chats and DMs)
 
 1. Create a Lark app at [open.larksuite.com](https://open.larksuite.com)
 2. Enable bot capabilities
-3. Set the webhook URL to `https://<your-server>/channels/channel-lark/webhook`
+3. Choose inbound mode:
+   - `websocket` (default): no public inbound webhook endpoint required
+   - `webhook`: set webhook URL to `https://<your-server>/channels/channel-lark/webhook`
 4. Subscribe to events: `im.message.receive_v1`
 5. Configure the plugin via the Plugin Manager UI or directly in the `plugin_configs` table:
 
@@ -391,14 +393,18 @@ The `channel-lark` plugin enables bot interactions in Lark (group chats and DMs)
 {
   "appId": "cli_xxxx",
   "appSecret": "your-app-secret",
-  "verificationToken": "your-verification-token"
+  "connectionMode": "websocket",
+  "verificationToken": "your-verification-token",
+  "requireMention": true,
+  "textChunkLimit": 3800,
+  "mediaMaxMb": 30
 }
 ```
 
 ### Message Flow
 
 ```
-User @mentions bot in Lark → Lark webhook → channel-lark plugin →
+User @mentions bot in Lark → Lark websocket/webhook event → channel-lark plugin →
   ChannelRouter → SessionManager → AgentSupervisor → Agent Process →
   LLM response → AgentSupervisor → channel-lark sendOutbound → Lark API → User
 ```
@@ -406,8 +412,9 @@ User @mentions bot in Lark → Lark webhook → channel-lark plugin →
 Features:
 - @mention detection in group chats
 - Thread support via Lark's `root_id`
-- Event deduplication (60-second TTL)
-- Automatic tenant token caching and refresh
+- Event deduplication (size-bounded + TTL cache)
+- Supports inbound media/file download and attachment forwarding
+- Supports outbound media/file upload and send
 
 ## Environment Variables
 
