@@ -39,8 +39,9 @@ export class PromptBuilder {
     agentConfig: AgentConfig;
     tools: ToolDefinition[];
     historyLimit?: number;
+    currentUserText?: string;
   }): BuiltPrompt {
-    const { sessionId, agentConfig, tools, historyLimit = 50 } = opts;
+    const { sessionId, agentConfig, tools, historyLimit = 50, currentUserText } = opts;
 
     // Build system prompt from layers
     const systemParts: string[] = [];
@@ -49,6 +50,17 @@ export class PromptBuilder {
     if (agentConfig.system_prompt) {
       systemParts.push(agentConfig.system_prompt);
     }
+
+    const languageHint = this.detectLanguageFromText(currentUserText || '') || this.detectLatestUserLanguage(sessionId);
+    systemParts.push(
+      [
+        '\n## Language Rules',
+        'Always reply in the same language as the current user message for this turn.',
+        'Do not switch languages unless the user explicitly asks you to.',
+        'If the user uses mixed languages, follow the dominant language in that current message.',
+        languageHint ? `Detected current user language: ${languageHint}.` : '',
+      ].filter(Boolean).join('\n')
+    );
 
     // Layer 2: Available tools
     if (tools.length > 0) {
@@ -69,7 +81,10 @@ export class PromptBuilder {
           'When required inputs are missing, ask for exactly ONE input at a time.',
           'Do not ask for multiple variables in the same message.',
           'After the user provides that input, continue and ask for the next missing input if needed.',
-          'Always name the exact variable being requested (for example `{{product_url}}`) to avoid ambiguity.',
+          'Use clear user-facing input labels (for example "product URL") and avoid raw placeholders like `{{product_url}}` in user-visible messages.',
+          'Only ask for inputs that are declared as required by the selected skill/workflow.',
+          'Do not ask for extra fields (such as "requirements") unless the tool explicitly reports them as missing required inputs.',
+          'If all required inputs are already available, execute immediately instead of asking for more clarification.',
         ].join('\n')
       );
       systemParts.push(
@@ -95,6 +110,11 @@ export class PromptBuilder {
       systemParts.push(`\n## Active Workflow\n${executionContext}`);
     }
 
+    const taskSelectionContext = this.getTaskSelectionContext(sessionId);
+    if (taskSelectionContext) {
+      systemParts.push(`\n## Selected Asset\n${taskSelectionContext}`);
+    }
+
     // Layer 5: Company standards summary
     const standardsContext = this.getCompanyStandardsContext();
     if (standardsContext) {
@@ -107,12 +127,19 @@ export class PromptBuilder {
     // Only include user and final assistant messages (no intermediate tool call/result messages)
     // Tool call loops are handled in-memory during the current turn by AgentRunner
     const history = this.db.prepare(
-      `SELECT * FROM session_messages
-       WHERE session_id = ? AND role IN ('user', 'assistant') AND tool_calls IS NULL
-       ORDER BY created_at ASC LIMIT ?`
+      `SELECT * FROM (
+         SELECT * FROM session_messages
+         WHERE session_id = ? AND role IN ('user', 'assistant') AND tool_calls IS NULL
+         ORDER BY created_at DESC LIMIT ?
+       )
+       ORDER BY created_at ASC`
     ).all(sessionId, historyLimit) as any[];
+    const boundaryId = this.getLatestTaskBoundaryId(sessionId);
+    const scopedHistory = boundaryId
+      ? history.filter((m: any) => Number(m.id) > boundaryId)
+      : history;
 
-    const messages = history.map((m: any) => ({
+    const messages = scopedHistory.map((m: any) => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
     }));
@@ -213,6 +240,28 @@ export class PromptBuilder {
     return Array.from(tokens);
   }
 
+  private detectLatestUserLanguage(sessionId: string): string | null {
+    const lastMsg = this.db.prepare(
+      "SELECT content FROM session_messages WHERE session_id = ? AND role = 'user' ORDER BY created_at DESC LIMIT 1"
+    ).get(sessionId) as any;
+    return this.detectLanguageFromText(String(lastMsg?.content || ''));
+  }
+
+  private detectLanguageFromText(raw: string): string | null {
+    const text = String(raw || '').trim();
+    if (!text) return null;
+
+    if (/[\u4e00-\u9fff]/u.test(text)) return 'Chinese';
+    if (/[\u3040-\u30ff]/u.test(text)) return 'Japanese';
+    if (/[\uac00-\ud7af]/u.test(text)) return 'Korean';
+    if (/[\u0400-\u04ff]/u.test(text)) return 'Cyrillic-script language';
+    if (/[\u0600-\u06ff]/u.test(text)) return 'Arabic';
+
+    const latinMatches = text.match(/[A-Za-z]/g) || [];
+    if (latinMatches.length >= 3) return 'English';
+    return null;
+  }
+
   private parseTags(raw: any): string[] {
     if (!raw) return [];
     if (Array.isArray(raw)) return raw.map((t) => String(t));
@@ -311,6 +360,54 @@ export class PromptBuilder {
     }
 
     return context;
+  }
+
+  private getTaskSelectionContext(sessionId: string, scanLimit: number = 500): string | null {
+    const rows = this.db.prepare(
+      `SELECT id, metadata
+       FROM session_messages
+       WHERE session_id = ?
+       ORDER BY id DESC
+       LIMIT ?`
+    ).all(sessionId, scanLimit) as Array<{ id: number; metadata: string | null }>;
+
+    for (const row of rows) {
+      if (!row.metadata) continue;
+      try {
+        const metadata = JSON.parse(row.metadata);
+        if (metadata?.taskBoundary === true) break;
+        const sel = metadata?.taskSelection;
+        if (sel?.type === 'workflow' && Number.isFinite(Number(sel.id))) {
+          return `User selected workflow #${Number(sel.id)} (${String(sel.name || 'Unnamed workflow')}). Use this workflow for execution in this task and do not substitute another skill/workflow unless user explicitly changes selection.`;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private getLatestTaskBoundaryId(sessionId: string, scanLimit: number = 500): number | null {
+    const rows = this.db.prepare(
+      `SELECT id, metadata
+       FROM session_messages
+       WHERE session_id = ?
+       ORDER BY id DESC
+       LIMIT ?`
+    ).all(sessionId, scanLimit) as Array<{ id: number; metadata: string | null }>;
+
+    for (const row of rows) {
+      if (!row.metadata) continue;
+      try {
+        const metadata = JSON.parse(row.metadata);
+        if (metadata?.taskBoundary === true) {
+          return Number(row.id);
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
   }
 
   /**

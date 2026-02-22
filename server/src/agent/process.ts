@@ -20,19 +20,22 @@ if (!sessionId) {
 }
 
 const runner = new AgentRunner(sessionId);
+let turnQueue: Promise<void> = Promise.resolve();
 
 process.on('message', async (msg: any) => {
   switch (msg.type) {
     case 'message':
-      try {
-        await runner.handleTurn(msg.message);
-      } catch (err: any) {
-        process.send!({
-          type: 'error',
-          sessionId,
-          error: err.message,
-        });
-      }
+      turnQueue = turnQueue.then(async () => {
+        try {
+          await runner.handleTurn(msg.message);
+        } catch (err: any) {
+          process.send!({
+            type: 'error',
+            sessionId,
+            error: err.message,
+          });
+        }
+      });
       break;
 
     case 'approval_response':
@@ -40,6 +43,7 @@ process.on('message', async (msg: any) => {
       break;
 
     case 'shutdown':
+      await turnQueue;
       await runner.shutdown();
       process.exit(0);
       break;

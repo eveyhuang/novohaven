@@ -186,9 +186,7 @@ class SkillManagerPlugin implements ToolPlugin {
 
       const inputs: string[] = [];
       for (const [varName, spec] of inputSpecs.entries()) {
-        const opt = spec.optional ? ', optional' : '';
-        const label = spec.label ? `: ${spec.label}` : '';
-        inputs.push(`{{${varName}}} (${spec.type}${opt})${label}`);
+        inputs.push(this.formatInputDescriptor(varName, spec, { includeOptional: true }));
       }
 
       const stepSummary = steps.map((s: any) => `${s.step_name} (${s.step_type})`).join(' → ');
@@ -214,12 +212,24 @@ class SkillManagerPlugin implements ToolPlugin {
   private async executeSkill(args: Record<string, any>, context: ToolContext): Promise<ToolResult> {
     const { skillId, skillType, inputs = {}, imageInputs = {} } = args;
     const parentType: 'skill' | 'workflow' = skillType === 'workflow' ? 'workflow' : 'skill';
+    const pinnedSelection = this.getPinnedTaskSelection(context.sessionId);
 
     // Verify the skill exists
     const table = parentType === 'skill' ? 'skills' : 'workflows';
     const skill = this.db!.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(skillId) as any;
     if (!skill) {
       return { success: false, output: `${parentType} #${skillId} not found` };
+    }
+
+    if (
+      pinnedSelection &&
+      pinnedSelection.type === 'workflow' &&
+      (parentType !== 'workflow' || skillId !== pinnedSelection.id)
+    ) {
+      return {
+        success: false,
+        output: `Current task is locked to workflow #${pinnedSelection.id} (${pinnedSelection.name || 'selected workflow'}). Execute that workflow instead of ${parentType} #${skillId}.`,
+      };
     }
 
     // Get steps
@@ -238,8 +248,9 @@ class SkillManagerPlugin implements ToolPlugin {
     const attachments = context.attachments || [];
     for (const [varName, idx] of Object.entries(imageInputs)) {
       const attachIdx = typeof idx === 'number' ? idx : parseInt(idx as string, 10);
-      if (attachments[attachIdx]) {
-        resolvedInputs[varName] = `[image:attachment_${attachIdx}]`;
+      const attachment = attachments[attachIdx];
+      if (attachment) {
+        resolvedInputs[varName] = this.toPromptImageValue(attachment);
       } else {
         resolvedInputs[varName] = `[image:missing_attachment_${attachIdx}]`;
       }
@@ -251,7 +262,7 @@ class SkillManagerPlugin implements ToolPlugin {
       .filter(([, spec]) => spec.type === 'image')
       .map(([name]) => name);
     if (imageVars.length === 1 && attachments.length > 0 && !resolvedInputs[imageVars[0]]) {
-      resolvedInputs[imageVars[0]] = '[image:attachment_0]';
+      resolvedInputs[imageVars[0]] = this.toPromptImageValue(attachments[0]);
     }
 
     // Keep file inputs from blocking execution when file content is attached or implied.
@@ -292,14 +303,14 @@ class SkillManagerPlugin implements ToolPlugin {
 
     if (missingRequired.length > 0) {
       const first = missingRequired[0];
-      const firstInput = `{{${first.name}}} (${first.spec.type}${first.spec.label ? `: ${first.spec.label}` : ''})`;
+      const firstInput = this.formatInputDescriptor(first.name, first.spec, { includeOptional: false });
       const remainingList = missingRequired
         .slice(1)
-        .map(({ name, spec }) => `{{${name}}} (${spec.type}${spec.label ? `: ${spec.label}` : ''})`)
+        .map(({ name, spec }) => this.formatInputDescriptor(name, spec, { includeOptional: false }))
         .join(', ');
       const optionalList = Array.from(inputSpecs.entries())
         .filter(([, spec]) => spec.optional)
-        .map(([name, spec]) => `{{${name}}} (${spec.type})`)
+        .map(([name, spec]) => this.formatInputDescriptor(name, spec, { includeOptional: false }))
         .join(', ');
       return {
         success: false,
@@ -591,10 +602,10 @@ class SkillManagerPlugin implements ToolPlugin {
     const inputSpecs = this.collectInputSpecs(steps);
     const requiredInputs = Array.from(inputSpecs.entries())
       .filter(([, spec]) => !spec.optional)
-      .map(([name, spec]) => `{{${name}}} (${spec.type})`);
+      .map(([name, spec]) => this.formatInputDescriptor(name, spec, { includeOptional: false }));
     const optionalInputs = Array.from(inputSpecs.entries())
       .filter(([, spec]) => spec.optional)
-      .map(([name, spec]) => `{{${name}}} (${spec.type})`);
+      .map(([name, spec]) => this.formatInputDescriptor(name, spec, { includeOptional: false }));
 
     if (issues.length === 0) {
       const suffix = requiredInputs.length > 0
@@ -637,6 +648,69 @@ class SkillManagerPlugin implements ToolPlugin {
       }
     }
     return specs;
+  }
+
+  private getPinnedTaskSelection(
+    sessionId: string,
+    scanLimit: number = 500
+  ): { type: 'workflow'; id: number; name?: string } | null {
+    const rows = this.db!.prepare(
+      `SELECT id, metadata
+       FROM session_messages
+       WHERE session_id = ?
+       ORDER BY id DESC
+       LIMIT ?`
+    ).all(sessionId, scanLimit) as Array<{ id: number; metadata: string | null }>;
+
+    for (const row of rows) {
+      if (!row.metadata) continue;
+      try {
+        const metadata = JSON.parse(row.metadata);
+        if (metadata?.taskBoundary === true) break;
+        const selection = metadata?.taskSelection;
+        if (
+          selection?.type === 'workflow' &&
+          Number.isFinite(Number(selection.id))
+        ) {
+          return {
+            type: 'workflow',
+            id: Number(selection.id),
+            name: selection.name ? String(selection.name) : undefined,
+          };
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private toPromptImageValue(attachment: { data: string; mimeType?: string }): string {
+    const data = String(attachment?.data || '');
+    if (!data) return '[image:missing_attachment_data]';
+    if (data.startsWith('data:image/')) return data;
+    const mime = attachment?.mimeType || 'image/jpeg';
+    return `data:${mime};base64,${data}`;
+  }
+
+  private formatInputDescriptor(
+    varName: string,
+    spec: { type: string; optional: boolean; label?: string },
+    options: { includeOptional: boolean }
+  ): string {
+    const label = (spec.label || this.humanizeInputName(varName)).trim();
+    const type = spec.type || 'text';
+    const optionalPart = options.includeOptional && spec.optional ? ', optional' : '';
+    return `${label} (${type}${optionalPart})`;
+  }
+
+  private humanizeInputName(varName: string): string {
+    const normalized = String(varName || 'input')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return 'Input';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
   }
 
   private tokenizeQuery(query: string): string[] {

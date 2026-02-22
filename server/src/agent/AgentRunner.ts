@@ -20,9 +20,15 @@ import { PromptBuilder } from './PromptBuilder';
 import { ToolExecutor } from './ToolExecutor';
 
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, '../../data/novohaven.db');
+const AUTO_NEW_TASK_IDLE_SECONDS = 72 * 60 * 60;
 
 interface PendingApproval {
   resolve: (result: { approved: boolean; data?: any }) => void;
+}
+
+interface TaskWorkflowSelection {
+  id: number;
+  name: string;
 }
 
 export class AgentRunner {
@@ -165,6 +171,14 @@ export class AgentRunner {
     const agentConfig = this.db.prepare(
       'SELECT * FROM agent_configs WHERE id = ?'
     ).get(session.agent_config_id || 1) as AgentConfig;
+    const inboundText = String(message.content.text || '').trim();
+    const isManualNewTask = this.isNewTaskCommand(inboundText);
+    const shouldAutoNewTask = !isManualNewTask && this.shouldAutoStartNewTask();
+
+    // Auto-reset context for stale sessions before persisting the current user turn.
+    if (shouldAutoNewTask) {
+      this.createTaskBoundary('inactivity_72h');
+    }
 
     // Step 2: Persist user message
     const inboundAttachments = message.content.attachments;
@@ -188,12 +202,25 @@ export class AgentRunner {
     this.db.prepare('UPDATE sessions SET last_active_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(this.sessionId);
 
+    // Manual /new command: create a hard boundary and stop this turn.
+    if (isManualNewTask) {
+      this.createTaskBoundary('manual_new');
+      const confirmation = this.buildNewTaskConfirmation(inboundText);
+      this.sendResponse(confirmation);
+      this.persistAssistantMessage(confirmation);
+      return;
+    }
+
+    // If user explicitly mentions a workflow, pin execution to that workflow for this task segment.
+    this.maybePinWorkflowFromUserText(inboundText);
+
     // Step 3: Assemble context using PromptBuilder
     const toolDefs = this.toolExecutor ? this.toolExecutor.getToolDefinitions() : [];
     const built = this.promptBuilder.build({
       sessionId: this.sessionId,
       agentConfig,
       tools: toolDefs,
+      currentUserText: message.content.text || '',
     });
     const { systemPrompt, messages } = built;
 
@@ -488,6 +515,124 @@ export class AgentRunner {
       mimeType: mimeType || 'image/png',
       data: url,
     };
+  }
+
+  private isNewTaskCommand(text: string): boolean {
+    const normalized = String(text || '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (/^\/new(?:\s+.*)?$/.test(normalized)) return true;
+    if (/^new\s+task$/.test(normalized)) return true;
+    if (/^(新任务|重新开始|开始新任务)$/.test(String(text || '').trim())) return true;
+    return false;
+  }
+
+  private shouldAutoStartNewTask(): boolean {
+    const row = this.db.prepare(
+      `SELECT CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', created_at) AS INTEGER) AS idle_seconds
+       FROM session_messages
+       WHERE session_id = ?
+       ORDER BY id DESC
+       LIMIT 1`
+    ).get(this.sessionId) as { idle_seconds?: number } | undefined;
+
+    if (!row || row.idle_seconds == null) return false;
+    return Number(row.idle_seconds) >= AUTO_NEW_TASK_IDLE_SECONDS;
+  }
+
+  private createTaskBoundary(reason: 'manual_new' | 'inactivity_72h'): void {
+    this.db.prepare(
+      'UPDATE sessions SET active_execution_id = NULL, last_active_at = CURRENT_TIMESTAMP WHERE id = ?'
+    ).run(this.sessionId);
+    this.db.prepare(`
+      INSERT INTO session_messages (session_id, role, content, metadata)
+      VALUES (?, 'system', ?, ?)
+    `).run(
+      this.sessionId,
+      '[task boundary]',
+      JSON.stringify({ taskBoundary: true, reason })
+    );
+  }
+
+  private buildNewTaskConfirmation(text: string): string {
+    const isChinese = /[\u4e00-\u9fff]/u.test(String(text || ''));
+    if (isChinese) {
+      return '已开始新任务。接下来请直接发送你的新需求。';
+    }
+    return 'Started a new task. Send your new request when ready.';
+  }
+
+  private maybePinWorkflowFromUserText(text: string): void {
+    const selection = this.resolveWorkflowSelectionFromText(text);
+    if (!selection) return;
+    const current = this.getCurrentTaskWorkflowPin();
+    if (current && current.id === selection.id) return;
+    this.db.prepare(`
+      INSERT INTO session_messages (session_id, role, content, metadata)
+      VALUES (?, 'system', ?, ?)
+    `).run(
+      this.sessionId,
+      '[task selection]',
+      JSON.stringify({
+        taskSelection: {
+          type: 'workflow',
+          id: selection.id,
+          name: selection.name,
+        },
+      })
+    );
+  }
+
+  private resolveWorkflowSelectionFromText(text: string): TaskWorkflowSelection | null {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+
+    const idMatch = raw.match(/(?:workflow|工作流)\s*#?\s*(\d+)/i);
+    if (idMatch) {
+      const workflowId = Number(idMatch[1]);
+      if (Number.isFinite(workflowId) && workflowId > 0) {
+        const byId = this.db.prepare(
+          'SELECT id, name FROM workflows WHERE id = ? AND status = ?'
+        ).get(workflowId, 'active') as { id: number; name: string } | undefined;
+        if (byId) return byId;
+      }
+    }
+
+    const workflows = this.db.prepare(
+      'SELECT id, name FROM workflows WHERE status = ? ORDER BY LENGTH(name) DESC, id ASC LIMIT 200'
+    ).all('active') as Array<{ id: number; name: string }>;
+    for (const wf of workflows) {
+      if (!wf?.name) continue;
+      if (raw.includes(wf.name)) {
+        return { id: wf.id, name: wf.name };
+      }
+    }
+
+    return null;
+  }
+
+  private getCurrentTaskWorkflowPin(scanLimit: number = 500): TaskWorkflowSelection | null {
+    const rows = this.db.prepare(
+      `SELECT id, metadata
+       FROM session_messages
+       WHERE session_id = ?
+       ORDER BY id DESC
+       LIMIT ?`
+    ).all(this.sessionId, scanLimit) as Array<{ id: number; metadata: string | null }>;
+
+    for (const row of rows) {
+      if (!row.metadata) continue;
+      try {
+        const metadata = JSON.parse(row.metadata);
+        if (metadata?.taskBoundary === true) break;
+        const sel = metadata?.taskSelection;
+        if (sel?.type === 'workflow' && Number.isFinite(Number(sel.id))) {
+          return { id: Number(sel.id), name: String(sel.name || '') };
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
   }
 
   /**
