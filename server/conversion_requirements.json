@@ -1,0 +1,25 @@
+{
+  "style": "黑白胶片风格转换",
+  "reference_analysis": {
+    "film_stock": "Kodak Portra 800风格（转为黑白）",
+    "grain_texture": "中等可见颗粒感",
+    "contrast": "中等对比度，柔和的阴影和高光",
+    "lighting": "保持原图的自然光线氛围"
+  },
+  "conversion_requirements": [
+    "转换为黑白胶片摄影风格",
+    "保持街拍感觉和自然氛围",
+    "高对比度，深黑浅白",
+    "添加明显的胶片颗粒感",
+    "柔和的高光过渡",
+    "保留阴影细节",
+    "经典黑白胶片look"
+  ],
+  "technical_specs": {
+    "color_mode": "grayscale",
+    "grain_intensity": "medium to high",
+    "contrast_curve": "medium-high contrast",
+    "black_point": "deep blacks",
+    "highlight_rolloff": "smooth and gradual"
+  }
+}

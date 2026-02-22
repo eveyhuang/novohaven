@@ -65,6 +65,15 @@ export class PromptBuilder {
       );
       systemParts.push(
         [
+          '\n## Input Collection Rules',
+          'When required inputs are missing, ask for exactly ONE input at a time.',
+          'Do not ask for multiple variables in the same message.',
+          'After the user provides that input, continue and ask for the next missing input if needed.',
+          'Always name the exact variable being requested (for example `{{product_url}}`) to avoid ambiguity.',
+        ].join('\n')
+      );
+      systemParts.push(
+        [
           '\n## Completion And Reuse Rules',
           'If the user asks for a file (CSV/JSON/Markdown/etc.), you must return the real generated file path or inline file content from tool output.',
           'Do not claim a file was created unless a tool output confirms it.',

@@ -10,9 +10,14 @@
     "properties": {
       "appId": { "type": "string", "description": "Lark app ID" },
       "appSecret": { "type": "string", "description": "Lark app secret", "secret": true },
-      "verificationToken": { "type": "string", "description": "Lark event verification token", "secret": true },
-      "encryptKey": { "type": "string", "description": "Lark event encrypt key (optional)", "secret": true }
+      "verificationToken": { "type": "string", "description": "Lark event verification token (required for webhook mode)", "secret": true },
+      "encryptKey": { "type": "string", "description": "Lark event encrypt key (optional)", "secret": true },
+      "domain": { "type": "string", "description": "feishu, lark, or custom https domain" },
+      "connectionMode": { "type": "string", "enum": ["websocket", "webhook"], "description": "Inbound event mode" },
+      "requireMention": { "type": "boolean", "description": "Require @mention in group chats" },
+      "textChunkLimit": { "type": "integer", "minimum": 256, "description": "Max outbound text chunk size" },
+      "mediaMaxMb": { "type": "number", "minimum": 1, "description": "Max inbound media size in MB" }
     },
-    "required": ["appId", "appSecret", "verificationToken"]
+    "required": ["appId", "appSecret"]
   }
 }

@@ -291,7 +291,10 @@ class SkillManagerPlugin implements ToolPlugin {
       });
 
     if (missingRequired.length > 0) {
-      const requiredList = missingRequired
+      const first = missingRequired[0];
+      const firstInput = `{{${first.name}}} (${first.spec.type}${first.spec.label ? `: ${first.spec.label}` : ''})`;
+      const remainingList = missingRequired
+        .slice(1)
         .map(({ name, spec }) => `{{${name}}} (${spec.type}${spec.label ? `: ${spec.label}` : ''})`)
         .join(', ');
       const optionalList = Array.from(inputSpecs.entries())
@@ -300,7 +303,7 @@ class SkillManagerPlugin implements ToolPlugin {
         .join(', ');
       return {
         success: false,
-        output: `Missing required inputs for ${parentType} "${skill.name}": ${requiredList}.${optionalList ? ` Optional inputs: ${optionalList}.` : ''}`,
+        output: `Missing required inputs for ${parentType} "${skill.name}". Ask the user for this one first: ${firstInput}.${remainingList ? ` Remaining required inputs (ask later, one-by-one): ${remainingList}.` : ''}${optionalList ? ` Optional inputs: ${optionalList}.` : ''}`,
       };
     }
 
