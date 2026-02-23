@@ -194,12 +194,6 @@ router.post('/:id/clone', (req: Request, res: Response) => {
     }
 
     const newName = req.body.name || `${original.name} (Copy)`;
-    const result = db.prepare(
-      'INSERT INTO skills (name, description, created_by, tags) VALUES (?, ?, ?, ?)'
-    ).run(newName, original.description, userId, original.tags);
-
-    const newId = Number(result.lastInsertRowid);
-
     // Clone steps
     const steps = db.prepare(
       "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' ORDER BY step_order"
@@ -210,6 +204,12 @@ router.post('/:id/clone', (req: Request, res: Response) => {
       res.status(400).json({ error: `Cannot clone skill with unsupported step type "${disabledStep.step_type}"` });
       return;
     }
+
+    const result = db.prepare(
+      'INSERT INTO skills (name, description, created_by, tags) VALUES (?, ?, ?, ?)'
+    ).run(newName, original.description, userId, original.tags);
+
+    const newId = Number(result.lastInsertRowid);
 
     const insertStep = db.prepare(`
       INSERT INTO skill_steps (parent_id, parent_type, step_order, step_name, step_type, ai_model, prompt_template, input_config, output_format, model_config, executor_config)

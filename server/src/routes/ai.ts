@@ -108,8 +108,11 @@ router.post('/validate', (req: Request, res: Response) => {
     const standardVars: string[] = [];
 
     const standardNames = [
-      'brand_voice', 'amazon_requirements', 'social_media_guidelines',
-      'image_style_guidelines', 'platform_requirements', 'tone_guidelines',
+      'brand_voice', 'company_voice', 'voice_guidelines',
+      'amazon_requirements', 'social_media_guidelines',
+      'image_style_guidelines', 'company_image',
+      'platform_requirements', 'company_platform',
+      'tone_guidelines', 'content_guidelines',
     ];
 
     for (const varName of variables) {

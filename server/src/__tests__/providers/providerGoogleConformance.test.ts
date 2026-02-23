@@ -56,6 +56,23 @@ describe('Google Provider Conformance', () => {
           ],
         },
       ]),
+      response: Promise.resolve({
+        functionCalls: () => [],
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  functionCall: {
+                    name: 'skill_execute',
+                    args: { skillId: 9 },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
     });
 
     (provider as any).client = {
@@ -88,11 +105,16 @@ describe('Google Provider Conformance', () => {
     };
 
     const events = await collect(provider, request);
-    expect(events).toEqual([
-      { type: 'text', text: 'Analyzing...' },
-      { type: 'tool_call', toolCall: { id: 'google-fc-1', name: 'skill_execute', args: { skillId: 9 } } },
-      { type: 'done' },
-    ]);
+    expect(events[0]).toEqual({ type: 'text', text: 'Analyzing...' });
+    expect(events[1]).toEqual({
+      type: 'tool_call',
+      toolCall: expect.objectContaining({
+        id: 'google-fc-1',
+        name: 'skill_execute',
+        args: { skillId: 9 },
+      }),
+    });
+    expect(events[2]).toEqual({ type: 'done' });
 
     expect(getGenerativeModelFn).toHaveBeenCalledTimes(1);
     const modelOptions = getGenerativeModelFn.mock.calls[0][0];
@@ -106,7 +128,7 @@ describe('Google Provider Conformance', () => {
     expect(callPayload.contents[0].parts[1]).toEqual({ inlineData: { mimeType: 'image/png', data: 'AAA' } });
     expect(callPayload.contents[1].role).toBe('model');
     expect(callPayload.contents[1].parts[1]).toEqual({
-      functionCall: { name: 'skill_search', args: { query: 'image style' } },
+      functionCall: { id: 'tc-prev', name: 'skill_search', args: { query: 'image style' } },
     });
     expect(callPayload.contents[2].role).toBe('user');
     expect(callPayload.contents[2].parts[0].functionResponse.name).toBe('skill_search');

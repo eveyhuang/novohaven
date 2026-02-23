@@ -8,12 +8,17 @@ import { useNotifications } from '../../context/NotificationContext';
 
 const STEP_OUTPUT_REF_REGEX = /^step_\d+_output(?:\..+)?$/i;
 const COMPANY_STANDARD_KEYS = [
+  'company_voice',
+  'company_platform',
+  'company_image',
+  'voice_guidelines',
   'brand_voice',
   'amazon_requirements',
   'image_style_guidelines',
   'social_media_guidelines',
   'platform_requirements',
   'tone_guidelines',
+  'content_guidelines',
 ];
 
 function isStepOutputReference(varName: string): boolean {

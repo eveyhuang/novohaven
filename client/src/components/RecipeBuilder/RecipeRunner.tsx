@@ -141,8 +141,9 @@ export function RecipeRunner() {
     const isStepOutputReference = (value: string): boolean => /^step_\d+_output(?:\..+)?$/i.test(String(value || '').trim());
 
     const standardNames = [
+      'company_voice', 'company_platform', 'company_image', 'voice_guidelines',
       'brand_voice', 'amazon_requirements', 'social_media_guidelines',
-      'image_style_guidelines', 'platform_requirements', 'tone_guidelines',
+      'image_style_guidelines', 'platform_requirements', 'tone_guidelines', 'content_guidelines',
     ];
 
     // First pass: collect all optional fields from input_configs
@@ -249,8 +250,9 @@ export function RecipeRunner() {
     const isStepOutputReference = (value: string): boolean => /^step_\d+_output(?:\..+)?$/i.test(String(value || '').trim());
 
     const standardNames = [
+      'company_voice', 'company_platform', 'company_image', 'voice_guidelines',
       'brand_voice', 'amazon_requirements', 'social_media_guidelines',
-      'image_style_guidelines', 'platform_requirements', 'tone_guidelines',
+      'image_style_guidelines', 'platform_requirements', 'tone_guidelines', 'content_guidelines',
     ];
 
     for (const step of localSteps) {

@@ -8,6 +8,11 @@ const router = Router();
 // Apply auth middleware to all routes
 router.use(authMiddleware);
 
+function parseStandardId(raw: string): number | null {
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 // GET /api/standards - List all standards
 router.get('/', (req: Request, res: Response) => {
   try {
@@ -30,33 +35,6 @@ router.get('/', (req: Request, res: Response) => {
     });
 
     res.json(parsedStandards);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET /api/standards/:id - Get single standard
-router.get('/:id', (req: Request, res: Response) => {
-  try {
-    const standardId = parseInt(req.params.id, 10);
-    const standard = queries.getStandardById(standardId) as CompanyStandard | undefined;
-
-    if (!standard) {
-      res.status(404).json({ error: 'Standard not found' });
-      return;
-    }
-
-    let parsedContent = {};
-    try {
-      parsedContent = JSON.parse(standard.content);
-    } catch {
-      parsedContent = { raw: standard.content };
-    }
-
-    res.json({
-      ...standard,
-      content: parsedContent,
-    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -138,7 +116,11 @@ router.post('/', (req: Request, res: Response) => {
 // PUT /api/standards/:id - Update standard
 router.put('/:id', (req: Request, res: Response) => {
   try {
-    const standardId = parseInt(req.params.id, 10);
+    const standardId = parseStandardId(req.params.id);
+    if (standardId === null) {
+      res.status(400).json({ error: 'Invalid standard id' });
+      return;
+    }
     const { name, content } = req.body;
 
     const existingStandard = queries.getStandardById(standardId) as CompanyStandard | undefined;
@@ -179,7 +161,11 @@ router.put('/:id', (req: Request, res: Response) => {
 // DELETE /api/standards/:id - Delete standard
 router.delete('/:id', (req: Request, res: Response) => {
   try {
-    const standardId = parseInt(req.params.id, 10);
+    const standardId = parseStandardId(req.params.id);
+    if (standardId === null) {
+      res.status(400).json({ error: 'Invalid standard id' });
+      return;
+    }
 
     const existingStandard = queries.getStandardById(standardId) as CompanyStandard | undefined;
     if (!existingStandard) {
@@ -198,7 +184,11 @@ router.delete('/:id', (req: Request, res: Response) => {
 // GET /api/standards/preview/:id - Preview how standard will be injected
 router.get('/preview/:id', (req: Request, res: Response) => {
   try {
-    const standardId = parseInt(req.params.id, 10);
+    const standardId = parseStandardId(req.params.id);
+    if (standardId === null) {
+      res.status(400).json({ error: 'Invalid standard id' });
+      return;
+    }
     const standard = queries.getStandardById(standardId) as CompanyStandard | undefined;
 
     if (!standard) {
@@ -263,6 +253,38 @@ router.get('/preview/:id', (req: Request, res: Response) => {
       standard_name: standard.name,
       standard_type: standard.standard_type,
       preview: preview.trim(),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/standards/:id - Get single standard
+router.get('/:id', (req: Request, res: Response) => {
+  try {
+    const standardId = parseStandardId(req.params.id);
+    if (standardId === null) {
+      res.status(400).json({ error: 'Invalid standard id' });
+      return;
+    }
+
+    const standard = queries.getStandardById(standardId) as CompanyStandard | undefined;
+
+    if (!standard) {
+      res.status(404).json({ error: 'Standard not found' });
+      return;
+    }
+
+    let parsedContent = {};
+    try {
+      parsedContent = JSON.parse(standard.content);
+    } catch {
+      parsedContent = { raw: standard.content };
+    }
+
+    res.json({
+      ...standard,
+      content: parsedContent,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

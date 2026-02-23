@@ -10,8 +10,9 @@ import ReactMarkdown from 'react-markdown';
 
 // System variables that shouldn't be treated as user inputs
 const SYSTEM_VARIABLES = [
+  'company_voice', 'company_platform', 'company_image', 'voice_guidelines',
   'brand_voice', 'amazon_requirements', 'image_style_guidelines',
-  'social_media_guidelines', 'platform_requirements', 'tone_guidelines'
+  'social_media_guidelines', 'platform_requirements', 'tone_guidelines', 'content_guidelines'
 ];
 
 // Extract user input variables from prompt template

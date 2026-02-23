@@ -49,12 +49,14 @@ const RESERVED_VARIABLES = new Set([
   'company_voice',
   'company_platform',
   'company_image',
+  'voice_guidelines',
   'brand_voice',
   'amazon_requirements',
   'social_media_guidelines',
   'image_style_guidelines',
   'platform_requirements',
   'tone_guidelines',
+  'content_guidelines',
 ]);
 
 const WORKFLOW_JSON_BLOCK_REGEX = /```workflow-json\s*\n?([\s\S]*?)\n?\s*```/i;

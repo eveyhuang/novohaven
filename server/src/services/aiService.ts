@@ -92,6 +92,14 @@ function getGoogleClient(): GoogleGenerativeAI {
   return googleClient;
 }
 
+function buildOpenAITokenParams(model: string, maxTokens: number): Record<string, number> {
+  // GPT-5 class models reject max_tokens and require max_completion_tokens.
+  if (/^gpt-5(?:$|[.-])/i.test(String(model || '').trim())) {
+    return { max_completion_tokens: maxTokens };
+  }
+  return { max_tokens: maxTokens };
+}
+
 // Get provider for a model
 export function getProviderForModel(modelId: string): AIProvider {
   const allModels = getAllKnownModels();
@@ -149,13 +157,14 @@ async function callOpenAI(
       messages = [{ role: 'user', content: messageContent }];
     }
 
-    const response = await client.chat.completions.create({
+    const requestBody: any = {
       model,
       messages,
       temperature: config.temperature ?? 0.7,
-      max_tokens: config.maxTokens ?? 2000,
+      ...buildOpenAITokenParams(model, config.maxTokens ?? 2000),
       top_p: config.topP ?? 1,
-    });
+    };
+    const response = await client.chat.completions.create(requestBody);
 
     const content = response.choices[0]?.message?.content || '';
     return {

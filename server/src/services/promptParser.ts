@@ -50,13 +50,17 @@ export function extractVariables(promptTemplate: string): ParsedVariable[] {
   return variables;
 }
 
-// Common company standard variable names
+// Common company standard variable names (legacy + new aliases)
 const COMPANY_STANDARD_VARIABLES = [
   'brand_voice',
+  'company_voice',
+  'voice_guidelines',
   'amazon_requirements',
   'social_media_guidelines',
   'image_style_guidelines',
+  'company_image',
   'platform_requirements',
+  'company_platform',
   'tone_guidelines',
   'content_guidelines',
 ];
@@ -82,10 +86,16 @@ function resolveCompanyStandard(varName: string, userId: number): string {
   // Map variable names to standard types and names
   const standardMappings: Record<string, { type: string; keywords: string[] }> = {
     brand_voice: { type: 'voice', keywords: ['voice', 'brand', 'tone'] },
+    company_voice: { type: 'voice', keywords: ['voice', 'brand', 'tone'] },
+    voice_guidelines: { type: 'voice', keywords: ['voice', 'brand', 'tone'] },
     amazon_requirements: { type: 'platform', keywords: ['amazon'] },
     social_media_guidelines: { type: 'platform', keywords: ['social', 'media', 'instagram', 'tiktok', 'facebook'] },
     image_style_guidelines: { type: 'image', keywords: ['image', 'photo', 'style'] },
+    company_image: { type: 'image', keywords: ['image', 'photo', 'style'] },
     platform_requirements: { type: 'platform', keywords: ['platform'] },
+    company_platform: { type: 'platform', keywords: ['platform'] },
+    tone_guidelines: { type: 'voice', keywords: ['tone', 'voice'] },
+    content_guidelines: { type: 'voice', keywords: ['content', 'guideline', 'voice'] },
   };
 
   // Find matching standard

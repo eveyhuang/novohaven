@@ -11,6 +11,7 @@
  * Uses PromptBuilder for context assembly and ToolExecutor for tool dispatch.
  */
 import Database from 'better-sqlite3';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { ChannelMessage, CompletionRequest, MessageAttachment, ProviderPlugin, ToolPlugin } from '../plugins/types';
@@ -21,6 +22,10 @@ import { ToolExecutor } from './ToolExecutor';
 
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, '../../data/novohaven.db');
 const AUTO_NEW_TASK_IDLE_SECONDS = 72 * 60 * 60;
+const INLINE_FILE_MAX_ATTACHMENTS = Math.max(1, Number(process.env.AGENT_INLINE_FILE_MAX_ATTACHMENTS || 3));
+const INLINE_FILE_MAX_BYTES = Math.max(16 * 1024, Number(process.env.AGENT_INLINE_FILE_MAX_BYTES || 256 * 1024));
+const INLINE_FILE_MAX_CHARS = Math.max(2000, Number(process.env.AGENT_INLINE_FILE_MAX_CHARS || 12000));
+const INLINE_OFFICE_EXTRACT_TIMEOUT_MS = Math.max(500, Number(process.env.AGENT_INLINE_OFFICE_EXTRACT_TIMEOUT_MS || 5000));
 
 interface PendingApproval {
   resolve: (result: { approved: boolean; data?: any }) => void;
@@ -210,6 +215,13 @@ export class AgentRunner {
       return;
     }
 
+    if (this.isHelpIntent(inboundText)) {
+      const helpMessage = this.buildHelpMessage(inboundText, session?.user_id || 1);
+      this.sendResponse(helpMessage);
+      this.persistAssistantMessage(helpMessage);
+      return;
+    }
+
     // If user explicitly mentions a workflow, pin execution to that workflow for this task segment.
     this.maybePinWorkflowFromUserText(inboundText);
 
@@ -227,8 +239,10 @@ export class AgentRunner {
     if (inboundAttachments?.length && messages.length > 0) {
       const lastMsg = messages[messages.length - 1];
       if (lastMsg.role === 'user') {
-        lastMsg.attachments = inboundAttachments
-          .filter(a => a.type === 'image')
+        const imageAttachments = inboundAttachments.filter((a) => this.isImageLikeAttachment(a));
+        const nonImageAttachments = inboundAttachments.filter((a) => !this.isImageLikeAttachment(a));
+
+        lastMsg.attachments = imageAttachments
           .map(a => {
             const url = a.url || '';
             // Case 1: still a data URL (fallback path or old format)
@@ -265,14 +279,12 @@ export class AgentRunner {
             };
           });
 
-        const nonImageAttachments = inboundAttachments
-          .filter(a => a.type !== 'image')
-          .map(a => a.name || 'attachment');
         if (nonImageAttachments.length > 0) {
-          const attachmentHint = `[Attached files: ${nonImageAttachments.join(', ')}]`;
-          lastMsg.content = lastMsg.content
-            ? `${lastMsg.content}\n\n${attachmentHint}`
-            : attachmentHint;
+          const attachmentNames = nonImageAttachments.map(a => a.name || 'attachment');
+          const attachmentHint = `[Attached files: ${attachmentNames.join(', ')}]`;
+          const inlineSections = this.buildInlineFileAttachmentSections(nonImageAttachments);
+          const pieces = [lastMsg.content, attachmentHint, ...inlineSections].filter(Boolean);
+          lastMsg.content = pieces.join('\n\n');
         }
       }
     }
@@ -516,10 +528,472 @@ export class AgentRunner {
     };
   }
 
+  private buildInlineFileAttachmentSections(
+    attachments: Array<{ type: string; url: string; name?: string; mimeType?: string }>
+  ): string[] {
+    const sections: string[] = [];
+    let inlinedCount = 0;
+
+    for (const attachment of attachments) {
+      if (inlinedCount >= INLINE_FILE_MAX_ATTACHMENTS) break;
+      if (!attachment || !attachment.url) continue;
+      if (this.isImageLikeAttachment(attachment)) continue;
+
+      const preview = this.readAttachmentPreview(attachment);
+      if (!preview) continue;
+
+      const fileLabel = attachment.name || path.basename(attachment.url) || `file_${inlinedCount + 1}`;
+      const mimeLabel = attachment.mimeType || 'application/octet-stream';
+      sections.push(
+        [
+          `[Attached file content: ${fileLabel} (${mimeLabel})]`,
+          '```text',
+          preview.text,
+          '```',
+          preview.truncated ? '[Content truncated for context window.]' : '',
+        ].filter(Boolean).join('\n')
+      );
+      inlinedCount += 1;
+    }
+
+    return sections;
+  }
+
+  private readAttachmentPreview(
+    attachment: { url: string; name?: string; mimeType?: string }
+  ): { text: string; truncated: boolean } | null {
+    const fromDataUrl = this.readTextFromDataUrl(attachment.url, attachment.mimeType, attachment.name);
+    if (fromDataUrl) return fromDataUrl;
+
+    const filePath = this.resolveUploadsPath(attachment.url);
+    if (!filePath) return null;
+
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) return null;
+      const ext = path.extname(String(attachment.name || filePath)).toLowerCase();
+
+      if (this.isOfficeDocumentExt(ext)) {
+        const extracted = this.extractOfficeDocumentText(filePath, ext);
+        if (extracted && extracted.trim()) {
+          const truncatedByBytes = stat.size > INLINE_FILE_MAX_BYTES;
+          return this.limitPreviewText(extracted.replace(/\u0000/g, ''), truncatedByBytes);
+        }
+      }
+
+      const bytesToRead = Math.min(stat.size, INLINE_FILE_MAX_BYTES);
+      const raw = fs.readFileSync(filePath);
+      const sliced = raw.subarray(0, bytesToRead);
+      if (!this.isTextLikeAttachment(attachment.mimeType, attachment.name || filePath)) {
+        return null;
+      }
+      const text = sliced.toString('utf8').replace(/\u0000/g, '');
+      const truncatedByBytes = stat.size > bytesToRead;
+      return this.limitPreviewText(text, truncatedByBytes);
+    } catch {
+      return null;
+    }
+  }
+
+  private readTextFromDataUrl(
+    source: string,
+    mimeType?: string,
+    name?: string
+  ): { text: string; truncated: boolean } | null {
+    const raw = String(source || '');
+    if (!raw.startsWith('data:')) return null;
+    const match = raw.match(/^data:([^;,]+)?(?:;base64)?,(.*)$/s);
+    if (!match) return null;
+    const detectedMime = (match[1] || mimeType || '').toLowerCase();
+    if (!this.isTextLikeAttachment(detectedMime, name || 'attachment')) return null;
+
+    const payload = match[2] || '';
+    const isBase64 = /;base64,/.test(raw.slice(0, raw.indexOf(',') + 1));
+    try {
+      const decoded = isBase64
+        ? Buffer.from(payload, 'base64').toString('utf8')
+        : decodeURIComponent(payload);
+      return this.limitPreviewText(decoded.replace(/\u0000/g, ''), false);
+    } catch {
+      return null;
+    }
+  }
+
+  private limitPreviewText(text: string, alreadyTruncated: boolean): { text: string; truncated: boolean } {
+    const normalized = String(text || '').trim();
+    if (!normalized) {
+      return { text: '[File is empty]', truncated: alreadyTruncated };
+    }
+    if (normalized.length <= INLINE_FILE_MAX_CHARS) {
+      return { text: normalized, truncated: alreadyTruncated };
+    }
+    return {
+      text: normalized.slice(0, INLINE_FILE_MAX_CHARS),
+      truncated: true,
+    };
+  }
+
+  private isTextLikeAttachment(mimeType: string | undefined, name: string): boolean {
+    const mime = String(mimeType || '').toLowerCase();
+    const ext = path.extname(String(name || '')).toLowerCase();
+    if (mime.startsWith('text/')) return true;
+    if (mime.includes('json') || mime.includes('csv') || mime.includes('xml') || mime.includes('yaml')) return true;
+    return new Set([
+      '.txt', '.md', '.csv', '.tsv', '.json', '.xml', '.yaml', '.yml', '.log', '.sql', '.py', '.js', '.ts', '.tsx', '.jsx',
+    ]).has(ext);
+  }
+
+  private isImageLikeAttachment(attachment: { type?: string; url?: string; name?: string; mimeType?: string }): boolean {
+    const mime = String(attachment?.mimeType || '').toLowerCase();
+    if (mime.startsWith('image/')) return true;
+
+    const url = String(attachment?.url || '');
+    const dataUrlMatch = url.match(/^data:([^;,]+)[;,]/i);
+    if (dataUrlMatch?.[1] && String(dataUrlMatch[1]).toLowerCase().startsWith('image/')) return true;
+
+    const ext = path.extname(String(attachment?.name || url)).toLowerCase();
+    if (new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.tif', '.svg']).has(ext)) {
+      return true;
+    }
+
+    return String(attachment?.type || '').toLowerCase() === 'image' && ext === '';
+  }
+
+  private isOfficeDocumentExt(ext: string): boolean {
+    return new Set(['.docx', '.pptx', '.xlsx']).has(String(ext || '').toLowerCase());
+  }
+
+  private extractOfficeDocumentText(filePath: string, ext: string): string | null {
+    const script = String.raw`import re, sys, zipfile, xml.etree.ElementTree as ET
+path = sys.argv[1]
+ext = (sys.argv[2] if len(sys.argv) > 2 else "").lower()
+MAX_CHARS = 80000
+
+def qname(tag):
+    return tag.split("}")[-1] if "}" in tag else tag
+
+def collect_docx(zf):
+    names = ["word/document.xml"] + sorted([n for n in zf.namelist() if n.startswith("word/header") or n.startswith("word/footer")])
+    parts = []
+    for name in names:
+        if name not in zf.namelist():
+            continue
+        root = ET.fromstring(zf.read(name))
+        chunk = []
+        for elem in root.iter():
+            t = qname(elem.tag)
+            if t == "t" and elem.text:
+                chunk.append(elem.text)
+            elif t in ("p", "br"):
+                chunk.append("\n")
+            elif t == "tab":
+                chunk.append("\t")
+        text = "".join(chunk)
+        if text.strip():
+            parts.append(text)
+    return "\n\n".join(parts)
+
+def collect_pptx(zf):
+    slide_names = sorted([n for n in zf.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")])
+    slides = []
+    for name in slide_names:
+        root = ET.fromstring(zf.read(name))
+        chunk = []
+        for elem in root.iter():
+            if qname(elem.tag) == "t" and elem.text:
+                chunk.append(elem.text)
+        text = "\n".join([c for c in chunk if c.strip()])
+        if text.strip():
+            slides.append(text)
+    return "\n\n".join(slides)
+
+def collect_xlsx(zf):
+    shared = []
+    if "xl/sharedStrings.xml" in zf.namelist():
+        root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+        for si in root.iter():
+            if qname(si.tag) == "t" and si.text is not None:
+                shared.append(si.text)
+
+    out_lines = []
+    sheet_names = sorted([n for n in zf.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")])
+    for sheet in sheet_names:
+        root = ET.fromstring(zf.read(sheet))
+        row_count = 0
+        for row in root.iter():
+            if qname(row.tag) != "row":
+                continue
+            row_count += 1
+            if row_count > 200:
+                break
+            vals = []
+            for c in row:
+                if qname(c.tag) != "c":
+                    continue
+                t = c.attrib.get("t")
+                v = None
+                for child in c:
+                    if qname(child.tag) == "v":
+                        v = child.text
+                        break
+                if v is None:
+                    vals.append("")
+                    continue
+                if t == "s":
+                    try:
+                        idx = int(v)
+                        vals.append(shared[idx] if 0 <= idx < len(shared) else v)
+                    except Exception:
+                        vals.append(v)
+                else:
+                    vals.append(v)
+            if any(x.strip() for x in vals):
+                out_lines.append("\t".join(vals))
+    return "\n".join(out_lines)
+
+try:
+    with zipfile.ZipFile(path) as zf:
+        if ext == ".docx":
+            text = collect_docx(zf)
+        elif ext == ".pptx":
+            text = collect_pptx(zf)
+        elif ext == ".xlsx":
+            text = collect_xlsx(zf)
+        else:
+            text = ""
+except Exception:
+    text = ""
+
+text = re.sub(r"\n{3,}", "\n\n", text).strip()
+if len(text) > MAX_CHARS:
+    text = text[:MAX_CHARS]
+sys.stdout.write(text)`;
+
+    try {
+      const output = execFileSync(
+        'python3',
+        ['-c', script, filePath, ext],
+        {
+          encoding: 'utf8',
+          timeout: INLINE_OFFICE_EXTRACT_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024,
+        }
+      );
+      return String(output || '').trim();
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveUploadsPath(url: string): string | null {
+    const raw = String(url || '').trim();
+    if (!raw.startsWith('/uploads/')) return null;
+    const rel = raw.replace(/^\/uploads\//, '');
+    const uploadsRoot = path.resolve(getUploadsDir());
+    const fullPath = path.resolve(path.join(uploadsRoot, rel));
+    if (!(fullPath === uploadsRoot || fullPath.startsWith(`${uploadsRoot}${path.sep}`))) return null;
+    return fullPath;
+  }
+
+  private isHelpIntent(text: string): boolean {
+    const raw = String(text || '').trim();
+    if (!raw) return false;
+
+    if (/^[\/\\]help(?:\s+.*)?$/i.test(raw)) return true;
+
+    const lowered = raw.toLowerCase();
+    const normalized = lowered.replace(/[?.!]/g, '').trim();
+
+    const exactMatches = new Set([
+      'help',
+      'what can you do',
+      'what do you do',
+      'show help',
+      'show commands',
+      'commands',
+      'capabilities',
+      '你会做什么',
+      '你能做什么',
+      '你可以做什么',
+      '帮助',
+      '功能',
+      '功能列表',
+    ]);
+    if (exactMatches.has(normalized)) return true;
+
+    const shortText = raw.length <= 80;
+    if (shortText) {
+      if (/what can you do/i.test(raw)) return true;
+      if (/what do you do/i.test(raw)) return true;
+      if (/你[能会可]做什么/.test(raw)) return true;
+      if (/有什么功能/.test(raw)) return true;
+      if (/帮助|命令/.test(raw)) return true;
+    }
+
+    return false;
+  }
+
+  private buildHelpMessage(userText: string, userId: number): string {
+    const lang = this.getSessionPreferredLanguage(userText);
+    const modelName = this.getCurrentDefaultModelName();
+    const workflows = this.getAvailableAssets('workflow', userId, 6);
+    const skills = this.getAvailableAssets('skill', userId, 6);
+
+    if (lang === 'zh') {
+      const workflowLines = workflows.items.length > 0
+        ? workflows.items.map((w) => `- ${w.name}：${this.oneLineDescription(w.description, '用于自动化多步骤任务执行。')}`).join('\n')
+        : '- 暂无可用工作流';
+      const skillLines = skills.items.length > 0
+        ? skills.items.map((s) => `- ${s.name}：${this.oneLineDescription(s.description, '用于完成特定单项能力。')}`).join('\n')
+        : '- 暂无可用技能';
+
+      return [
+        '我可以这样帮你：',
+        '- 普通对话问答与任务拆解',
+        '- 分析你上传的图片与文本文件（如 CSV/JSON/TXT）',
+        '- 调用系统里的技能/工作流执行多步骤任务',
+        '',
+        `当前底层模型：\`${modelName}\``,
+        '',
+        `可用工作流（${workflows.total}）：`,
+        workflowLines,
+        workflows.total > workflows.items.length ? `- 还有 ${workflows.total - workflows.items.length} 个工作流` : '',
+        '',
+        `可用技能（${skills.total}）：`,
+        skillLines,
+        skills.total > skills.items.length ? `- 还有 ${skills.total - skills.items.length} 个技能` : '',
+        '',
+        '命令：',
+        '- `/new` 开始一个新任务（清空当前任务上下文）',
+        '- `/help` 查看这条帮助',
+        '',
+        '你可以直接这样说：',
+        '- “分析这个CSV里的差评原因”',
+      ].filter(Boolean).join('\n');
+    }
+
+    const workflowLines = workflows.items.length > 0
+      ? workflows.items.map((w) => `- ${w.name}: ${this.oneLineDescription(w.description, 'Automates a multi-step task flow.')}`).join('\n')
+      : '- No active workflows';
+    const skillLines = skills.items.length > 0
+      ? skills.items.map((s) => `- ${s.name}: ${this.oneLineDescription(s.description, 'Handles a focused capability.')}`).join('\n')
+      : '- No active skills';
+
+    return [
+      'I can help with:',
+      '- Regular chat, Q&A, and task planning',
+      '- Analyzing uploaded images and text files (CSV/JSON/TXT)',
+      '- Running available skills/workflows for multi-step tasks',
+      '',
+      `Current model: \`${modelName}\``,
+      '',
+      `Available workflows (${workflows.total}):`,
+      workflowLines,
+      workflows.total > workflows.items.length ? `- Plus ${workflows.total - workflows.items.length} more workflows` : '',
+      '',
+      `Available skills (${skills.total}):`,
+      skillLines,
+      skills.total > skills.items.length ? `- Plus ${skills.total - skills.items.length} more skills` : '',
+      '',
+      'Commands:',
+      '- `/new` start a new task (reset current task context)',
+      '- `/help` show this help',
+      '',
+      'You can start with:',
+      '- "Analyze this CSV and summarize negative feedback themes."',
+    ].filter(Boolean).join('\n');
+  }
+
+  private detectLanguageFromText(text: string): 'zh' | 'en' | null {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+    if (/[\u4e00-\u9fff]/u.test(raw)) return 'zh';
+    const latinLetters = raw.match(/[A-Za-z]/g) || [];
+    if (latinLetters.length >= 3) return 'en';
+    return null;
+  }
+
+  private getSessionPreferredLanguage(currentText: string): 'zh' | 'en' {
+    const rows = this.db.prepare(
+      `SELECT content
+       FROM session_messages
+       WHERE session_id = ? AND role = 'user'
+       ORDER BY id DESC
+       LIMIT 80`
+    ).all(this.sessionId) as Array<{ content?: string }>;
+
+    for (const row of rows) {
+      const content = String(row?.content || '').trim();
+      if (!content) continue;
+      if (this.isCommandOnlyMessage(content)) continue;
+      const detected = this.detectLanguageFromText(content);
+      if (detected) return detected;
+    }
+
+    return this.detectLanguageFromText(currentText) || 'en';
+  }
+
+  private isCommandOnlyMessage(text: string): boolean {
+    const raw = String(text || '').trim();
+    if (!raw) return false;
+    if (/^[\/\\](new|help)(?:\s+.*)?$/i.test(raw)) return true;
+    if (/^new\s+task$/i.test(raw)) return true;
+    if (/^(新任务|重新开始|开始新任务|帮助|命令|功能列表)$/.test(raw)) return true;
+    return false;
+  }
+
+  private oneLineDescription(raw: string | undefined, fallback: string): string {
+    const text = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!text) return fallback;
+    const sentence = text.split(/[。.!?]/).map((s) => s.trim()).find(Boolean) || text;
+    return sentence.length > 90 ? `${sentence.slice(0, 90)}...` : sentence;
+  }
+
+  private getCurrentDefaultModelName(): string {
+    const row = this.db.prepare(
+      `SELECT ac.default_model
+       FROM sessions s
+       LEFT JOIN agent_configs ac ON ac.id = s.agent_config_id
+       WHERE s.id = ?
+       LIMIT 1`
+    ).get(this.sessionId) as { default_model?: string } | undefined;
+    return row?.default_model || 'gpt-5';
+  }
+
+  private getAvailableAssets(
+    assetType: 'skill' | 'workflow',
+    userId: number,
+    limit: number
+  ): { total: number; items: Array<{ name: string; description?: string }> } {
+    const table = assetType === 'workflow' ? 'workflows' : 'skills';
+
+    const totalRow = this.db.prepare(
+      `SELECT COUNT(1) AS total
+       FROM ${table}
+       WHERE status = 'active' AND (created_by = ? OR created_by IS NULL)`
+    ).get(userId) as { total?: number } | undefined;
+
+    const items = this.db.prepare(
+      `SELECT a.name, a.description
+       FROM ${table} a
+       WHERE a.status = 'active' AND (a.created_by = ? OR a.created_by IS NULL)
+       ORDER BY a.updated_at DESC, a.id DESC
+       LIMIT ?`
+    ).all(userId, limit) as Array<{ name?: string; description?: string | null }>;
+
+    return {
+      total: Number(totalRow?.total || 0),
+      items: items.map((item) => ({
+        name: String(item.name || `Unnamed ${assetType}`),
+        description: item.description ? String(item.description) : undefined,
+      })),
+    };
+  }
+
   private isNewTaskCommand(text: string): boolean {
     const normalized = String(text || '').trim().toLowerCase();
     if (!normalized) return false;
-    if (/^\/new(?:\s+.*)?$/.test(normalized)) return true;
+    if (/^[\/\\]new(?:\s+.*)?$/.test(normalized)) return true;
     if (/^new\s+task$/.test(normalized)) return true;
     if (/^(新任务|重新开始|开始新任务)$/.test(String(text || '').trim())) return true;
     return false;
@@ -553,8 +1027,7 @@ export class AgentRunner {
   }
 
   private buildNewTaskConfirmation(text: string): string {
-    const isChinese = /[\u4e00-\u9fff]/u.test(String(text || ''));
-    if (isChinese) {
+    if (this.getSessionPreferredLanguage(text) === 'zh') {
       return '已开始新任务。接下来请直接发送你的新需求。';
     }
     return 'Started a new task. Send your new request when ready.';

@@ -2,7 +2,7 @@ import { Request, Response, Router } from 'express';
 import {
   ChannelPlugin, PluginManifest, ChannelMessage, AgentResponse,
 } from '../../types';
-import { saveImageToDisk } from '../../../utils/uploadHelpers';
+import { saveAttachmentToDisk } from '../../../utils/uploadHelpers';
 
 // Store SSE connections by session ID
 const sseConnections = new Map<string, Response[]>();
@@ -43,27 +43,38 @@ class WebChannelPlugin implements ChannelPlugin {
 
     const channelId = sessionId || 'web-default';
 
-    // Save uploaded images to disk; return file URLs instead of base64
+    // Persist data-URL uploads to disk; normalize attachment type from MIME/name.
     const processedAttachments = attachments?.map((a: any, i: number) => {
-      if (a.type === 'image' && a.data && a.data.startsWith('data:')) {
+      const source = typeof a?.data === 'string'
+        ? a.data
+        : (typeof a?.url === 'string' ? a.url : '');
+      const inferredMime = this.inferMimeType(a);
+      const normalizedType = this.inferAttachmentType(a);
+
+      if (source && source.startsWith('data:')) {
         try {
-          const fileUrl = saveImageToDisk(a.data, a.mimeType || 'image/png', channelId, `upload-${i}`);
+          const fileUrl = saveAttachmentToDisk(
+            source,
+            inferredMime || 'application/octet-stream',
+            channelId,
+            a.name || `upload-${i}`
+          );
           return {
-            type: a.type || 'image',
+            type: normalizedType,
             url: fileUrl,
             name: a.name,
-            mimeType: a.mimeType,
+            mimeType: inferredMime || a.mimeType,
           };
         } catch (err) {
           console.error('[channel-web] Failed to save upload to disk:', err);
-          return { type: a.type, url: a.data, name: a.name, mimeType: a.mimeType };
+          return { type: normalizedType, url: source, name: a.name, mimeType: inferredMime || a.mimeType };
         }
       }
       return {
-        type: a.type || 'file',
-        url: a.data,
+        type: normalizedType,
+        url: source,
         name: a.name,
-        mimeType: a.mimeType,
+        mimeType: inferredMime || a.mimeType,
       };
     });
 
@@ -78,6 +89,23 @@ class WebChannelPlugin implements ChannelPlugin {
       metadata: { sessionId },
       timestamp: new Date(),
     };
+  }
+
+  private inferMimeType(attachment: any): string {
+    const explicit = String(attachment?.mimeType || '').trim();
+    if (explicit) return explicit;
+    const data = String(attachment?.data || attachment?.url || '');
+    const dataUrlMatch = data.match(/^data:([^;,]+)[;,]/i);
+    if (dataUrlMatch?.[1]) return dataUrlMatch[1];
+    return '';
+  }
+
+  private inferAttachmentType(attachment: any): 'image' | 'file' | 'audio' | 'video' {
+    const mime = this.inferMimeType(attachment).toLowerCase();
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime.startsWith('video/')) return 'video';
+    return 'file';
   }
 
   async sendOutbound(channelId: string, response: AgentResponse): Promise<void> {

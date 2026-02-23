@@ -113,14 +113,15 @@ class OpenAIProvider implements ProviderPlugin {
     }));
 
     try {
-      const stream = await this.client.chat.completions.create({
+      const requestBody: any = {
         model: request.model,
         messages,
-        max_tokens: request.maxTokens ?? 4096,
+        ...this.buildTokenParams(request.model, request.maxTokens ?? 4096),
         ...(request.temperature != null ? { temperature: request.temperature } : {}),
         ...(tools && tools.length > 0 ? { tools } : {}),
         stream: true,
-      });
+      };
+      const stream: any = await this.client.chat.completions.create(requestBody as any);
 
       // Track tool calls being assembled across deltas
       const toolCallAccum: Map<number, { id: string; name: string; args: string }> = new Map();
@@ -218,6 +219,18 @@ class OpenAIProvider implements ProviderPlugin {
     }
 
     return null;
+  }
+
+  private buildTokenParams(model: string, maxTokens: number): Record<string, number> {
+    // GPT-5 class models reject max_tokens and require max_completion_tokens.
+    if (this.requiresMaxCompletionTokens(model)) {
+      return { max_completion_tokens: maxTokens };
+    }
+    return { max_tokens: maxTokens };
+  }
+
+  private requiresMaxCompletionTokens(model: string): boolean {
+    return /^gpt-5(?:$|[.-])/i.test(String(model || '').trim());
   }
 }
 
