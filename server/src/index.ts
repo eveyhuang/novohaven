@@ -30,7 +30,7 @@ import { SessionManager } from './gateway/sessionManager';
 import { AgentSupervisor } from './gateway/agentSupervisor';
 import { pluginRegistry } from './plugins/registry';
 import { getUploadsDir } from './utils/uploadHelpers';
-import { accessCodeMiddleware } from './middleware/accessCode';
+
 
 // Load environment variables from server directory
 // This ensures .env is loaded whether running from project root or server directory
@@ -74,11 +74,6 @@ const uploadsDir = getUploadsDir();
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
-// Optional access-code protection for public deployments.
-// When ACCESS_CODE is configured, all API endpoints require a valid access token
-// except the unlock/status endpoints under /api/auth/access-code/* and /api/health.
-app.use('/api', accessCodeMiddleware);
-app.use('/channels/channel-web', accessCodeMiddleware);
 
 app.use('/api/executions', executionsRouter);
 app.use('/api/standards', standardsRouter);
