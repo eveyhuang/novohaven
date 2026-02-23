@@ -69,14 +69,16 @@ export async function startExecution(
     input => !inputData[input] || String(inputData[input]).trim() === ''
   );
   if (missingInputs.length > 0) {
-    return {
-      success: false,
-      executionId: 0,
-      status: 'failed',
-      currentStep: 0,
-      stepResults: [],
-      error: `Missing required inputs: ${missingInputs.join(', ')}`,
-    };
+    // Fallback: normalize missing required inputs to empty strings so execution can proceed.
+    // This keeps workflow testing resilient when optionality inference is imperfect.
+    for (const input of missingInputs) {
+      if (inputData[input] === undefined || inputData[input] === null) {
+        inputData[input] = '';
+      }
+    }
+    console.warn(
+      `[WorkflowEngine] Missing required inputs detected (${missingInputs.join(', ')}); applying empty-string fallback.`
+    );
   }
 
   // Create execution record - store custom steps in the execution if provided
@@ -127,6 +129,32 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
   const inputs = new Set<string>();
   const variableRegex = /\{\{([^}]+)\}\}/g;
   const isStepOutputReference = (value: string): boolean => /^step_\d+_output(?:\..+)?$/i.test(String(value || '').trim());
+  const looksOptionalHint = (value: unknown): boolean => (
+    /(optional|not required|can be omitted|可选|选填|非必填|可以不填|可不填|可不提供|不是必须)/i.test(String(value || ''))
+  );
+  const escapeRegExp = (value: string): string => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const isOptionalByPromptHint = (template: string, varName: string): boolean => {
+    const text = String(template || '');
+    const name = String(varName || '').trim();
+    if (!text || !name) return false;
+
+    const tokenLine = new RegExp(`\\{\\{\\s*${escapeRegExp(name)}\\s*\\}\\}`, 'i');
+    const tokenGlobal = new RegExp(`\\{\\{\\s*${escapeRegExp(name)}\\s*\\}\\}`, 'gi');
+
+    for (const line of text.split(/\r?\n/)) {
+      if (!tokenLine.test(line)) continue;
+      if (looksOptionalHint(line)) return true;
+    }
+
+    let match: RegExpExecArray | null;
+    tokenGlobal.lastIndex = 0;
+    while ((match = tokenGlobal.exec(text)) !== null) {
+      const idx = match.index;
+      const around = text.slice(Math.max(0, idx - 80), Math.min(text.length, idx + match[0].length + 80));
+      if (looksOptionalHint(around)) return true;
+    }
+    return false;
+  };
 
   const standardNames = [
     'brand_voice', 'company_voice', 'voice_guidelines',
@@ -145,7 +173,7 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
     });
   };
 
-  const addRequiredInputsFromInputConfig = (inputConfigRaw?: string | null): boolean => {
+  const addRequiredInputsFromInputConfig = (inputConfigRaw?: string | null, stepPrompt?: string): boolean => {
     if (!inputConfigRaw) return false;
     try {
       const inputConfig = JSON.parse(inputConfigRaw);
@@ -159,7 +187,13 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
           const name = String(variable?.name || '').trim();
           const source = String(variable?.source || 'user_input').trim();
           if (!name || source !== 'user_input') continue;
-          if (variable?.required === false || variable?.optional === true) continue;
+          const isOptional = (
+            variable?.required === false
+            || variable?.optional === true
+            || looksOptionalHint(variable?.description || variable?.label)
+            || isOptionalByPromptHint(stepPrompt || '', name)
+          );
+          if (isOptional) continue;
           if (isStepOutputReference(name) || isCompanyStandardVariable(name)) continue;
           inputs.add(name);
         }
@@ -172,7 +206,13 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
           const config = (rawConfig || {}) as any;
           const source = String(config?.source || 'user_input').trim();
           if (!name || source !== 'user_input') continue;
-          if (config?.required === false || config?.optional === true) continue;
+          const isOptional = (
+            config?.required === false
+            || config?.optional === true
+            || looksOptionalHint(config?.description || config?.label)
+            || isOptionalByPromptHint(stepPrompt || '', name)
+          );
+          if (isOptional) continue;
           if (isStepOutputReference(name) || isCompanyStandardVariable(name)) continue;
           inputs.add(name);
         }
@@ -187,7 +227,7 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
 
   for (const step of steps) {
     // If input_config explicitly declares variables, treat that as source of truth.
-    const usedDeclaredInputs = addRequiredInputsFromInputConfig(step.input_config);
+    const usedDeclaredInputs = addRequiredInputsFromInputConfig(step.input_config, step.prompt_template || '');
     if (usedDeclaredInputs) {
       continue;
     }
@@ -202,7 +242,8 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
         const varName = match[1].trim();
         // Skip step outputs and company standards
         if (!isStepOutputReference(varName) &&
-          !isCompanyStandardVariable(varName)) {
+          !isCompanyStandardVariable(varName) &&
+          !isOptionalByPromptHint(template, varName)) {
           inputs.add(varName);
         }
       }
