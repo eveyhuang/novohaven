@@ -219,6 +219,55 @@ describe('AIExecutor', () => {
       );
     });
 
+    test('does not fail on unresolved variables when optionality is hinted by description/prompt text', async () => {
+      mockStep.prompt_template = [
+        'Translate {{chinese_reply}} to business English.',
+        'Goal (optional): {{goal}}',
+        'Tone (optional): {{tone}}',
+        'Client message (optional): {{client_message}}',
+      ].join('\n');
+      mockStep.input_config = JSON.stringify({
+        variables: {
+          chinese_reply: { source: 'user_input', type: 'textarea', description: 'required' },
+          goal: { source: 'user_input', type: 'text', description: 'optional' },
+          tone: { source: 'user_input', type: 'text', description: 'optional' },
+          client_message: { source: 'user_input', type: 'textarea', description: 'optional' },
+        },
+      });
+      mockContext.userInputs = { chinese_reply: '价格不能再低了。' };
+
+      mockCompilePrompt.mockReturnValue({
+        compiledPrompt: 'Translate 价格不能再低了。 to business English.\nGoal (optional): [User input "goal" required]\nTone (optional): [User input "tone" required]\nClient message (optional): [User input "client_message" required]',
+        unresolvedVariables: ['goal', 'tone', 'client_message'],
+        images: [],
+      });
+
+      mockCallAI.mockResolvedValue({
+        success: true,
+        content: 'We’re already at our best price.',
+        model: 'gemini-3-flash-preview',
+      });
+
+      const result = await executor.execute(mockStep, mockContext);
+
+      expect(result.success).toBe(true);
+      expect(mockCallAI).toHaveBeenCalledWith(
+        'gpt-4o',
+        expect.not.stringContaining('[User input "goal" required]'),
+        expect.any(Object)
+      );
+      expect(mockCallAI).toHaveBeenCalledWith(
+        'gpt-4o',
+        expect.not.stringContaining('[User input "tone" required]'),
+        expect.any(Object)
+      );
+      expect(mockCallAI).toHaveBeenCalledWith(
+        'gpt-4o',
+        expect.not.stringContaining('[User input "client_message" required]'),
+        expect.any(Object)
+      );
+    });
+
     test('returns failure when AI call fails', async () => {
       mockCompilePrompt.mockReturnValue({
         compiledPrompt: 'compiled prompt',

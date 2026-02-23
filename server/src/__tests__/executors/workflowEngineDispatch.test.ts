@@ -302,7 +302,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
       expect(result.error).toBe('Recipe has no steps');
     });
 
-    test('does not require company standard variables from AI prompts', async () => {
+    test('applies empty-string fallback for missing AI prompt variables while skipping company standards', async () => {
       const customSteps: RecipeStep[] = [{
         id: 11,
         recipe_id: 1,
@@ -316,11 +316,16 @@ describe('Workflow Engine - Executor Dispatch', () => {
       }];
 
       const result = await startExecution(1, 1, {}, customSteps);
+      await flushBackgroundExecution();
 
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Missing required inputs: topic');
-      expect(result.error).not.toContain('company_voice');
-      expect(result.error).not.toContain('company_platform');
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+      const createExecutionPayload = mockQueries.createExecution.mock.calls[0]?.[2];
+      expect(typeof createExecutionPayload).toBe('string');
+      const parsedPayload = JSON.parse(createExecutionPayload);
+      expect(parsedPayload.topic).toBe('');
+      expect(parsedPayload.company_voice).toBeUndefined();
+      expect(parsedPayload.company_platform).toBeUndefined();
     });
 
     test('AI steps respect declared required inputs from input_config', async () => {
@@ -350,7 +355,40 @@ describe('Workflow Engine - Executor Dispatch', () => {
       expect(result.error).toBeUndefined();
     });
 
-    test('does not require company standard variables declared in non-AI input_config', async () => {
+    test('AI steps treat optional-hint variables as non-required even without optional flags', async () => {
+      const customSteps: RecipeStep[] = [{
+        id: 15,
+        recipe_id: 1,
+        step_order: 1,
+        step_name: 'Business Translator',
+        step_type: 'ai',
+        ai_model: 'gemini-3-flash-preview',
+        prompt_template: [
+          'Translate to concise business English.',
+          'Chinese reply: {{chinese_reply}}',
+          'Goal (optional): {{goal}}',
+          'Tone (optional): {{tone}}',
+          'Client context (optional): {{client_message}}',
+        ].join('\n'),
+        output_format: 'text',
+        input_config: JSON.stringify({
+          variables: {
+            chinese_reply: { source: 'user_input', type: 'textarea', description: 'required' },
+            goal: { source: 'user_input', type: 'text', description: 'optional' },
+            tone: { source: 'user_input', type: 'text', description: 'optional' },
+            client_message: { source: 'user_input', type: 'textarea', description: 'optional' },
+          },
+        }),
+        created_at: '2024-01-01',
+      }];
+
+      const result = await startExecution(1, 1, { chinese_reply: '请理解，我们已经给到最低价格。' }, customSteps);
+
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+    });
+
+    test('applies empty-string fallback for missing non-AI input_config variables while skipping company standards', async () => {
       const customSteps: RecipeStep[] = [{
         id: 12,
         recipe_id: 1,
@@ -371,10 +409,15 @@ describe('Workflow Engine - Executor Dispatch', () => {
       }];
 
       const result = await startExecution(1, 1, {}, customSteps);
+      await flushBackgroundExecution();
 
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Missing required inputs: source_url');
-      expect(result.error).not.toContain('company_voice');
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+      const createExecutionPayload = mockQueries.createExecution.mock.calls[0]?.[2];
+      expect(typeof createExecutionPayload).toBe('string');
+      const parsedPayload = JSON.parse(createExecutionPayload);
+      expect(parsedPayload.source_url).toBe('');
+      expect(parsedPayload.company_voice).toBeUndefined();
     });
 
     test('passes correct context to executor including emitter', async () => {

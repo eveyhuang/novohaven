@@ -162,13 +162,20 @@ export class AIExecutor implements StepExecutor {
 
       const required = new Set<string>();
       const vars = (parsed as any).variables;
+      const promptTemplate = String(step.prompt_template || '');
 
       if (Array.isArray(vars)) {
         for (const variable of vars) {
           const name = String(variable?.name || '').trim();
           const source = String(variable?.source || 'user_input').trim();
           if (!name || source !== 'user_input') continue;
-          if (variable?.required === false || variable?.optional === true) continue;
+          const isOptional = (
+            variable?.required === false
+            || variable?.optional === true
+            || this.looksOptionalHint(variable?.description || variable?.label)
+            || this.isOptionalByPromptHint(promptTemplate, name)
+          );
+          if (isOptional) continue;
           required.add(name);
         }
         return required;
@@ -180,7 +187,13 @@ export class AIExecutor implements StepExecutor {
           const config = (rawConfig || {}) as any;
           const source = String(config?.source || 'user_input').trim();
           if (!name || source !== 'user_input') continue;
-          if (config?.required === false || config?.optional === true) continue;
+          const isOptional = (
+            config?.required === false
+            || config?.optional === true
+            || this.looksOptionalHint(config?.description || config?.label)
+            || this.isOptionalByPromptHint(promptTemplate, name)
+          );
+          if (isOptional) continue;
           required.add(name);
         }
         return required;
@@ -190,5 +203,37 @@ export class AIExecutor implements StepExecutor {
     } catch {
       return null;
     }
+  }
+
+  private looksOptionalHint(value: unknown): boolean {
+    return /(optional|not required|can be omitted|可选|选填|非必填|可以不填|可不填|可不提供|不是必须)/i.test(String(value || ''));
+  }
+
+  private escapeRegExp(value: string): string {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private isOptionalByPromptHint(template: string, varName: string): boolean {
+    const text = String(template || '');
+    const name = String(varName || '').trim();
+    if (!text || !name) return false;
+
+    const tokenLine = new RegExp(`\\{\\{\\s*${this.escapeRegExp(name)}\\s*\\}\\}`, 'i');
+    const tokenGlobal = new RegExp(`\\{\\{\\s*${this.escapeRegExp(name)}\\s*\\}\\}`, 'gi');
+
+    for (const line of text.split(/\r?\n/)) {
+      if (!tokenLine.test(line)) continue;
+      if (this.looksOptionalHint(line)) return true;
+    }
+
+    let match: RegExpExecArray | null;
+    tokenGlobal.lastIndex = 0;
+    while ((match = tokenGlobal.exec(text)) !== null) {
+      const idx = match.index;
+      const around = text.slice(Math.max(0, idx - 80), Math.min(text.length, idx + match[0].length + 80));
+      if (this.looksOptionalHint(around)) return true;
+    }
+
+    return false;
   }
 }
