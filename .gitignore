@@ -10,6 +10,10 @@ server/node_modules/
 # testing
 coverage/
 **/__tests__/
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
 
 # build outputs
 /build

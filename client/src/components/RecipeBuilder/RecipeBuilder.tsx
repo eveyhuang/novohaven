@@ -8,12 +8,17 @@ import { useNotifications } from '../../context/NotificationContext';
 
 const STEP_OUTPUT_REF_REGEX = /^step_\d+_output(?:\..+)?$/i;
 const COMPANY_STANDARD_KEYS = [
+  'company_voice',
+  'company_platform',
+  'company_image',
+  'voice_guidelines',
   'brand_voice',
   'amazon_requirements',
   'image_style_guidelines',
   'social_media_guidelines',
   'platform_requirements',
   'tone_guidelines',
+  'content_guidelines',
 ];
 
 function isStepOutputReference(varName: string): boolean {
@@ -693,14 +698,14 @@ export function RecipeBuilder() {
       <Modal
         isOpen={showStepSelector}
         onClose={() => setShowStepSelector(false)}
-        title="Select Skill Step"
+        title={t('selectTemplateStep')}
         size="lg"
       >
-        <p className="text-sm text-secondary-600 mb-4">Choose a skill step to add into this workflow.</p>
+        <p className="text-sm text-secondary-600 mb-4">{t('selectTemplateDesc')}</p>
         <div className="space-y-2 max-h-96 overflow-y-auto">
           {availableSkills.length === 0 ? (
             <p className="text-secondary-600 text-center py-4">
-              No skills available. Create a skill first.
+              {t('noTemplatesAvailable')}
             </p>
           ) : (
             availableSkills.map((skill) => {

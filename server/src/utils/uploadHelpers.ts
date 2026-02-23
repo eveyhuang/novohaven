@@ -55,6 +55,49 @@ export function saveImageToDisk(
   return `/uploads/session-${sessionId}/${safeName}`;
 }
 
+/**
+ * Saves an arbitrary attachment payload (data URL or raw base64) to disk and returns a public URL.
+ */
+export function saveAttachmentToDisk(
+  payload: string,
+  mimeType: string,
+  sessionId: string,
+  filename: string
+): string {
+  let data = String(payload || '');
+  let resolvedMime = String(mimeType || '').trim();
+  let isBase64 = true;
+
+  if (data.startsWith('data:')) {
+    const m = data.match(/^data:([^;,]+)?(?:;(base64))?,(.*)$/s);
+    if (m) {
+      if (m[1]) resolvedMime = m[1];
+      isBase64 = m[2] === 'base64';
+      data = m[3] || '';
+    }
+  }
+
+  const providedExt = path.extname(filename || '').toLowerCase();
+  const ext = providedExt || mimeTypeToExt(resolvedMime || 'application/octet-stream');
+  const baseName = safeBaseName(filename || 'attachment');
+  const safeName = `${baseName}-${Date.now()}${ext}`;
+  const dir = getSessionUploadsDir(sessionId);
+  const filePath = path.join(dir, safeName);
+
+  const buffer = isBase64
+    ? Buffer.from(data, 'base64')
+    : Buffer.from(decodeURIComponent(data), 'utf8');
+  fs.writeFileSync(filePath, buffer);
+  return `/uploads/session-${sessionId}/${safeName}`;
+}
+
+function safeBaseName(filename: string): string {
+  const parsed = path.parse(String(filename || 'attachment'));
+  const name = parsed.name || 'attachment';
+  const cleaned = name.replace(/[^\w.\-() ]+/g, '_').trim();
+  return cleaned.slice(0, 120) || 'attachment';
+}
+
 function mimeTypeToExt(mimeType: string): string {
   const map: Record<string, string> = {
     'image/png': '.png',
@@ -63,8 +106,20 @@ function mimeTypeToExt(mimeType: string): string {
     'image/gif': '.gif',
     'image/webp': '.webp',
     'image/svg+xml': '.svg',
+    'text/plain': '.txt',
+    'text/markdown': '.md',
+    'text/csv': '.csv',
+    'application/json': '.json',
+    'application/xml': '.xml',
+    'text/xml': '.xml',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/vnd.ms-excel': '.xls',
+    'application/msword': '.doc',
+    'application/vnd.ms-powerpoint': '.ppt',
   };
-  return map[mimeType] || '.bin';
+  return map[String(mimeType || '').toLowerCase()] || '.bin';
 }
 
 /**

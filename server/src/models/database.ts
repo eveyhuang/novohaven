@@ -205,6 +205,23 @@ export function initializeDatabase(): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS session_execution_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      task_boundary_id INTEGER,
+      asset_type TEXT NOT NULL CHECK(asset_type IN ('skill','workflow')),
+      asset_id INTEGER NOT NULL,
+      asset_name TEXT,
+      execution_id INTEGER,
+      execution_status TEXT,
+      inputs_json TEXT NOT NULL DEFAULT '{}',
+      step_outputs_json TEXT NOT NULL DEFAULT '[]',
+      latest_output_summary TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS agent_configs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -245,6 +262,18 @@ export function initializeDatabase(): void {
     )
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_execution_memory_session ON session_execution_memory(session_id, created_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_execution_memory_asset ON session_execution_memory(session_id, asset_type, asset_id, created_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_execution_memory_execution ON session_execution_memory(execution_id)');
+
   // Insert mock user for MVP and get the user ID
   let mockUserId: number;
   const mockUser = getOne("SELECT id FROM users WHERE email = 'demo@novohaven.com'");
@@ -271,8 +300,20 @@ export function initializeDatabase(): void {
   // Run migrations (recipes → skills/workflows)
   runMigrations();
 
-  // Seed default skills
-  seedDefaultSkills(mockUserId);
+  // Seed default skills/workflows only once per seed version.
+  // We claim a one-time seed lock row so concurrent initializers do not reseed.
+  const defaultSkillsSeedKey = 'default_assets_seeded_v2';
+  const seedClaim = run(
+    'INSERT OR IGNORE INTO app_metadata (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+    [defaultSkillsSeedKey, 'claimed']
+  );
+  if (seedClaim.changes > 0) {
+    seedDefaultAssets(mockUserId);
+    run(
+      'UPDATE app_metadata SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?',
+      ['completed', defaultSkillsSeedKey]
+    );
+  }
 
   // Seed default agent config
   const defaultAgent = getOne('SELECT id FROM agent_configs WHERE name = ?', ['Default Agent']);
@@ -280,17 +321,17 @@ export function initializeDatabase(): void {
     run(`INSERT INTO agent_configs (name, description, default_model, system_prompt, allowed_tools, allowed_channels)
       VALUES (?, ?, ?, ?, ?, ?)`,
       ['Default Agent', 'Default agent configuration',
-       'claude-sonnet-4-5-20250929',
+       'gpt-5',
        'You are a helpful AI assistant with access to skills and workflows. When a user asks you to do something, search for relevant skills first. If a skill exists, use it. If not, help the user directly or propose creating a new skill.',
        '["tool-browser","tool-bash","tool-fileops","tool-skill-manager"]',
        '["channel-web","channel-lark"]']);
   }
 
-  // Update default agent config to use Claude Sonnet 4.5
+  // Update default agent config to use GPT-5
   const currentDefault = getOne('SELECT default_model FROM agent_configs WHERE name = ?', ['Default Agent']);
-  if (currentDefault && currentDefault.default_model !== 'claude-sonnet-4-5-20250929') {
-    run('UPDATE agent_configs SET default_model = ? WHERE name = ?', ['claude-sonnet-4-5-20250929', 'Default Agent']);
-    console.log('[Database] Updated default agent model to claude-sonnet-4-5-20250929');
+  if (currentDefault && currentDefault.default_model !== 'gpt-5') {
+    run('UPDATE agent_configs SET default_model = ? WHERE name = ?', ['gpt-5', 'Default Agent']);
+    console.log('[Database] Updated default agent model to gpt-5');
   }
 }
 
@@ -382,65 +423,87 @@ function runMigrations(): void {
   console.log('[Migration] recipes → skills/workflows migration complete');
 }
 
-// Helper function to upsert a default skill
-function upsertSkillDefinition(
+type SeedStepDefinition = {
+  step_order: number;
+  step_name: string;
+  step_type?: string;
+  ai_model: string | null;
+  prompt_template: string | null;
+  output_format: string;
+  model_config?: string | null;
+  input_config?: string | null;
+  executor_config?: string | null;
+};
+
+function upsertGraphDefinition(
+  parentType: 'skill' | 'workflow',
   name: string,
   description: string,
   createdBy: number,
-  steps: Array<{
-    step_order: number;
-    step_name: string;
-    step_type?: string;
-    ai_model: string | null;
-    prompt_template: string | null;
-    output_format: string;
-    model_config: string | null;
-    input_config: string | null;
-    api_config?: string | null;
-  }>
+  steps: SeedStepDefinition[]
 ): number {
   if (!db) throw new Error('Database not initialized');
 
-  const existing = getOne('SELECT id FROM skills WHERE name = ? AND created_by = ?', [name, createdBy]);
-  let skillId: number;
+  const parentTable = parentType === 'skill' ? 'skills' : 'workflows';
+  const existing = getOne(`SELECT id FROM ${parentTable} WHERE name = ? AND created_by = ?`, [name, createdBy]);
+  let parentId: number;
 
   if (existing) {
-    skillId = existing.id;
+    parentId = existing.id;
     run(`
-      UPDATE skills
+      UPDATE ${parentTable}
       SET description = ?, status = 'active', updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `, [description, skillId]);
-    run("DELETE FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill'", [skillId]);
+    `, [description, parentId]);
+    run('DELETE FROM skill_steps WHERE parent_id = ? AND parent_type = ?', [parentId, parentType]);
   } else {
     const result = run(`
-      INSERT INTO skills (name, description, created_by, status, tags)
+      INSERT INTO ${parentTable} (name, description, created_by, status, tags)
       VALUES (?, ?, ?, 'active', '[]')
     `, [name, description, createdBy]);
-    skillId = result.lastInsertRowid;
+    parentId = result.lastInsertRowid;
   }
 
-  steps.forEach(step => {
+  steps.forEach((step) => {
     run(`
       INSERT INTO skill_steps (
         parent_id, parent_type, step_order, step_name, step_type, ai_model, prompt_template, output_format, model_config, input_config, executor_config
       )
-      VALUES (?, 'skill', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-      skillId,
+      parentId,
+      parentType,
       step.step_order,
       step.step_name,
       step.step_type || 'ai',
       step.ai_model,
       step.prompt_template,
       step.output_format,
-      step.model_config,
-      step.input_config,
-      '{}'
+      step.model_config ?? '{}',
+      step.input_config ?? '{}',
+      step.executor_config ?? '{}',
     ]);
   });
 
-  return skillId;
+  return parentId;
+}
+
+function upsertSkillDefinition(
+  name: string,
+  description: string,
+  createdBy: number,
+  steps: SeedStepDefinition[]
+): number {
+  return upsertGraphDefinition('skill', name, description, createdBy, steps);
+}
+
+function upsertWorkflowDefinition(
+  name: string,
+  description: string,
+  createdBy: number,
+  steps: SeedStepDefinition[]
+): number {
+  return upsertGraphDefinition('workflow', name, description, createdBy, steps);
 }
 
 // Helper function to upsert company standards
@@ -471,27 +534,10 @@ function upsertCompanyStandard(
   }
 }
 
-function seedDefaultSkills(mockUserId: number): void {
+function seedDefaultAssets(mockUserId: number): void {
   if (!db) return;
 
-  // Skill: Image Style Analyzer
-  const imageStyleAnalyzerInputConfig = JSON.stringify({
-    variables: {
-      reference_image: {
-        type: 'image',
-        label: 'Reference Image',
-        description: 'Upload a sample image to analyze its photographic style and technical settings',
-        maxImageSize: 10
-      }
-    }
-  });
-
-  const imageStyleAnalyzerSteps = [
-    {
-      step_order: 1,
-      step_name: 'Image Style Analysis',
-      ai_model: 'gemini-3-pro-image-preview',
-      prompt_template: `Analyze this reference image in comprehensive detail for photography reproduction and AI image generation purposes.
+  const imageStyleAnalysisPrompt = `Analyze this reference image in comprehensive detail for photography reproduction and AI image generation purposes.
 
 {{reference_image}}
 
@@ -562,10 +608,31 @@ Provide a detailed technical analysis in the following JSON structure:
   }
 }
 
-Be specific and technical. Include real-world imperfections that give the image character. The analysis should enable someone to recreate this exact photographic style.`,
+Be specific and technical. Include real-world imperfections that give the image character. The analysis should enable someone to recreate this exact photographic style.`;
+
+  // Skills
+  const imageStyleAnalyzerInputConfig = JSON.stringify({
+    variables: {
+      reference_image: {
+        type: 'image',
+        label: 'Reference Image',
+        description: 'Upload a sample image to analyze its photographic style and technical settings',
+        maxImageSize: 10
+      }
+    }
+  });
+
+  const imageStyleAnalyzerSteps = [
+    {
+      step_order: 1,
+      step_name: 'Image Style Analysis',
+      step_type: 'ai',
+      ai_model: 'gemini-3-pro-image-preview',
+      prompt_template: imageStyleAnalysisPrompt,
       output_format: 'json',
       model_config: JSON.stringify({ temperature: 0.3, maxTokens: 4000 }),
-      input_config: imageStyleAnalyzerInputConfig
+      input_config: imageStyleAnalyzerInputConfig,
+      executor_config: '{}',
     }
   ];
 
@@ -576,163 +643,257 @@ Be specific and technical. Include real-world imperfections that give the image 
     imageStyleAnalyzerSteps
   );
 
-  // Skill: Product Image Generator
-
-  const imageGenInputConfig = JSON.stringify({
+  const modifyImagesInputConfig = JSON.stringify({
     variables: {
-      product_images: {
+      reference_images: {
         type: 'image',
-        label: 'Product Reference Images',
-        description: 'Upload one or more product images to use as reference for AI generation',
-        maxImageSize: 10
+        placeholder: '',
+        description: '',
       },
-      requirements: {
-        type: 'file',
-        label: 'Image Requirements (JSON)',
-        description: 'Upload a JSON file with detailed requirements for the generated images',
-        acceptedFileTypes: ['.json']
-      }
     }
   });
 
-  const imageGenSteps = [
+  const modifyImagesSteps = [
     {
       step_order: 1,
       step_name: 'Generate Product Images',
+      step_type: 'ai',
       ai_model: 'gemini-3-pro-image-preview',
-      prompt_template: `Generate a professional product photography image based on the following specifications.
+      prompt_template: 'Generate an image that modifies or combines this reference image {{reference_images}} based on these requirements: {{requirement}}',
+      output_format: 'image',
+      model_config: JSON.stringify({ numberOfImages: 1, aspectRatio: '1:1', temperature: 0.1 }),
+      input_config: modifyImagesInputConfig,
+      executor_config: '{}',
+    }
+  ];
+
+  upsertSkillDefinition(
+    'Modify Images',
+    'Modify provided images using AI based on detailed requirements',
+    mockUserId,
+    modifyImagesSteps
+  );
+
+  // Workflows
+  const generatedProductImagesStep2Prompt = `Generate a professional product photography image based on the following specifications.
 
 Product Reference: {{product_images}}
 
-Requirements from JSON specification:
-{{requirements}}
+If there are multiple product images uploaded, combine them into one single image that is aligned with the style analysis from step 1:
+{{step_1_output}}
 
 Create a high-quality, professional product image that:
 1. Showcases the product clearly and attractively
-2. Follows the style, lighting, and composition requirements specified
+2. Follows the style, lighting, and composition requirements specified in the style analysis
 3. Has a clean, professional background as specified
 4. Maintains accurate product details and proportions
 5. Is suitable for e-commerce and marketing use
 
-Generate the image according to the exact specifications provided in the requirements.`,
-      output_format: 'image',
-      model_config: JSON.stringify({ numberOfImages: 1, aspectRatio: '1:1' }),
-      input_config: imageGenInputConfig
-    }
-  ];
+Generate the image according to the analyzed style and product reference.`;
 
-  upsertSkillDefinition(
-    'Product Image Generator',
-    'Generate professional product images using AI based on reference images and detailed requirements',
-    mockUserId,
-    imageGenSteps
-  );
-
-  // Skill: Review Analyzer
-
-  const reviewAnalyzerInputConfig = JSON.stringify({
-    variables: {
-      review_data: {
-        type: 'file',
-        label: 'Product Review Data (JSON or CSV)',
-        description: 'Upload the JSON or CSV file output of review data',
-        acceptedFileTypes: ['.json', '.csv']
-      },
-      analysis_focus: {
-        type: 'textarea',
-        label: 'Analysis Focus (Optional)',
-        description: 'Specify particular aspects to focus on (e.g., "durability", "ease of use", "value for money")',
-        optional: true
-      }
-    }
-  });
-
-  const reviewAnalyzerSteps = [
+  const generatedProductImagesSteps: SeedStepDefinition[] = [
     {
       step_order: 1,
-      step_name: 'Analyze Product Reviews & Generate Summary',
-      ai_model: 'gpt-4o',
-      prompt_template: `You are a market research analyst specializing in consumer feedback analysis. Perform a comprehensive analysis of the following product reviews.
-
-REVIEW DATA:
-{{review_data}}
-
-
-TASK:
-Perform a complete analysis in the following stages:
-
-1. **Categorize Reviews**: For each review, identify:
-   - Primary theme (e.g., "Quality", "Value", "Usability", "Design", "Customer Service", "Durability", "Performance")
-   - Secondary themes if applicable
-   - Specific features or aspects mentioned
-   - Emotional tone (frustrated, satisfied, delighted, disappointed, neutral)
-   - Sentiment (positive/neutral/negative)
-
-2. **Analyze Positive Reviews** (ratings 4-5): Identify:
-   - Top praised features with mention counts and representative quotes
-   - Unexpected delights that surprised customers
-   - Common use cases and satisfaction levels
-   - Competitive advantages when compared to alternatives
-   - Emotional triggers that create strong positive responses
-
-3. **Analyze Negative Reviews** (ratings 1-2): Identify:
-   - Critical issues with severity levels and impact
-   - Unmet expectations and gaps
-   - Requested features with frequency and potential impact
-   - Quality concerns with typical timeframes
-   - Competitive disadvantages
-
-4. **Generate Executive Summary**: Synthesize all findings into a comprehensive markdown report.
-
-OUTPUT FORMAT (Markdown):
-
-# Product Review Analysis - Executive Summary
-
-## Overview
-- Total Reviews Analyzed: [number]
-- Overall Sentiment: [positive/mixed/negative]
-- Average Rating: [X.X/5]
-
-## What Customers Love (Top 5)
-1. **[Feature/Aspect]** - [Brief explanation with supporting data]
-2. **[Feature/Aspect]** - [Brief explanation with supporting data]
-3. **[Feature/Aspect]** - [Brief explanation with supporting data]
-...
-
-## Critical Pain Points (Top 5)
-1. **[Issue]** - [Brief explanation with severity and frequency]
-2. **[Issue]** - [Brief explanation with severity and frequency]
-3. **[Issue]** - [Brief explanation with severity and frequency]
-...
-
-
-## Feature Wishlist (Top 3-5 Customer Requests)
-1. [Feature] - Requested by X% of reviewers
-2. [Feature] - Requested by X% of reviewers
-3. [Feature] - Requested by X% of reviewers
-
-## Competitive Positioning
-- **Strengths vs Competition:** [List]
-- **Weaknesses vs Competition:** [List]
-
-## Key Quotes
-
-### Positive
-> "[Quote]" - [Rating] stars
-
-### Negative
-> "[Quote]" - [Rating] stars`,
-      output_format: 'markdown',
-      model_config: JSON.stringify({ temperature: 0.0, maxTokens: 12000 }),
-      input_config: reviewAnalyzerInputConfig
-    }
+      step_name: 'Image Style Analysis',
+      step_type: 'ai',
+      ai_model: 'gemini-3-pro-image-preview',
+      prompt_template: imageStyleAnalysisPrompt,
+      output_format: 'json',
+      model_config: JSON.stringify({ temperature: 0.3, maxTokens: 4000 }),
+      input_config: imageStyleAnalyzerInputConfig,
+      executor_config: '{}',
+    },
+    {
+      step_order: 2,
+      step_name: 'Generate Product Images',
+      step_type: 'ai',
+      ai_model: 'gemini-3-pro-image-preview',
+      prompt_template: generatedProductImagesStep2Prompt,
+      output_format: 'image',
+      model_config: JSON.stringify({ numberOfImages: 1, aspectRatio: '1:1', temperature: 0.5 }),
+      input_config: JSON.stringify({
+        variables: {
+          product_images: {
+            type: 'image',
+            label: 'Product Reference Images',
+            description: 'Upload one or more product images to use as reference for AI generation',
+            maxImageSize: 10,
+          },
+        },
+      }),
+      executor_config: '{}',
+    },
   ];
 
-  upsertSkillDefinition(
-    'Product Review Analyzer',
-    'Perform qualitative analysis on product reviews to understand customer sentiment, pain points, and feature preferences',
+  upsertWorkflowDefinition(
+    '生成产品图片',
+    'AI先分析用户提供的样本图, 再按照分析结果，把用户提供的图片生成类似样本的新图片。',
     mockUserId,
-    reviewAnalyzerSteps
+    generatedProductImagesSteps
+  );
+
+  const reviewMergeScript = `import sys
+import json
+import csv
+import io
+
+def process():
+    input_data = json.load(sys.stdin)
+    files_input = input_data.get('review_files', [])
+
+    # 兼容处理：如果是字符串（测试输入），转为列表格式
+    if isinstance(files_input, str):
+        files = [{'content': files_input}]
+    else:
+        files = files_input
+
+    positive_reviews = []
+    negative_reviews = []
+
+    for file_info in files:
+        content = file_info.get('content', '')
+        if not content: continue
+
+        f = io.StringIO(content)
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            # 匹配常见的列名，增加对测试数据的支持
+            text = row.get('Comment') or row.get('review_body') or row.get('review_text') or row.get('content') or row.get('评论内容')
+            rating_str = row.get('Rating') or row.get('star_rating') or row.get('rating') or row.get('score') or row.get('评分')
+
+            if not text or not rating_str:
+                continue
+
+            try:
+                rating = float(rating_str)
+                if rating >= 5:
+                    positive_reviews.append(text.strip())
+                elif rating <= 3:
+                    negative_reviews.append(text.strip())
+            except:
+                continue
+
+    # 限制样本数量防止超出Token限制
+    output = {
+        "pos": positive_reviews[:50],
+        "neg": negative_reviews[:50]
+    }
+    print(json.dumps(output))
+
+process()`;
+
+  const ecommerceReviewAnalysisPrompt = `你是一名资深市场分析专家。请根据以下评论数据进行深度动机分析：
+
+### 【5星评论内容】（用于提炼购买动机）：
+{{step_1_output.pos}}
+
+### 【1-3星评论内容】（用于提炼购买顾虑与退货原因）：
+{{step_1_output.neg}}
+
+### 任务要求：
+1. 从5星评论中提炼真实的【购买动机】。
+2. 从1-3星评论中提炼【购买顾虑】（用户下单前后的担忧）和【退货原因】（导致最终不满的核心因素）。
+3. 总结提炼用户最关注的【关注点】。
+4. 每一条分析结论必须紧跟对应的【评论原文摘录】作为证据。
+
+### 输出格式：
+请严格按以下JSON数组格式输出，不要包含任何Markdown代码块标签：
+[
+  {"category": "购买动机", "insight": "观点描述", "excerpt": "评论原文摘录"},
+  {"category": "购买顾虑", "insight": "观点描述", "excerpt": "评论原文摘录"},
+  {"category": "退货原因", "insight": "观点描述", "excerpt": "评论原文摘录"}
+]`;
+
+  const reviewCsvScript = `import sys
+import json
+import csv
+import io
+
+def generate_csv():
+    try:
+        input_data = json.load(sys.stdin)
+        # 获取AI输出，可能是列表也可能是字符串化的JSON
+        analysis_results = input_data.get('step_2_output', [])
+
+        if isinstance(analysis_results, str):
+            analysis_results = json.loads(analysis_results)
+
+        output = io.StringIO()
+        fieldnames = ["category", "insight", "excerpt"]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+
+        if isinstance(analysis_results, list):
+            for row in analysis_results:
+                if isinstance(row, dict):
+                    # 确保只写入定义的字段，防止KeyError
+                    filtered_row = {k: row.get(k, "") for k in fieldnames}
+                    writer.writerow(filtered_row)
+
+        # 输出CSV字符串内容
+        print(output.getvalue())
+    except Exception as e:
+        # 发生错误时输出错误信息，便于调试
+        print(f"Error generating CSV: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+
+generate_csv()`;
+
+  const ecommerceReviewWorkflowSteps: SeedStepDefinition[] = [
+    {
+      step_order: 1,
+      step_name: '合并与过滤评论数据',
+      step_type: 'script',
+      ai_model: null,
+      prompt_template: '',
+      output_format: 'file',
+      model_config: '{}',
+      input_config: '{}',
+      executor_config: JSON.stringify({
+        runtime: 'python3',
+        script: reviewMergeScript,
+        timeout: 30000,
+      }),
+    },
+    {
+      step_order: 2,
+      step_name: 'AI 动机与原因分析',
+      step_type: 'ai',
+      ai_model: 'gemini-3-pro-preview',
+      prompt_template: ecommerceReviewAnalysisPrompt,
+      output_format: 'text',
+      model_config: JSON.stringify({ temperature: 0.3 }),
+      input_config: '{}',
+      executor_config: JSON.stringify({
+        ai_model: 'gpt-4o',
+        prompt_template: ecommerceReviewAnalysisPrompt,
+        output_format: 'json',
+        temperature: 0.3,
+      }),
+    },
+    {
+      step_order: 3,
+      step_name: '生成CSV分析报告',
+      step_type: 'script',
+      ai_model: null,
+      prompt_template: '',
+      output_format: 'file',
+      model_config: '{}',
+      input_config: '{}',
+      executor_config: JSON.stringify({
+        runtime: 'python3',
+        script: reviewCsvScript,
+        timeout: 10000,
+      }),
+    },
+  ];
+
+  upsertWorkflowDefinition(
+    '电商评论动机分析',
+    '上传一个或多个产品评价CSV，自动分析5星与低分评论，提炼购买动机、弃购原因及退货诱因，并生成带原文摘录的CSV报告。',
+    mockUserId,
+    ecommerceReviewWorkflowSteps
   );
 
   // Insert/update sample company standards

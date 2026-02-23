@@ -26,7 +26,7 @@ interface DraftDetail {
 }
 
 export function DraftList() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +46,7 @@ export function DraftList() {
       const data = await api.getSkillDrafts();
       setDrafts(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to load drafts');
+      setError(err.message || t('failedToLoadDrafts'));
     } finally {
       setIsLoading(false);
     }
@@ -66,7 +66,7 @@ export function DraftList() {
       const data = await api.getSkillDraft(draft.id);
       setDetail(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to load draft details');
+      setError(err.message || t('failedToLoadDraftDetails'));
       setExpandedId(null);
     } finally {
       setDetailLoading(false);
@@ -84,7 +84,7 @@ export function DraftList() {
         setDetail(null);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to approve draft');
+      setError(err.message || t('failedToApproveDraft'));
     } finally {
       setActionLoading(null);
     }
@@ -101,7 +101,7 @@ export function DraftList() {
         setDetail(null);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to reject draft');
+      setError(err.message || t('failedToRejectDraft'));
     } finally {
       setActionLoading(null);
     }
@@ -119,9 +119,9 @@ export function DraftList() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-secondary-900">Skill Draft Review</h1>
+        <h1 className="text-2xl font-bold text-secondary-900">{t('skillDraftReview')}</h1>
         <p className="text-secondary-600 mt-1">
-          Review and approve agent-proposed skill and workflow changes
+          {t('skillDraftReviewSubtitle')}
         </p>
       </div>
 
@@ -135,7 +135,7 @@ export function DraftList() {
         <Card>
           <CardBody className="text-center py-12">
             <p className="text-secondary-600">
-              No pending drafts to review.
+              {t('noPendingDrafts')}
             </p>
           </CardBody>
         </Card>
@@ -146,19 +146,19 @@ export function DraftList() {
               <thead>
                 <tr className="border-b border-secondary-200 bg-secondary-50">
                   <th className="px-6 py-3 text-xs font-semibold text-secondary-500 uppercase tracking-wider">
-                    Name
+                    {t('name')}
                   </th>
                   <th className="px-6 py-3 text-xs font-semibold text-secondary-500 uppercase tracking-wider">
-                    Type
+                    {t('type')}
                   </th>
                   <th className="px-6 py-3 text-xs font-semibold text-secondary-500 uppercase tracking-wider">
-                    Change Summary
+                    {t('changeSummary')}
                   </th>
                   <th className="px-6 py-3 text-xs font-semibold text-secondary-500 uppercase tracking-wider">
-                    Created
+                    {t('created')}
                   </th>
                   <th className="px-6 py-3 text-xs font-semibold text-secondary-500 uppercase tracking-wider text-right">
-                    Actions
+                    {t('actions')}
                   </th>
                 </tr>
               </thead>
@@ -183,14 +183,14 @@ export function DraftList() {
                               : 'bg-secondary-100 text-secondary-700'
                           }`}
                         >
-                          {draft.skill_type}
+                          {draft.skill_type === 'skill' ? t('skill') : t('workflow')}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-sm text-secondary-600 max-w-xs truncate">
                         {draft.change_summary}
                       </td>
                       <td className="px-6 py-4 text-sm text-secondary-500 whitespace-nowrap">
-                        {formatDate(draft.created_at)}
+                        {formatDate(draft.created_at, language)}
                       </td>
                       <td className="px-6 py-4 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end space-x-2">
@@ -201,7 +201,7 @@ export function DraftList() {
                             isLoading={actionLoading === draft.id}
                             disabled={actionLoading === draft.id}
                           >
-                            Approve
+                            {t('approve')}
                           </Button>
                           <Button
                             size="sm"
@@ -210,7 +210,7 @@ export function DraftList() {
                             isLoading={actionLoading === draft.id}
                             disabled={actionLoading === draft.id}
                           >
-                            Reject
+                            {t('reject')}
                           </Button>
                         </div>
                       </td>
@@ -225,7 +225,7 @@ export function DraftList() {
                               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600"></div>
                             </div>
                           ) : detail ? (
-                            <DraftDetailView detail={detail} />
+                            <DraftDetailView detail={detail} t={t} />
                           ) : null}
                         </td>
                       </tr>
@@ -241,9 +241,10 @@ export function DraftList() {
   );
 }
 
-function DraftDetailView({ detail }: { detail: DraftDetail }) {
+function DraftDetailView({ detail, t }: { detail: DraftDetail; t: (key: any) => string }) {
   const { draft, original } = detail;
   const hasOriginal = original !== null;
+  const typeLabel = draft.skill_type === 'skill' ? t('skill') : t('workflow');
 
   return (
     <div className="space-y-6">
@@ -253,16 +254,16 @@ function DraftDetailView({ detail }: { detail: DraftDetail }) {
           {/* Original */}
           <div>
             <h3 className="text-sm font-semibold text-secondary-500 uppercase tracking-wider mb-3">
-              Original
+              {t('original')}
             </h3>
             <div className="bg-white rounded-lg border border-secondary-200 p-4 space-y-3">
               <div>
-                <span className="text-xs text-secondary-400">Name</span>
+                <span className="text-xs text-secondary-400">{t('name')}</span>
                 <p className="text-sm text-secondary-900">{original!.name}</p>
               </div>
               <div>
-                <span className="text-xs text-secondary-400">Steps</span>
-                <StepList steps={original!.steps} />
+                <span className="text-xs text-secondary-400">{t('stepsLabel')}</span>
+                <StepList steps={original!.steps} t={t} />
               </div>
             </div>
           </div>
@@ -270,16 +271,16 @@ function DraftDetailView({ detail }: { detail: DraftDetail }) {
           {/* Proposed */}
           <div>
             <h3 className="text-sm font-semibold text-green-600 uppercase tracking-wider mb-3">
-              Proposed Changes
+              {t('proposedChanges')}
             </h3>
             <div className="bg-white rounded-lg border border-green-200 p-4 space-y-3">
               <div>
-                <span className="text-xs text-secondary-400">Name</span>
+                <span className="text-xs text-secondary-400">{t('name')}</span>
                 <p className="text-sm text-secondary-900">{draft.name}</p>
               </div>
               <div>
-                <span className="text-xs text-secondary-400">Steps</span>
-                <StepList steps={draft.steps} />
+                <span className="text-xs text-secondary-400">{t('stepsLabel')}</span>
+                <StepList steps={draft.steps} t={t} />
               </div>
             </div>
           </div>
@@ -287,20 +288,20 @@ function DraftDetailView({ detail }: { detail: DraftDetail }) {
       ) : (
         <div>
           <h3 className="text-sm font-semibold text-green-600 uppercase tracking-wider mb-3">
-            New {draft.skill_type}
+            {t('newItemType')} {typeLabel}
           </h3>
           <div className="bg-white rounded-lg border border-green-200 p-4 space-y-3">
             <div>
-              <span className="text-xs text-secondary-400">Name</span>
+              <span className="text-xs text-secondary-400">{t('name')}</span>
               <p className="text-sm text-secondary-900">{draft.name}</p>
             </div>
             <div>
-              <span className="text-xs text-secondary-400">Change Summary</span>
+              <span className="text-xs text-secondary-400">{t('changeSummary')}</span>
               <p className="text-sm text-secondary-700">{draft.change_summary}</p>
             </div>
             <div>
-              <span className="text-xs text-secondary-400">Steps</span>
-              <StepList steps={draft.steps} />
+              <span className="text-xs text-secondary-400">{t('stepsLabel')}</span>
+              <StepList steps={draft.steps} t={t} />
             </div>
           </div>
         </div>
@@ -309,9 +310,9 @@ function DraftDetailView({ detail }: { detail: DraftDetail }) {
   );
 }
 
-function StepList({ steps }: { steps: DraftStep[] }) {
+function StepList({ steps, t }: { steps: DraftStep[]; t: (key: any) => string }) {
   if (!steps || steps.length === 0) {
-    return <p className="text-sm text-secondary-400 italic mt-1">No steps</p>;
+    return <p className="text-sm text-secondary-400 italic mt-1">{t('noSteps')}</p>;
   }
 
   return (
@@ -340,20 +341,22 @@ function StepList({ steps }: { steps: DraftStep[] }) {
   );
 }
 
-function formatDate(dateString: string): string {
+function formatDate(dateString: string, language: 'en' | 'zh'): string {
   const date = new Date(dateString);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
+  const locale = language === 'zh' ? 'zh-CN' : 'en-US';
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
 
   if (diff < 60000) {
-    return 'Just now';
+    return rtf.format(0, 'minute');
   } else if (diff < 3600000) {
     const mins = Math.floor(diff / 60000);
-    return `${mins} minute${mins > 1 ? 's' : ''} ago`;
+    return rtf.format(-mins, 'minute');
   } else if (diff < 86400000) {
     const hours = Math.floor(diff / 3600000);
-    return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+    return rtf.format(-hours, 'hour');
   } else {
-    return date.toLocaleDateString();
+    return date.toLocaleDateString(locale);
   }
 }

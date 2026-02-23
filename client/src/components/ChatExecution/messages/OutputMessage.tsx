@@ -18,6 +18,30 @@ const OutputMessage: React.FC<OutputMessageProps> = ({ message }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const looksLikeCsv = (content: string): boolean => {
+    const text = String(content || '').trim();
+    if (!text) return false;
+    if (text.startsWith('{') || text.startsWith('[')) return false;
+    const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    if (lines.length < 2) return false;
+    return lines[0].includes(',') && lines[1].includes(',');
+  };
+
+  const handleDownload = () => {
+    const isCsv = looksLikeCsv(message.content);
+    const ext = isCsv ? 'csv' : (isJson ? 'json' : 'txt');
+    const mime = isCsv ? 'text/csv' : (isJson ? 'application/json' : 'text/plain');
+    const blob = new Blob([message.content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `execution-${message.executionId}-step-${message.stepOrder}-output.${ext}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex justify-start">
       <div className="max-w-[90%] w-full bg-white border border-secondary-200 rounded-lg shadow-sm overflow-hidden">
@@ -26,12 +50,20 @@ const OutputMessage: React.FC<OutputMessageProps> = ({ message }) => {
           <span className="text-xs font-medium text-secondary-500">
             Output{message.metadata?.model ? ` (${message.metadata.model})` : ''}
           </span>
-          <button
-            onClick={handleCopy}
-            className="text-xs text-secondary-400 hover:text-secondary-600 transition-colors"
-          >
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleCopy}
+              className="text-xs text-secondary-400 hover:text-secondary-600 transition-colors"
+            >
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+            <button
+              onClick={handleDownload}
+              className="text-xs text-secondary-400 hover:text-secondary-600 transition-colors"
+            >
+              Download
+            </button>
+          </div>
         </div>
 
         {/* Content */}

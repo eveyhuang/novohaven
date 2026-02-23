@@ -55,6 +55,11 @@ jest.mock('../../services/executionEvents', () => ({
 import { startExecution, approveStep, retryStep } from '../../services/workflowEngine';
 import { RecipeStep, StepExecution, WorkflowExecution } from '../../types';
 
+async function flushBackgroundExecution(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 describe('Workflow Engine - Executor Dispatch', () => {
   const mockAIExecutor = {
     type: 'ai',
@@ -125,6 +130,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
 
     test('dispatches to the correct executor based on step_type', async () => {
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       expect(mockGetExecutor).toHaveBeenCalledWith('ai');
       expect(mockExecute).toHaveBeenCalled();
@@ -138,6 +144,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
       mockQueries.getStepsByRecipeId.mockReturnValue(unknownSteps);
 
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       // First tries 'unknown_type', gets undefined, then falls back to 'ai'
       expect(mockGetExecutor).toHaveBeenCalledWith('unknown_type');
@@ -152,6 +159,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
       mockQueries.getStepsByRecipeId.mockReturnValue(noTypeSteps);
 
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       // Should default to 'ai' when step_type is falsy
       expect(mockGetExecutor).toHaveBeenCalledWith('ai');
@@ -159,16 +167,19 @@ describe('Workflow Engine - Executor Dispatch', () => {
 
     test('AI steps auto-approve and complete execution', async () => {
       const result = await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
-      // AI steps auto-approve — should call approveStepExecution
+      // startExecution now returns immediately and runs in background
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('running');
+      // AI steps auto-approve in background
       expect(mockQueries.approveStepExecution).toHaveBeenCalledWith(true, 'completed', 1);
-      // After auto-approve, no more pending steps → execution completes
-      expect(result.status).toBe('completed');
       expect(mockQueries.completeExecution).toHaveBeenCalledWith('completed', 100);
     });
 
     test('emits step-start event before executing', async () => {
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       const stepStartCall = mockCreateMessage.mock.calls.find(
         (call: any[]) => call[0].type === 'step-start'
@@ -179,6 +190,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
 
     test('emits step-output event after successful execution', async () => {
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       const stepOutputCall = mockCreateMessage.mock.calls.find(
         (call: any[]) => call[0].type === 'step-output'
@@ -189,6 +201,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
 
     test('emits step-approved event for auto-run steps', async () => {
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       const approvedCall = mockCreateMessage.mock.calls.find(
         (call: any[]) => call[0].type === 'step-approved'
@@ -199,6 +212,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
 
     test('emits execution-complete when all steps done', async () => {
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       const completeCall = mockCreateMessage.mock.calls.find(
         (call: any[]) => call[0].type === 'execution-complete'
@@ -214,9 +228,10 @@ describe('Workflow Engine - Executor Dispatch', () => {
       });
 
       const result = await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Model overloaded');
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('running');
       expect(mockQueries.setStepExecutionError).toHaveBeenCalledWith(
         'failed',
         'Model overloaded',
@@ -232,6 +247,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
       });
 
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       const errorCall = mockCreateMessage.mock.calls.find(
         (call: any[]) => call[0].type === 'step-error'
@@ -244,9 +260,10 @@ describe('Workflow Engine - Executor Dispatch', () => {
       mockExecute.mockRejectedValue(new Error('Connection timeout'));
 
       const result = await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Connection timeout');
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('running');
       expect(mockQueries.setStepExecutionError).toHaveBeenCalledWith(
         'failed',
         'Connection timeout',
@@ -264,6 +281,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
       });
 
       await startExecution(1, 1, { input: 'test' });
+      await flushBackgroundExecution();
 
       const storedOutput = mockQueries.updateStepExecution.mock.calls.find(
         (call: any[]) => call[0] === 'completed'
@@ -284,8 +302,57 @@ describe('Workflow Engine - Executor Dispatch', () => {
       expect(result.error).toBe('Recipe has no steps');
     });
 
+    test('does not require company standard variables from AI prompts', async () => {
+      const customSteps: RecipeStep[] = [{
+        id: 11,
+        recipe_id: 1,
+        step_order: 1,
+        step_name: 'AI Step',
+        step_type: 'ai',
+        ai_model: 'gpt-4o',
+        prompt_template: 'Use {{company_voice}} and {{company_platform}} to analyze {{topic}}',
+        output_format: 'text',
+        created_at: '2024-01-01',
+      }];
+
+      const result = await startExecution(1, 1, {}, customSteps);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Missing required inputs: topic');
+      expect(result.error).not.toContain('company_voice');
+      expect(result.error).not.toContain('company_platform');
+    });
+
+    test('does not require company standard variables declared in non-AI input_config', async () => {
+      const customSteps: RecipeStep[] = [{
+        id: 12,
+        recipe_id: 1,
+        step_order: 1,
+        step_name: 'Browser Step',
+        step_type: 'browser',
+        ai_model: '',
+        prompt_template: '',
+        output_format: 'json',
+        input_config: JSON.stringify({
+          variables: {
+            company_voice: { source: 'user_input', required: true },
+            source_url: { source: 'user_input', required: true },
+          },
+        }),
+        executor_config: JSON.stringify({ startUrl: '{{source_url}}' }),
+        created_at: '2024-01-01',
+      }];
+
+      const result = await startExecution(1, 1, {}, customSteps);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Missing required inputs: source_url');
+      expect(result.error).not.toContain('company_voice');
+    });
+
     test('passes correct context to executor including emitter', async () => {
       await startExecution(1, 1, { input: 'test_value' });
+      await flushBackgroundExecution();
 
       expect(mockExecute).toHaveBeenCalledWith(
         steps[0],
@@ -320,7 +387,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
     beforeEach(() => {
       mockGetExecutor.mockImplementation((type: string) => {
         if (type === 'ai') return mockAIExecutor;
-        if (type === 'scraping') return mockScrapingExecutor;
+        if (type === 'browser') return mockScrapingExecutor;
         return undefined;
       });
 
@@ -349,16 +416,18 @@ describe('Workflow Engine - Executor Dispatch', () => {
 
     test('dispatches scraping steps to ScrapingExecutor', async () => {
       await startExecution(1, 1, { product_urls: 'https://amazon.com/p1' });
+      await flushBackgroundExecution();
 
-      expect(mockGetExecutor).toHaveBeenCalledWith('scraping');
+      expect(mockGetExecutor).toHaveBeenCalledWith('browser');
       expect(mockScrapingExecutor.execute).toHaveBeenCalled();
       expect(mockAIExecutor.execute).not.toHaveBeenCalled();
     });
 
     test('scraping steps pause for review (do NOT auto-approve)', async () => {
       const result = await startExecution(1, 1, { product_urls: 'https://amazon.com/p1' });
+      await flushBackgroundExecution();
 
-      expect(result.status).toBe('paused');
+      expect(result.status).toBe('running');
       // Should set awaiting_review, not completed
       expect(mockQueries.updateStepExecution).toHaveBeenCalledWith(
         'awaiting_review',
@@ -373,6 +442,7 @@ describe('Workflow Engine - Executor Dispatch', () => {
 
     test('scraping steps emit action-required event', async () => {
       await startExecution(1, 1, { product_urls: 'https://amazon.com/p1' });
+      await flushBackgroundExecution();
 
       const actionCall = mockCreateMessage.mock.calls.find(
         (call: any[]) => call[0].type === 'action-required'

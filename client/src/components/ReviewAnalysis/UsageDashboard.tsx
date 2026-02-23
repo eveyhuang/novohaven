@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { UsageStats, UsageHistoryItem, BillingReport } from '../../types';
+import { useLanguage } from '../../context/LanguageContext';
 
 interface UsageDashboardProps {
   showBilling?: boolean;
@@ -11,6 +12,7 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
   showBilling = true,
   compact = false,
 }) => {
+  const { t } = useLanguage();
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [history, setHistory] = useState<UsageHistoryItem[]>([]);
   const [billing, setBilling] = useState<BillingReport | null>(null);
@@ -35,7 +37,7 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
       setHistory(historyData);
       setBilling(billingData);
     } catch (err: any) {
-      setError(err.message || 'Failed to load usage data');
+      setError(err.message || t('failedToLoadUsageData'));
     } finally {
       setIsLoading(false);
     }
@@ -46,7 +48,7 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
       <div className="bg-white rounded-lg shadow-sm border border-secondary-200 p-6">
         <div className="flex items-center justify-center py-8">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-          <span className="ml-3 text-secondary-600">Loading usage data...</span>
+          <span className="ml-3 text-secondary-600">{t('loadingUsageData')}</span>
         </div>
       </div>
     );
@@ -56,13 +58,13 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
     return (
       <div className="bg-white rounded-lg shadow-sm border border-secondary-200 p-6">
         <div className="text-center py-8">
-          <div className="text-red-500 mb-2">Failed to load usage data</div>
+          <div className="text-red-500 mb-2">{t('failedToLoadUsageData')}</div>
           <div className="text-secondary-600 text-sm mb-4">{error}</div>
           <button
             onClick={loadData}
             className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
           >
-            Retry
+            {t('retry')}
           </button>
         </div>
       </div>
@@ -72,25 +74,25 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
   if (compact) {
     return (
       <div className="bg-white rounded-lg shadow-sm border border-secondary-200 p-4">
-        <h3 className="text-sm font-semibold text-secondary-900 mb-3">API Usage</h3>
+        <h3 className="text-sm font-semibold text-secondary-900 mb-3">{t('usage')}</h3>
         <div className="grid grid-cols-3 gap-3">
           <div className="text-center">
             <div className="text-xl font-bold text-secondary-900">
               {stats?.total_requests || 0}
             </div>
-            <div className="text-xs text-secondary-500">Total Requests</div>
+            <div className="text-xs text-secondary-500">{t('totalRequests')}</div>
           </div>
           <div className="text-center">
             <div className="text-xl font-bold text-secondary-900">
               {stats?.total_records || 0}
             </div>
-            <div className="text-xs text-secondary-500">Records Fetched</div>
+            <div className="text-xs text-secondary-500">{t('recordsFetched')}</div>
           </div>
           <div className="text-center">
             <div className="text-xl font-bold text-primary-600">
               ${billing?.estimatedCost?.toFixed(2) || '0.00'}
             </div>
-            <div className="text-xs text-secondary-500">Est. Cost</div>
+            <div className="text-xs text-secondary-500">{t('estimatedCostShort')}</div>
           </div>
         </div>
       </div>
@@ -102,12 +104,12 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
       {/* Header */}
       <div className="p-4 border-b border-secondary-200">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-secondary-900">Usage Dashboard</h2>
+          <h2 className="text-lg font-semibold text-secondary-900">{t('usageDashboard')}</h2>
           <button
             onClick={loadData}
             className="text-sm text-primary-600 hover:text-primary-700"
           >
-            Refresh
+            {t('refresh')}
           </button>
         </div>
 
@@ -121,7 +123,7 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
                 : 'border-transparent text-secondary-600 hover:text-secondary-900'
             }`}
           >
-            Overview
+            {t('overview')}
           </button>
           <button
             onClick={() => setActiveTab('history')}
@@ -131,7 +133,7 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
                 : 'border-transparent text-secondary-600 hover:text-secondary-900'
             }`}
           >
-            History
+            {t('history')}
           </button>
         </div>
       </div>
@@ -142,32 +144,32 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
           <div className="space-y-6">
             {/* Period Stats */}
             <div>
-              <h3 className="text-sm font-medium text-secondary-700 mb-3">Usage by Period</h3>
+              <h3 className="text-sm font-medium text-secondary-700 mb-3">{t('usageByPeriod')}</h3>
               <div className="grid grid-cols-3 gap-4">
                 <div className="bg-secondary-50 rounded-lg p-4">
                   <div className="text-3xl font-bold text-secondary-900">
                     {stats?.by_period.today || 0}
                   </div>
-                  <div className="text-sm text-secondary-600">Today</div>
+                  <div className="text-sm text-secondary-600">{t('today')}</div>
                 </div>
                 <div className="bg-secondary-50 rounded-lg p-4">
                   <div className="text-3xl font-bold text-secondary-900">
                     {stats?.by_period.this_week || 0}
                   </div>
-                  <div className="text-sm text-secondary-600">This Week</div>
+                  <div className="text-sm text-secondary-600">{t('thisWeek')}</div>
                 </div>
                 <div className="bg-secondary-50 rounded-lg p-4">
                   <div className="text-3xl font-bold text-secondary-900">
                     {stats?.by_period.this_month || 0}
                   </div>
-                  <div className="text-sm text-secondary-600">This Month</div>
+                  <div className="text-sm text-secondary-600">{t('thisMonth')}</div>
                 </div>
               </div>
             </div>
 
             {/* Service Breakdown */}
             <div>
-              <h3 className="text-sm font-medium text-secondary-700 mb-3">Usage by Service</h3>
+              <h3 className="text-sm font-medium text-secondary-700 mb-3">{t('usageByService')}</h3>
               {stats?.by_service && Object.keys(stats.by_service).length > 0 ? (
                 <div className="space-y-3">
                   {Object.entries(stats.by_service).map(([service, data]) => (
@@ -187,7 +189,7 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
                             {service.replace(/_/g, ' ')}
                           </div>
                           <div className="text-xs text-secondary-500">
-                            {data.requests} requests
+                            {data.requests} {t('requests')}
                           </div>
                         </div>
                       </div>
@@ -195,14 +197,14 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
                         <div className="font-medium text-secondary-900">
                           {data.records.toLocaleString()}
                         </div>
-                        <div className="text-xs text-secondary-500">records</div>
+                        <div className="text-xs text-secondary-500">{t('records')}</div>
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="text-center py-6 text-secondary-500">
-                  No usage data yet. Start by scraping reviews or uploading CSV files.
+                  {t('noUsageDataYet')}
                 </div>
               )}
             </div>
@@ -210,15 +212,15 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
             {/* Billing Info */}
             {showBilling && billing && (
               <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
-                <h3 className="text-sm font-medium text-primary-900 mb-2">Estimated Cost</h3>
+                <h3 className="text-sm font-medium text-primary-900 mb-2">{t('estimatedCost')}</h3>
                 <div className="flex items-baseline">
                   <span className="text-3xl font-bold text-primary-700">
                     ${billing.estimatedCost?.toFixed(2) || '0.00'}
                   </span>
-                  <span className="ml-2 text-sm text-primary-600">this billing period</span>
+                  <span className="ml-2 text-sm text-primary-600">{t('thisBillingPeriod')}</span>
                 </div>
                 <p className="text-xs text-primary-600 mt-2">
-                  Based on Manus AI credits-based pricing
+                  {t('billingPricingHint')}
                 </p>
               </div>
             )}
@@ -230,13 +232,13 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
                   <div className="text-2xl font-bold text-secondary-900">
                     {stats?.total_requests || 0}
                   </div>
-                  <div className="text-sm text-secondary-600">Total API Requests</div>
+                  <div className="text-sm text-secondary-600">{t('totalApiRequests')}</div>
                 </div>
                 <div className="text-center">
                   <div className="text-2xl font-bold text-secondary-900">
                     {(stats?.total_records || 0).toLocaleString()}
                   </div>
-                  <div className="text-sm text-secondary-600">Total Records Fetched</div>
+                  <div className="text-sm text-secondary-600">{t('totalRecordsFetched')}</div>
                 </div>
               </div>
             </div>
@@ -249,11 +251,11 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-secondary-200">
-                      <th className="text-left py-2 px-3 font-medium text-secondary-700">Date</th>
-                      <th className="text-left py-2 px-3 font-medium text-secondary-700">Service</th>
-                      <th className="text-left py-2 px-3 font-medium text-secondary-700">Endpoint</th>
-                      <th className="text-right py-2 px-3 font-medium text-secondary-700">Requests</th>
-                      <th className="text-right py-2 px-3 font-medium text-secondary-700">Records</th>
+                      <th className="text-left py-2 px-3 font-medium text-secondary-700">{t('date')}</th>
+                      <th className="text-left py-2 px-3 font-medium text-secondary-700">{t('service')}</th>
+                      <th className="text-left py-2 px-3 font-medium text-secondary-700">{t('endpoint')}</th>
+                      <th className="text-right py-2 px-3 font-medium text-secondary-700">{t('requests')}</th>
+                      <th className="text-right py-2 px-3 font-medium text-secondary-700">{t('records')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -281,13 +283,15 @@ export const UsageDashboard: React.FC<UsageDashboardProps> = ({
                 </table>
                 {history.length > 20 && (
                   <div className="text-center py-3 text-secondary-500 text-sm">
-                    Showing 20 of {history.length} records
+                    {t('showingRecords')
+                      .replace('{shown}', '20')
+                      .replace('{total}', String(history.length))}
                   </div>
                 )}
               </div>
             ) : (
               <div className="text-center py-8 text-secondary-500">
-                No usage history yet.
+                {t('noUsageHistoryYet')}
               </div>
             )}
           </div>

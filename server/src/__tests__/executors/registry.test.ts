@@ -85,7 +85,7 @@ describe('Executor Registry', () => {
 });
 
 describe('Built-in executor classes', () => {
-  // Test that AIExecutor and ScrapingExecutor have the correct interface
+  // Test that AIExecutor and BrowserExecutor have the correct interface
   // without importing the registry singleton (which pulls in heavy dependencies)
 
   test('AIExecutor implements StepExecutor interface', () => {
@@ -103,23 +103,18 @@ describe('Built-in executor classes', () => {
     expect(typeof ai.getConfigSchema).toBe('function');
   });
 
-  test('ScrapingExecutor implements StepExecutor interface', () => {
+  test('BrowserExecutor implements StepExecutor interface', () => {
     jest.mock('../../services/browserService', () => ({
       browserService: { createTask: jest.fn(), launchBrowser: jest.fn(), destroyTask: jest.fn(), getTask: jest.fn(), emit: jest.fn(), detectCaptcha: jest.fn() },
     }));
-    jest.mock('../../services/extractionStrategies', () => ({
-      getStrategy: jest.fn(),
-      getAllStrategies: jest.fn().mockReturnValue([{ platform: 'wayfair', displayName: 'Wayfair Reviews' }]),
-    }));
-    jest.mock('../../services/usageTrackingService', () => ({ logUsage: jest.fn() }));
     jest.mock('../../models/database', () => ({ queries: { updateStepExecution: jest.fn() } }));
 
-    const { ScrapingExecutor } = require('../../executors/ScrapingExecutor');
-    const scraping = new ScrapingExecutor();
-    expect(scraping.type).toBe('scraping');
-    expect(scraping.displayName).toContain('Browser');
-    expect(typeof scraping.execute).toBe('function');
-    expect(typeof scraping.validateConfig).toBe('function');
-    expect(typeof scraping.getConfigSchema).toBe('function');
+    const { BrowserExecutor } = require('../../executors/BrowserExecutor');
+    const browser = new BrowserExecutor();
+    expect(browser.type).toBe('browser');
+    expect(browser.displayName).toContain('Browser');
+    expect(typeof browser.execute).toBe('function');
+    expect(typeof browser.validateConfig).toBe('function');
+    expect(typeof browser.getConfigSchema).toBe('function');
   });
 });

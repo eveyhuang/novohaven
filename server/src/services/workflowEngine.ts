@@ -129,9 +129,21 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
   const isStepOutputReference = (value: string): boolean => /^step_\d+_output(?:\..+)?$/i.test(String(value || '').trim());
 
   const standardNames = [
-    'brand_voice', 'amazon_requirements', 'social_media_guidelines',
-    'image_style_guidelines', 'platform_requirements', 'tone_guidelines',
+    'brand_voice', 'company_voice', 'voice_guidelines',
+    'amazon_requirements', 'social_media_guidelines',
+    'image_style_guidelines', 'company_image',
+    'platform_requirements', 'company_platform',
+    'tone_guidelines', 'content_guidelines',
   ];
+  const isCompanyStandardVariable = (value: string): boolean => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return standardNames.some((standard) => {
+      const key = standard.toLowerCase();
+      return normalized.includes(key.replace(/_/g, ''))
+        || normalized === key
+        || normalized.replace(/_/g, '') === key.replace(/_/g, '');
+    });
+  };
 
   for (const step of steps) {
     // Handle non-AI steps - get inputs from input_config
@@ -144,6 +156,7 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
             // Array format: [{ name: 'product_urls', source: 'user_input', ... }]
             for (const variable of inputConfig.variables) {
               if (variable.source === 'user_input' && variable.required !== false && !isStepOutputReference(variable.name)) {
+                if (isCompanyStandardVariable(variable.name)) continue;
                 inputs.add(variable.name);
               }
             }
@@ -152,7 +165,7 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
             for (const [varName, varConfig] of Object.entries(inputConfig.variables)) {
               const config = varConfig as any;
               // Skip optional variables
-              if (config.optional !== true && !isStepOutputReference(varName)) {
+              if (config.optional !== true && !isStepOutputReference(varName) && !isCompanyStandardVariable(varName)) {
                 inputs.add(varName);
               }
             }
@@ -167,14 +180,14 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
     // Handle AI steps (and fallback) - get inputs from prompt_template
     let match;
     const template = step.prompt_template || '';
-    while ((match = variableRegex.exec(template)) !== null) {
-      const varName = match[1].trim();
-      // Skip step outputs and company standards
-      if (!isStepOutputReference(varName) &&
-          !standardNames.some(s => varName.toLowerCase().includes(s.replace(/_/g, '')))) {
-        inputs.add(varName);
+      while ((match = variableRegex.exec(template)) !== null) {
+        const varName = match[1].trim();
+        // Skip step outputs and company standards
+        if (!isStepOutputReference(varName) &&
+          !isCompanyStandardVariable(varName)) {
+          inputs.add(varName);
+        }
       }
-    }
   }
   return Array.from(inputs);
 }

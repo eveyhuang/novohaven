@@ -65,22 +65,23 @@ export class ToolExecutor {
   async execute(toolName: string, args: Record<string, any>): Promise<ToolResult> {
     const resolvedToolName = this.toolNameMap.get(toolName) || toolName;
 
-    // Check built-in tools first (names use _ but accept : for back-compat)
-    const normalized = resolvedToolName.replace(':', '_');
-    if (normalized.startsWith('skill_') || normalized.startsWith('approval_')) {
-      return this.executeBuiltIn(normalized, args);
-    }
+    for (const candidate of this.expandToolNameCandidates(toolName, resolvedToolName)) {
+      // Check built-in tools first (names use _ but accept : for back-compat)
+      const normalized = candidate.replace(':', '_');
+      if (normalized.startsWith('skill_') || normalized.startsWith('approval_')) {
+        return this.executeBuiltIn(normalized, args);
+      }
 
-    // Find the plugin that owns this tool
-    for (const [, plugin] of this.toolPlugins) {
-      const tools = plugin.getTools();
-      const matched = tools.find((t) =>
-        t.name === resolvedToolName
-        || t.name === toolName
-        || this.normalizeComparableName(t.name) === this.normalizeComparableName(resolvedToolName)
-      );
-      if (matched) {
-        return plugin.execute(matched.name, args, this.context);
+      // Find the plugin that owns this tool
+      for (const [, plugin] of this.toolPlugins) {
+        const tools = plugin.getTools();
+        const matched = tools.find((t) =>
+          t.name === candidate
+          || this.normalizeComparableName(t.name) === this.normalizeComparableName(candidate)
+        );
+        if (matched) {
+          return plugin.execute(matched.name, args, this.context);
+        }
       }
     }
 
@@ -153,27 +154,27 @@ export class ToolExecutor {
       },
       {
         name: 'skill_execute',
-        description: 'Execute a skill or workflow by ID with given inputs. For image inputs, map the variable name to the attachment index (0-based) from the user\'s uploaded images using imageInputs.',
+        description: 'Execute a skill or workflow by ID with given inputs. For image inputs, map variable names to one attachment index or an array of indices (0-based) using imageInputs.',
         parameters: {
           type: 'object',
           properties: {
             skillId: { type: 'number', description: 'Skill or workflow ID' },
             skillType: { type: 'string', enum: ['skill', 'workflow'], description: 'Type of skill' },
             inputs: { type: 'object', description: 'Text input variables (key=variable name, value=text)' },
-            imageInputs: { type: 'object', description: 'Image input variables. Map variable name to attachment index (e.g., {"reference_image": 0}). Index refers to the user\'s uploaded images in order.' },
+            imageInputs: { type: 'object', description: 'Image input variables. Map variable name to one index or multiple indices (e.g., {"reference_image": [0,1], "product_images": [2,3]}). Indices refer to uploaded images in order.' },
           },
           required: ['skillId', 'skillType'],
         },
       },
       {
         name: 'skill_test',
-        description: 'Test a skill with inputs without saving results. For image inputs, use imageInputs to map variable names to attachment indices.',
+        description: 'Test a skill with inputs without saving results. For image inputs, use imageInputs to map variable names to one index or multiple indices.',
         parameters: {
           type: 'object',
           properties: {
             skillId: { type: 'number', description: 'Skill ID to test' },
             inputs: { type: 'object', description: 'Text input variables' },
-            imageInputs: { type: 'object', description: 'Image input variables mapped to attachment indices (e.g., {"reference_image": 0})' },
+            imageInputs: { type: 'object', description: 'Image input variables mapped to index/indices (e.g., {"reference_image": 0, "product_images": [1,2]})' },
           },
           required: ['skillId'],
         },
@@ -272,5 +273,25 @@ export class ToolExecutor {
       .replace(/[^a-zA-Z0-9_]/g, '_')
       .replace(/_+/g, '_')
       .toLowerCase();
+  }
+
+  private expandToolNameCandidates(original: string, resolved: string): string[] {
+    const candidates = new Set<string>();
+    const add = (name: string) => {
+      const trimmed = String(name || '').trim();
+      if (trimmed) candidates.add(trimmed);
+    };
+
+    const addDerived = (name: string) => {
+      add(name);
+      if (name.includes(':')) add(name.slice(name.lastIndexOf(':') + 1));
+      if (name.includes('.')) add(name.slice(name.lastIndexOf('.') + 1));
+      if (name.includes('/')) add(name.slice(name.lastIndexOf('/') + 1));
+    };
+
+    addDerived(resolved);
+    addDerived(original);
+
+    return Array.from(candidates);
   }
 }

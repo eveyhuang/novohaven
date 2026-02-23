@@ -81,7 +81,7 @@ export function StandardsManager() {
   };
 
   const handleDelete = async (standardId: number) => {
-    if (!window.confirm('Are you sure you want to delete this standard?')) return;
+    if (!window.confirm(t('confirmDeleteStandard'))) return;
     try {
       await api.deleteStandard(standardId);
       setStandards(standards.filter((s) => s.id !== standardId));
@@ -92,7 +92,7 @@ export function StandardsManager() {
 
   const handleSave = async () => {
     if (!formData.name) {
-      setError('Name is required');
+      setError(t('nameRequired'));
       return;
     }
 

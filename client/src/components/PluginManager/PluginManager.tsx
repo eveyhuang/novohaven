@@ -46,12 +46,12 @@ export function PluginManager() {
       const data = await api.getPlugins();
       setPlugins(data);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to load plugins';
+      const message = err instanceof Error ? err.message : t('failedToLoadPlugins');
       setError(message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     fetchPlugins();
@@ -69,7 +69,7 @@ export function PluginManager() {
         )
       );
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to update plugin';
+      const message = err instanceof Error ? err.message : t('failedToUpdatePlugin');
       setError(message);
     }
   };
@@ -115,7 +115,7 @@ export function PluginManager() {
         )
       );
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to save config';
+      const message = err instanceof Error ? err.message : t('failedToSaveConfig');
       setError(message);
     } finally {
       setSaving(null);
@@ -126,7 +126,7 @@ export function PluginManager() {
     const schema = plugin.configSchema;
     if (!schema?.properties || Object.keys(schema.properties).length === 0) {
       return (
-        <p className="text-sm text-gray-500 italic">No configurable properties.</p>
+        <p className="text-sm text-gray-500 italic">{t('noConfigurableProperties')}</p>
       );
     }
 
@@ -184,7 +184,7 @@ export function PluginManager() {
             onClick={() => handleSaveConfig(plugin)}
             disabled={saving === plugin.name}
           >
-            {saving === plugin.name ? 'Saving...' : 'Save Config'}
+            {saving === plugin.name ? t('saving') : t('saveConfig')}
           </Button>
         </div>
       </div>
@@ -194,7 +194,7 @@ export function PluginManager() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="text-gray-500">Loading plugins...</div>
+        <div className="text-gray-500">{t('loadingPlugins')}</div>
       </div>
     );
   }
@@ -202,8 +202,8 @@ export function PluginManager() {
   return (
     <div className="max-w-4xl mx-auto p-6">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Plugin Manager</h1>
-        <Button onClick={fetchPlugins}>Refresh</Button>
+        <h1 className="text-2xl font-bold text-gray-900">{t('pluginManager')}</h1>
+        <Button onClick={fetchPlugins}>{t('refresh')}</Button>
       </div>
 
       {error && (
@@ -213,7 +213,7 @@ export function PluginManager() {
       )}
 
       {plugins.length === 0 ? (
-        <p className="text-gray-500 text-center py-8">No plugins registered.</p>
+        <p className="text-gray-500 text-center py-8">{t('noPluginsRegistered')}</p>
       ) : (
         <div className="space-y-3">
           {plugins.map((plugin) => (
@@ -257,7 +257,7 @@ export function PluginManager() {
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                         plugin.enabled ? 'bg-blue-600' : 'bg-gray-300'
                       }`}
-                      aria-label={plugin.enabled ? 'Disable plugin' : 'Enable plugin'}
+                      aria-label={plugin.enabled ? t('disablePlugin') : t('enablePlugin')}
                     >
                       <span
                         className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${

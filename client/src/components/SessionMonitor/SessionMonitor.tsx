@@ -33,34 +33,43 @@ function formatTime(iso: string): string {
   return date.toLocaleString();
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, t }: { status: string; t: (key: any) => string }) {
   const colors: Record<string, string> = {
     active: 'bg-green-100 text-green-800',
     idle: 'bg-yellow-100 text-yellow-800',
     closed: 'bg-secondary-100 text-secondary-600',
   };
+  const labels: Record<string, string> = {
+    active: t('statusActive'),
+    idle: t('statusIdle'),
+    closed: t('statusClosed'),
+  };
   const cls = colors[status] || 'bg-secondary-100 text-secondary-600';
   return (
     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
-      {status}
+      {labels[status] || status}
     </span>
   );
 }
 
-function ChannelBadge({ channel }: { channel: string }) {
+function ChannelBadge({ channel, t }: { channel: string; t: (key: any) => string }) {
   const colors: Record<string, string> = {
     web: 'bg-blue-100 text-blue-800',
     lark: 'bg-purple-100 text-purple-800',
   };
+  const labels: Record<string, string> = {
+    web: t('channelWeb'),
+    lark: t('channelLark'),
+  };
   const cls = colors[channel] || 'bg-secondary-100 text-secondary-600';
   return (
     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
-      {channel}
+      {labels[channel] || channel}
     </span>
   );
 }
 
-function SessionDetailPanel({ sessionId }: { sessionId: string }) {
+function SessionDetailPanel({ sessionId, t }: { sessionId: string; t: (key: any) => string }) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,15 +92,15 @@ function SessionDetailPanel({ sessionId }: { sessionId: string }) {
   }, [sessionId]);
 
   if (loading) {
-    return <div className="p-4 text-secondary-500 text-sm">Loading transcript...</div>;
+    return <div className="p-4 text-secondary-500 text-sm">{t('loadingTranscript')}</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-red-500 text-sm">Error: {error}</div>;
+    return <div className="p-4 text-red-500 text-sm">{t('error')}: {error}</div>;
   }
 
   if (!detail || detail.messages.length === 0) {
-    return <div className="p-4 text-secondary-400 text-sm">No messages in this session.</div>;
+    return <div className="p-4 text-secondary-400 text-sm">{t('noMessagesInSession')}</div>;
   }
 
   return (
@@ -134,11 +143,11 @@ export function SessionMonitor() {
       setSessions(data);
       setError(null);
     } catch (err: any) {
-      setError(err.message || 'Failed to load sessions');
+      setError(err.message || t('failedToLoadSessions'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     fetchSessions();
@@ -191,7 +200,7 @@ export function SessionMonitor() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <div className="text-secondary-500">Loading sessions...</div>
+        <div className="text-secondary-500">{t('loadingSessions')}</div>
       </div>
     );
   }
@@ -201,9 +210,9 @@ export function SessionMonitor() {
       <Card>
         <CardBody>
           <div className="text-red-500 text-center py-8">
-            <p className="mb-4">Error: {error}</p>
+            <p className="mb-4">{t('error')}: {error}</p>
             <Button variant="secondary" onClick={fetchSessions}>
-              Retry
+              {t('retry')}
             </Button>
           </div>
         </CardBody>
@@ -214,7 +223,7 @@ export function SessionMonitor() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-secondary-800">Session Monitor</h2>
+        <h2 className="text-xl font-semibold text-secondary-800">{t('sessionMonitor')}</h2>
         <div className="flex items-center gap-2">
           <Button
             variant="danger"
@@ -223,10 +232,10 @@ export function SessionMonitor() {
             disabled={closingAll || sessions.every((s) => s.status === 'closed')}
             onClick={handleCloseAll}
           >
-            Close All
+            {t('closeAll')}
           </Button>
           <Button variant="secondary" size="sm" onClick={fetchSessions}>
-            Refresh
+            {t('refresh')}
           </Button>
         </div>
       </div>
@@ -234,7 +243,7 @@ export function SessionMonitor() {
       {sessions.length === 0 ? (
         <Card>
           <CardBody>
-            <p className="text-secondary-400 text-center py-8">No active sessions.</p>
+            <p className="text-secondary-400 text-center py-8">{t('noActiveSessions')}</p>
           </CardBody>
         </Card>
       ) : (
@@ -243,13 +252,13 @@ export function SessionMonitor() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-secondary-200 bg-secondary-50 text-left text-secondary-600">
-                  <th className="px-4 py-3 font-medium">Session ID</th>
-                  <th className="px-4 py-3 font-medium">Channel</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">User</th>
-                  <th className="px-4 py-3 font-medium">Last Active</th>
-                  <th className="px-4 py-3 font-medium">Messages</th>
-                  <th className="px-4 py-3 font-medium">Actions</th>
+                  <th className="px-4 py-3 font-medium">{t('sessionId')}</th>
+                  <th className="px-4 py-3 font-medium">{t('channel')}</th>
+                  <th className="px-4 py-3 font-medium">{t('status')}</th>
+                  <th className="px-4 py-3 font-medium">{t('user')}</th>
+                  <th className="px-4 py-3 font-medium">{t('lastActive')}</th>
+                  <th className="px-4 py-3 font-medium">{t('messages')}</th>
+                  <th className="px-4 py-3 font-medium">{t('actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -265,10 +274,10 @@ export function SessionMonitor() {
                         {truncateId(session.id)}
                       </td>
                       <td className="px-4 py-3">
-                        <ChannelBadge channel={session.channel_type} />
+                        <ChannelBadge channel={session.channel_type} t={t} />
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={session.status} />
+                        <StatusBadge status={session.status} t={t} />
                       </td>
                       <td className="px-4 py-3 text-secondary-600">
                         {session.user_email || '-'}
@@ -287,7 +296,7 @@ export function SessionMonitor() {
                             isLoading={closingIds.has(session.id)}
                             onClick={(e) => handleClose(e, session.id)}
                           >
-                            Close
+                            {t('close')}
                           </Button>
                         )}
                       </td>
@@ -295,7 +304,7 @@ export function SessionMonitor() {
                     {expandedId === session.id && (
                       <tr>
                         <td colSpan={7}>
-                          <SessionDetailPanel sessionId={session.id} />
+                          <SessionDetailPanel sessionId={session.id} t={t} />
                         </td>
                       </tr>
                     )}

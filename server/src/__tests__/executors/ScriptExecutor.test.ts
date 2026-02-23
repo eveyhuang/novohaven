@@ -61,6 +61,11 @@ describe('ScriptExecutor', () => {
     return proc;
   }
 
+  async function waitForSpawnSetup() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   describe('type and metadata', () => {
     test('has correct type identifier', () => {
       expect(executor.type).toBe('script');
@@ -89,11 +94,11 @@ describe('ScriptExecutor', () => {
       expect(result.errors).toContain('Script content is required');
     });
 
-    test('returns error for invalid runtime', () => {
+    test('normalizes invalid runtime aliases to python3', () => {
       mockStep.executor_config = JSON.stringify({ runtime: 'ruby', script: 'puts "hi"' });
       const result = executor.validateConfig(mockStep);
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Runtime must be python3 or node');
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
     });
 
     test('falls back to prompt_template as script when executor_config is missing', () => {
@@ -110,6 +115,7 @@ describe('ScriptExecutor', () => {
       mockSpawn.mockReturnValue(proc as any);
 
       const resultPromise = executor.execute(mockStep, mockContext);
+      await waitForSpawnSetup();
 
       // Simulate process output
       proc.stdout.emit('data', '{"result": "ok"}');
@@ -127,6 +133,7 @@ describe('ScriptExecutor', () => {
       mockSpawn.mockReturnValue(proc as any);
 
       const resultPromise = executor.execute(mockStep, mockContext);
+      await waitForSpawnSetup();
 
       proc.stderr.emit('data', 'NameError: name "foo" is not defined');
       proc.emit('close', 1);
@@ -142,6 +149,7 @@ describe('ScriptExecutor', () => {
       mockSpawn.mockReturnValue(proc as any);
 
       const resultPromise = executor.execute(mockStep, mockContext);
+      await waitForSpawnSetup();
 
       proc.emit('error', new Error('ENOENT: python3 not found'));
 
@@ -155,6 +163,7 @@ describe('ScriptExecutor', () => {
       mockSpawn.mockReturnValue(proc as any);
 
       const resultPromise = executor.execute(mockStep, mockContext);
+      await waitForSpawnSetup();
 
       proc.stdout.emit('data', 'output');
       proc.emit('close', 0);
@@ -184,6 +193,7 @@ describe('ScriptExecutor', () => {
       mockSpawn.mockReturnValue(proc as any);
 
       const resultPromise = executor.execute(mockStep, mockContext);
+      await waitForSpawnSetup();
 
       proc.stdout.emit('data', 'ok');
       proc.emit('close', 0);

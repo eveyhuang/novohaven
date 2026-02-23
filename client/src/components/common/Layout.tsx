@@ -13,17 +13,17 @@ export function Layout({ children }: LayoutProps) {
   const { language, setLanguage, t } = useLanguage();
 
   const navItems = [
-    { path: '/', label: 'Dashboard', icon: HomeIcon },
-    { path: '/chat', label: 'Agent Chat', icon: ChatIcon },
-    { path: '/skills/new', label: 'New Skill', icon: PlusIcon },
-    { path: '/workflows/new', label: 'New Workflow', icon: PlusIcon },
-    { path: '/executions', label: 'Executions', icon: PlayIcon },
-    { path: '/outputs', label: 'Outputs', icon: FolderIcon },
-    { path: '/sessions', label: 'Sessions', icon: AgentIcon },
-    { path: '/plugins', label: 'Plugins', icon: PluginIcon },
-    { path: '/drafts', label: 'Skill Drafts', icon: DocumentIcon },
-    { path: '/standards', label: 'Standards', icon: DocumentIcon },
-    { path: '/usage', label: 'Usage', icon: ChartIcon },
+    { path: '/', labelKey: 'dashboard' as const, icon: HomeIcon },
+    { path: '/chat', labelKey: 'agentChat' as const, icon: ChatIcon },
+    { path: '/skills/new', labelKey: 'newSkill' as const, icon: PlusIcon },
+    { path: '/workflows/new', labelKey: 'newWorkflow' as const, icon: PlusIcon },
+    { path: '/executions', labelKey: 'executions' as const, icon: PlayIcon },
+    { path: '/outputs', labelKey: 'outputs' as const, icon: FolderIcon },
+    { path: '/sessions', labelKey: 'sessions' as const, icon: AgentIcon },
+    { path: '/plugins', labelKey: 'plugins' as const, icon: PluginIcon },
+    { path: '/drafts', labelKey: 'skillDrafts' as const, icon: DocumentIcon },
+    { path: '/standards', labelKey: 'standards' as const, icon: DocumentIcon },
+    { path: '/usage', labelKey: 'usage' as const, icon: ChartIcon },
   ];
 
   const toggleLanguage = () => {
@@ -63,7 +63,7 @@ export function Layout({ children }: LayoutProps) {
                 `}
               >
                 <item.icon className="w-5 h-5 mr-3" />
-                {item.label}
+                {t(item.labelKey)}
               </Link>
             );
           })}
@@ -95,9 +95,9 @@ export function Layout({ children }: LayoutProps) {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-secondary-900 truncate">
-                {user?.email || 'Guest'}
+                {user?.email || t('guest')}
               </p>
-              <p className="text-xs text-secondary-500">Demo Account</p>
+              <p className="text-xs text-secondary-500">{t('demoAccount')}</p>
             </div>
           </div>
         </div>

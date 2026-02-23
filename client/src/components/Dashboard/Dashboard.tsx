@@ -72,7 +72,7 @@ export function Dashboard() {
   };
 
   const handleDeleteWorkflow = async (workflowId: number) => {
-    if (!window.confirm('Are you sure you want to delete this?')) return;
+    if (!window.confirm(t('confirmDeleteGeneric'))) return;
     try {
       await api.deleteWorkflow(workflowId);
       setWorkflows(workflows.filter(w => w.id !== workflowId));
@@ -82,7 +82,7 @@ export function Dashboard() {
   };
 
   const handleDeleteSkill = async (skillId: number) => {
-    if (!window.confirm('Are you sure you want to delete this?')) return;
+    if (!window.confirm(t('confirmDeleteGeneric'))) return;
     try {
       await api.deleteSkill(skillId);
       setSkills(skills.filter(s => s.id !== skillId));
@@ -114,25 +114,25 @@ export function Dashboard() {
         <Card hoverable onClick={() => navigate('/sessions')}>
           <CardBody className="text-center py-4">
             <div className="text-2xl font-bold text-primary-600">{agentHealth.activeSessions}</div>
-            <div className="text-sm text-secondary-600">Active Sessions</div>
+            <div className="text-sm text-secondary-600">{t('activeSessions')}</div>
           </CardBody>
         </Card>
         <Card hoverable onClick={() => navigate('/drafts')}>
           <CardBody className="text-center py-4">
             <div className="text-2xl font-bold text-yellow-600">{agentHealth.pendingDrafts}</div>
-            <div className="text-sm text-secondary-600">Pending Drafts</div>
+            <div className="text-sm text-secondary-600">{t('pendingDrafts')}</div>
           </CardBody>
         </Card>
         <Card hoverable onClick={() => navigate('/skills/new')}>
           <CardBody className="text-center py-4">
             <div className="text-2xl font-bold text-green-600">{agentHealth.skillCount}</div>
-            <div className="text-sm text-secondary-600">Skills</div>
+            <div className="text-sm text-secondary-600">{t('skills')}</div>
           </CardBody>
         </Card>
         <Card hoverable onClick={() => navigate('/workflows/new')}>
           <CardBody className="text-center py-4">
             <div className="text-2xl font-bold text-blue-600">{agentHealth.workflowCount}</div>
-            <div className="text-sm text-secondary-600">Workflows</div>
+            <div className="text-sm text-secondary-600">{t('workflows')}</div>
           </CardBody>
         </Card>
       </div>
@@ -162,22 +162,22 @@ export function Dashboard() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-semibold text-secondary-900">
-              My Skills
+              {t('mySkills')}
             </h2>
-            <p className="text-sm text-secondary-500">Single-task building blocks for your workflows</p>
+            <p className="text-sm text-secondary-500">{t('mySkillsDescription')}</p>
           </div>
           <Button variant="secondary" size="sm" onClick={() => navigate('/skills/new')}>
-            Create New Skill
+            {t('createNewSkill')}
           </Button>
         </div>
         {skills.length === 0 ? (
           <Card>
             <CardBody className="text-center py-8">
               <p className="text-secondary-600 mb-4">
-                No skills yet. Create your first skill to get started.
+                {t('noSkillsYet')}
               </p>
               <Button variant="secondary" onClick={() => navigate('/skills/new')}>
-                Create New Skill
+                {t('createNewSkill')}
               </Button>
             </CardBody>
           </Card>
@@ -201,22 +201,22 @@ export function Dashboard() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-semibold text-secondary-900">
-              My Workflows
+              {t('myWorkflows')}
             </h2>
-            <p className="text-sm text-secondary-500">Multi-step workflows that chain skills together</p>
+            <p className="text-sm text-secondary-500">{t('myWorkflowsDescription')}</p>
           </div>
           <Button size="sm" onClick={() => navigate('/workflows/new')}>
-            Create New Workflow
+            {t('createNewWorkflow')}
           </Button>
         </div>
         {workflows.length === 0 ? (
           <Card>
             <CardBody className="text-center py-12">
               <p className="text-secondary-600 mb-4">
-                You haven't created any workflows yet.
+                {t('noWorkflowsYet')}
               </p>
               <Button onClick={() => navigate('/workflows/new')}>
-                Create Your First Workflow
+                {t('createFirstWorkflow')}
               </Button>
             </CardBody>
           </Card>
@@ -306,7 +306,7 @@ function WorkflowCard({ workflow, onRun, onEdit, onClone, onDelete, t }: Workflo
         <div className="flex items-start justify-between">
           <h3 className="font-semibold text-secondary-900">{translatedName}</h3>
           <span className="text-sm text-secondary-500">
-            {workflow.step_count || 0} steps
+            {workflow.step_count || 0} {t('steps')}
           </span>
         </div>
         <p className="text-sm text-secondary-600 mt-2 line-clamp-2">
@@ -421,16 +421,21 @@ interface ExecutionRowProps {
 
 function ExecutionRow({ execution, onClick, t }: ExecutionRowProps) {
   const { language } = useLanguage();
-  const [translatedName, setTranslatedName] = useState(execution.recipe_name || `Workflow #${execution.recipe_id}`);
+  const fallbackName = `${t('workflowLabel')} #${execution.recipe_id}`;
+  const [translatedName, setTranslatedName] = useState(execution.recipe_name || fallbackName);
 
   useEffect(() => {
-    const recipeName = execution.recipe_name || `Workflow #${execution.recipe_id}`;
+    const recipeName = execution.recipe_name || `${t('workflowLabel')} #${execution.recipe_id}`;
+    if (!execution.recipe_name) {
+      setTranslatedName(recipeName);
+      return;
+    }
     if (language === 'en') {
       setTranslatedName(recipeName);
     } else {
       translateText(recipeName, 'en', language).then(setTranslatedName);
     }
-  }, [execution.recipe_name, execution.recipe_id, language]);
+  }, [execution.recipe_name, execution.recipe_id, language, t]);
 
   const statusColors: Record<string, string> = {
     pending: 'bg-secondary-100 text-secondary-700',

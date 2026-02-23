@@ -7,6 +7,7 @@ import {
 class AnthropicProvider implements ProviderPlugin {
   manifest: PluginManifest;
   private client: Anthropic | null = null;
+  private static readonly MAX_IMAGE_BYTES = 5 * 1024 * 1024; // Anthropic image block limit
 
   constructor(manifest: PluginManifest) {
     this.manifest = manifest;
@@ -38,14 +39,6 @@ class AnthropicProvider implements ProviderPlugin {
       {
         id: 'claude-sonnet-4-5-20250929',
         name: 'Claude Sonnet 4.5',
-        provider: 'anthropic',
-        supportsStreaming: true,
-        supportsTools: true,
-        contextWindow: 200000,
-      },
-      {
-        id: 'claude-haiku-4-5-20251001',
-        name: 'Claude Haiku 4.5',
         provider: 'anthropic',
         supportsStreaming: true,
         supportsTools: true,
@@ -101,6 +94,17 @@ class AnthropicProvider implements ProviderPlugin {
 
       if (m.role === 'user') {
         if (m.attachments?.length) {
+          for (let i = 0; i < m.attachments.length; i++) {
+            const attachment = m.attachments[i];
+            const imageBytes = this.estimateImageBytes(attachment.data);
+            if (imageBytes > AnthropicProvider.MAX_IMAGE_BYTES) {
+              yield {
+                type: 'error',
+                error: `Image #${i + 1} is too large for Anthropic (${imageBytes} bytes). Please upload an image smaller than 5 MB.`,
+              };
+              return;
+            }
+          }
           const content: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = [
             { type: 'text', text: m.content || 'Analyze this image.' },
             ...m.attachments.map(a => ({
@@ -218,6 +222,18 @@ class AnthropicProvider implements ProviderPlugin {
     }
 
     return null;
+  }
+
+  private estimateImageBytes(raw: string): number {
+    const value = String(raw || '');
+    const payload = value.startsWith('data:image/')
+      ? value.slice(value.indexOf(',') + 1)
+      : value;
+    try {
+      return Buffer.byteLength(payload, 'base64');
+    } catch {
+      return 0;
+    }
   }
 
   // Anthropic doesn't offer embeddings

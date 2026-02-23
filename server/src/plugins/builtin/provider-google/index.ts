@@ -27,25 +27,18 @@ class GoogleProvider implements ProviderPlugin {
 
   listModels(): ModelInfo[] {
     return [
+      
       {
-        id: 'gemini-2.5-pro',
-        name: 'Gemini 2.5 Pro',
+        id: 'gemini-3-pro-preview',
+        name: 'Gemini 3 Pro',
         provider: 'google',
         supportsStreaming: true,
         supportsTools: true,
         contextWindow: 1000000,
       },
       {
-        id: 'gemini-2.5-flash-lite',
-        name: 'Gemini 2.5 Flash Lite',
-        provider: 'google',
-        supportsStreaming: true,
-        supportsTools: true,
-        contextWindow: 1000000,
-      },
-      {
-        id: 'gemini-2.5-flash',
-        name: 'Gemini 2.5 Flash',
+        id: 'gemini-3-flash-preview',
+        name: 'Gemini 3 Flash',
         provider: 'google',
         supportsStreaming: true,
         supportsTools: true,
@@ -53,7 +46,7 @@ class GoogleProvider implements ProviderPlugin {
       },
       {
         id: 'gemini-3-pro-image-preview',
-        name: 'Gemini 3 Pro Image',
+        name: 'Nanobanana',
         provider: 'google',
         supportsStreaming: true,
         supportsTools: false,
@@ -99,7 +92,7 @@ class GoogleProvider implements ProviderPlugin {
       }
 
       const model = this.client.getGenerativeModel(modelOptions);
-      const contents = this.buildContents(request.messages);
+      const contents = this.buildContents(request.messages, request.model);
       if (contents.length === 0) {
         yield { type: 'error', error: 'No messages provided' };
         return;
@@ -108,29 +101,71 @@ class GoogleProvider implements ProviderPlugin {
       const result = await model.generateContentStream({ contents });
       let toolCallCount = 0;
 
+      const streamFunctionCalls: any[] = [];
       for await (const chunk of result.stream) {
         const text = chunk.text();
         if (text) {
           yield { type: 'text', text };
         }
 
-        // Check for function calls
-        const candidates = chunk.candidates || [];
+        const candidates = (chunk as any)?.candidates || [];
         for (const candidate of candidates) {
-          for (const part of candidate.content?.parts || []) {
-            if ((part as any).functionCall) {
-              const fc = (part as any).functionCall;
-              yield {
-                type: 'tool_call',
-                toolCall: {
-                  id: fc.id || `google-fc-${++toolCallCount}`,
-                  name: fc.name,
-                  args: fc.args || {},
-                },
-              };
+          const parts = candidate?.content?.parts || [];
+          for (const part of parts) {
+            if (part?.functionCall) {
+              streamFunctionCalls.push(part.functionCall);
             }
           }
         }
+      }
+
+      // Use finalized response payload for tool calls (not partial stream chunks),
+      // so any model-specific metadata (e.g., thought signatures) is preserved.
+      const finalResponse = await result.response;
+      const helperFunctionCalls = typeof finalResponse.functionCalls === 'function'
+        ? (finalResponse.functionCalls() || [])
+        : [];
+      const rawFunctionCalls: any[] = [];
+      const candidates = (finalResponse as any)?.candidates || [];
+      for (const candidate of candidates) {
+        const parts = candidate?.content?.parts || [];
+        for (const part of parts) {
+          if (part?.functionCall) {
+            rawFunctionCalls.push(part.functionCall);
+          }
+        }
+      }
+
+      const emittedFunctionCalls = this.uniqueFunctionCalls(
+        rawFunctionCalls.length > 0
+          ? rawFunctionCalls
+          : (streamFunctionCalls.length > 0 ? streamFunctionCalls : (helperFunctionCalls as any[]))
+      );
+      for (const fc of emittedFunctionCalls) {
+        let parsedArgs: Record<string, any> = {};
+        if (fc?.args && typeof fc.args === 'object' && !Array.isArray(fc.args)) {
+          parsedArgs = fc.args;
+        } else if (typeof fc?.args === 'string') {
+          try {
+            const maybe = JSON.parse(fc.args);
+            if (maybe && typeof maybe === 'object' && !Array.isArray(maybe)) {
+              parsedArgs = maybe as Record<string, any>;
+            }
+          } catch {
+            parsedArgs = {};
+          }
+        }
+        yield {
+          type: 'tool_call',
+          toolCall: {
+            id: fc?.id || `google-fc-${++toolCallCount}`,
+            name: fc?.name || '',
+            args: parsedArgs,
+            providerData: {
+              googleFunctionCall: fc,
+            },
+          },
+        };
       }
 
       yield { type: 'done' };
@@ -139,12 +174,18 @@ class GoogleProvider implements ProviderPlugin {
     }
   }
 
-  private buildContents(messages: CompletionRequest['messages']): Array<{ role: 'user' | 'model'; parts: any[] }> {
-    const toolNameById = new Map<string, string>();
+  private buildContents(
+    messages: CompletionRequest['messages'],
+    modelId?: string
+  ): Array<{ role: 'user' | 'model'; parts: any[] }> {
+    const requiresThoughtSignature = this.requiresThoughtSignature(modelId);
+    const toolMetaById = new Map<string, { name: string; emitAsFunction: boolean }>();
     for (const msg of messages) {
       if (msg.role === 'assistant' && msg.toolCalls?.length) {
         for (const tc of msg.toolCalls) {
-          toolNameById.set(tc.id, tc.name);
+          const rawGoogleFunctionCall = tc.providerData?.googleFunctionCall;
+          const emitAsFunction = !requiresThoughtSignature || this.hasThoughtSignature(rawGoogleFunctionCall);
+          toolMetaById.set(tc.id, { name: tc.name, emitAsFunction });
         }
       }
     }
@@ -168,8 +209,9 @@ class GoogleProvider implements ProviderPlugin {
       const parts: any[] = [];
 
       if (msg.role === 'tool') {
-        const toolName = msg.toolCallId ? toolNameById.get(msg.toolCallId) : undefined;
-        if (toolName) {
+        const toolMeta = msg.toolCallId ? toolMetaById.get(msg.toolCallId) : undefined;
+        if (toolMeta?.emitAsFunction) {
+          const toolName = toolMeta.name;
           let resultPayload: any = msg.content;
           try {
             resultPayload = JSON.parse(msg.content);
@@ -203,8 +245,34 @@ class GoogleProvider implements ProviderPlugin {
 
         if (msg.role === 'assistant' && msg.toolCalls?.length) {
           for (const tc of msg.toolCalls) {
+            const rawGoogleFunctionCall = tc.providerData?.googleFunctionCall;
+            if (requiresThoughtSignature && !this.hasThoughtSignature(rawGoogleFunctionCall)) {
+              continue;
+            }
+            if (rawGoogleFunctionCall && typeof rawGoogleFunctionCall === 'object') {
+              let rawArgs = (rawGoogleFunctionCall as any).args;
+              if (typeof rawArgs === 'string') {
+                try {
+                  const maybe = JSON.parse(rawArgs);
+                  if (maybe && typeof maybe === 'object' && !Array.isArray(maybe)) {
+                    rawArgs = maybe;
+                  }
+                } catch {
+                  rawArgs = tc.args || {};
+                }
+              }
+              parts.push({
+                functionCall: {
+                  ...rawGoogleFunctionCall,
+                  name: rawGoogleFunctionCall.name || tc.name,
+                  args: rawArgs || tc.args || {},
+                },
+              });
+              continue;
+            }
             parts.push({
               functionCall: {
+                ...(tc.id ? { id: tc.id } : {}),
                 name: tc.name,
                 args: tc.args || {},
               },
@@ -221,6 +289,36 @@ class GoogleProvider implements ProviderPlugin {
     }
 
     return contents;
+  }
+
+  private requiresThoughtSignature(modelId?: string): boolean {
+    return /^gemini-3-/i.test(String(modelId || ''));
+  }
+
+  private hasThoughtSignature(functionCall: any): boolean {
+    if (!functionCall || typeof functionCall !== 'object') return false;
+    return Boolean(
+      (functionCall as any).thought_signature
+      || (functionCall as any).thoughtSignature
+      || (functionCall as any).thought
+    );
+  }
+
+  private uniqueFunctionCalls(calls: any[]): any[] {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const fc of calls || []) {
+      const key = [
+        fc?.id || '',
+        fc?.name || '',
+        typeof fc?.args === 'string' ? fc.args : JSON.stringify(fc?.args || {}),
+      ].join('|');
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(fc);
+      }
+    }
+    return out;
   }
 
   private validateToolLoop(request: CompletionRequest): string | null {

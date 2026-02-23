@@ -4,6 +4,16 @@ import { getDatabase } from '../models/database';
 
 const router = Router();
 router.use(authMiddleware);
+const DISABLED_SKILL_STEP_TYPES = new Set(['manus']);
+
+function findDisabledStepType(steps: any[] | undefined): string | null {
+  if (!Array.isArray(steps)) return null;
+  for (const step of steps) {
+    const type = String(step?.step_type || 'ai').trim().toLowerCase();
+    if (DISABLED_SKILL_STEP_TYPES.has(type)) return type;
+  }
+  return null;
+}
 
 // GET /api/skills — list all skills
 router.get('/', (req: Request, res: Response) => {
@@ -36,6 +46,12 @@ router.post('/', (req: Request, res: Response) => {
 
     if (!name) {
       res.status(400).json({ error: 'Skill name is required' });
+      return;
+    }
+
+    const disabledType = findDisabledStepType(steps);
+    if (disabledType) {
+      res.status(400).json({ error: `Step type "${disabledType}" is no longer supported for skills` });
       return;
     }
 
@@ -103,6 +119,12 @@ router.put('/:id', (req: Request, res: Response) => {
     }
 
     const { name, description, status, tags, steps } = req.body;
+
+    const disabledType = findDisabledStepType(steps);
+    if (disabledType) {
+      res.status(400).json({ error: `Step type "${disabledType}" is no longer supported for skills` });
+      return;
+    }
 
     db.prepare(`
       UPDATE skills SET name = ?, description = ?, status = ?, tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
@@ -172,16 +194,22 @@ router.post('/:id/clone', (req: Request, res: Response) => {
     }
 
     const newName = req.body.name || `${original.name} (Copy)`;
+    // Clone steps
+    const steps = db.prepare(
+      "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' ORDER BY step_order"
+    ).all(original.id) as any[];
+
+    const disabledStep = steps.find((step) => DISABLED_SKILL_STEP_TYPES.has(String(step?.step_type || 'ai').trim().toLowerCase()));
+    if (disabledStep) {
+      res.status(400).json({ error: `Cannot clone skill with unsupported step type "${disabledStep.step_type}"` });
+      return;
+    }
+
     const result = db.prepare(
       'INSERT INTO skills (name, description, created_by, tags) VALUES (?, ?, ?, ?)'
     ).run(newName, original.description, userId, original.tags);
 
     const newId = Number(result.lastInsertRowid);
-
-    // Clone steps
-    const steps = db.prepare(
-      "SELECT * FROM skill_steps WHERE parent_id = ? AND parent_type = 'skill' ORDER BY step_order"
-    ).all(original.id) as any[];
 
     const insertStep = db.prepare(`
       INSERT INTO skill_steps (parent_id, parent_type, step_order, step_name, step_type, ai_model, prompt_template, input_config, output_format, model_config, executor_config)
