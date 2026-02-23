@@ -100,6 +100,10 @@ function buildOpenAITokenParams(model: string, maxTokens: number): Record<string
   return { max_tokens: maxTokens };
 }
 
+function isGpt5FamilyModel(model: string): boolean {
+  return /^gpt-5(?:$|[.-])/i.test(String(model || '').trim());
+}
+
 // Get provider for a model
 export function getProviderForModel(modelId: string): AIProvider {
   const allModels = getAllKnownModels();
@@ -160,10 +164,23 @@ async function callOpenAI(
     const requestBody: any = {
       model,
       messages,
-      temperature: config.temperature ?? 0.7,
       ...buildOpenAITokenParams(model, config.maxTokens ?? 2000),
-      top_p: config.topP ?? 1,
     };
+
+    // GPT-5 family currently supports default sampling behavior only.
+    // Do not send temperature/top_p overrides unless the API supports them.
+    if (isGpt5FamilyModel(model)) {
+      if (config.temperature !== undefined && Number(config.temperature) !== 1) {
+        console.warn(`[AIService] Ignoring unsupported temperature=${config.temperature} for model ${model}`);
+      }
+      if (config.topP !== undefined && Number(config.topP) !== 1) {
+        console.warn(`[AIService] Ignoring unsupported topP=${config.topP} for model ${model}`);
+      }
+    } else {
+      requestBody.temperature = config.temperature ?? 0.7;
+      requestBody.top_p = config.topP ?? 1;
+    }
+
     const response = await client.chat.completions.create(requestBody);
 
     const content = response.choices[0]?.message?.content || '';
