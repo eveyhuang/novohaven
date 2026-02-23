@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: novohaven-server
+    runtime: docker
+    rootDir: server
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    disk:
+      name: novohaven-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DATABASE_PATH
+        value: /var/data/novohaven.db
+      - key: UPLOADS_DIR
+        value: /var/data/uploads
+      - key: CLIENT_URL
+        sync: false
+        value: https://novohaven-client.onrender.com
+
+  - type: web
+    name: novohaven-client
+    runtime: static
+    rootDir: client
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./build
+    envVars:
+      - key: REACT_APP_API_URL
+        value: https://novohaven-server.onrender.com/api
