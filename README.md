@@ -1,6 +1,71 @@
-# NovoHaven — AI Agent Platform
+# Operational AI Agent Platform for Teams
 
 A gateway-based, plugin-driven AI agent platform that connects messaging channels (Web UI, Lark) to intelligent agents capable of discovering, executing, and self-healing multi-step AI workflows ("skills").
+
+## What This System Is For
+
+This system is built for operators, founders, sales teams, marketers, and support teams who repeat the same high-value tasks every day but still do them manually in chat.
+
+It turns one-off requests into reusable execution assets:
+
+- **Skills** for focused capabilities (for example, translation, review analysis, image editing).
+- **Workflows** for multi-step operations (for example, collect data → transform → generate output → deliver).
+
+### The Core User Challenge
+
+Most teams face the same pattern:
+
+- Requests arrive in chat from many channels.
+- The task needs domain context, company standards, and consistent output quality.
+- The same work is repeated, but existing chat assistants treat each request as a fresh conversation.
+
+This system addresses this by making execution **stateful, reusable, and governable** instead of purely conversational.
+
+## Problem-to-Solution Story
+
+```mermaid
+flowchart LR
+    A["User request in Web/Lark"] --> B["Agent understands intent"]
+    B --> C["Find existing skill/workflow"]
+    C --> D{"Good match?"}
+    D -- "Yes" --> E["Execute with required inputs"]
+    D -- "No" --> F["AI drafts new workflow"]
+    F --> G["User tests in chat"]
+    G --> H["Save as reusable skill/workflow"]
+    E --> I["Deliver output + store execution memory"]
+    H --> I
+```
+
+
+
+In short: **Chat is the interface, but reusable operations are the product.**
+
+## What Concrete Needs It Supports
+
+- Standardized customer-facing writing with optional context and tone controls.
+- Cross-channel AI operations (Web + Lark) with the same backend logic.
+- Multi-step tasks that combine AI reasoning, browser actions, scripts, HTTP calls, and transforms.
+- Controlled evolution of capabilities through skill drafts and approval flows.
+- Repeatable execution with input validation, fallback handling, and traceable run history.
+
+## How It Differs From Traditional Personal AI Assistants
+
+
+| Dimension             | Traditional Personal Assistant (e.g. ChatGPT, OpenClaw-style chat agent) | This System                                                   |
+| --------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| Primary unit of value | Single conversation response                                             | Reusable skill/workflow + execution result                    |
+| Reuse model           | User repeats instructions manually                                       | Save once, run repeatedly with structured inputs              |
+| Operational control   | Limited governance over agent-created logic                              | Draft-review-approve lifecycle for skill changes              |
+| Multi-step execution  | Often prompt-orchestrated, less explicit runtime graph                   | Explicit step graph with typed executors and execution states |
+| Channel integration   | Usually one UI at a time                                                 | Unified gateway across Web and Lark                           |
+| Team consistency      | Depends on prompt discipline                                             | Company standards + shared reusable assets                    |
+| Reliability posture   | Great for ad-hoc help                                                    | Designed for repeated business operations                     |
+
+
+## Design Principle
+
+This system is not trying to be a smarter chatbot.  
+It is trying to be a **durable operations layer** for AI-enabled work.
 
 ## Architecture Overview
 
@@ -48,14 +113,16 @@ A gateway-based, plugin-driven AI agent platform that connects messaging channel
 
 ### Key Concepts
 
-| Term | Description |
-|------|-------------|
-| **Skill** | A reusable, single-purpose AI capability (e.g., "Product Review Analyzer"). Formerly "Template". |
-| **Workflow** | A multi-step composed pipeline that chains skills/steps together. Formerly "Recipe". |
-| **Session** | A conversation between a user (via any channel) and an agent process. |
-| **Agent** | An isolated process that handles a session — reasons with an LLM, searches skills, executes tools. |
-| **Plugin** | An extensible module in one of 4 categories: Channel, Tool, Memory, or Provider. |
-| **Skill Draft** | An agent-proposed edit or new skill that requires human approval before activation. |
+
+| Term            | Description                                                                                        |
+| --------------- | -------------------------------------------------------------------------------------------------- |
+| **Skill**       | A reusable, single-purpose AI capability (e.g., "Product Review Analyzer"). Formerly "Template".   |
+| **Workflow**    | A multi-step composed pipeline that chains skills/steps together. Formerly "Recipe".               |
+| **Session**     | A conversation between a user (via any channel) and an agent process.                              |
+| **Agent**       | An isolated process that handles a session — reasons with an LLM, searches skills, executes tools. |
+| **Plugin**      | An extensible module in one of 4 categories: Channel, Tool, Memory, or Provider.                   |
+| **Skill Draft** | An agent-proposed edit or new skill that requires human approval before activation.                |
+
 
 ## Tech Stack
 
@@ -171,12 +238,14 @@ NovoHaven uses a plugin architecture with 4 categories. Each plugin has a `manif
 
 ### Plugin Types
 
-| Type | Purpose | Built-in Plugins |
-|------|---------|------------------|
-| **Channel** | Messaging adapters that normalize platform-specific messages | `channel-web` (REST + SSE), `channel-lark` (websocket + webhook) |
-| **Tool** | Agent-callable capabilities exposed as LLM tools | `tool-skill-manager`, `tool-browser`, `tool-bash`, `tool-fileops` |
-| **Memory** | Search and vector indexing for skill discovery | `memory-sqlite-vec` |
-| **Provider** | LLM backends for streaming completions | `provider-anthropic`, `provider-openai`, `provider-google` |
+
+| Type         | Purpose                                                      | Built-in Plugins                                                  |
+| ------------ | ------------------------------------------------------------ | ----------------------------------------------------------------- |
+| **Channel**  | Messaging adapters that normalize platform-specific messages | `channel-web` (REST + SSE), `channel-lark` (websocket + webhook)  |
+| **Tool**     | Agent-callable capabilities exposed as LLM tools             | `tool-skill-manager`, `tool-browser`, `tool-bash`, `tool-fileops` |
+| **Memory**   | Search and vector indexing for skill discovery               | `memory-sqlite-vec`                                               |
+| **Provider** | LLM backends for streaming completions                       | `provider-anthropic`, `provider-openai`, `provider-google`        |
+
 
 ### Creating a Plugin
 
@@ -188,7 +257,7 @@ server/src/plugins/builtin/my-plugin/
   index.ts
 ```
 
-2. Write `manifest.json`:
+1. Write `manifest.json`:
 
 ```json
 {
@@ -207,7 +276,7 @@ server/src/plugins/builtin/my-plugin/
 }
 ```
 
-3. Implement the appropriate interface from `server/src/plugins/types.ts`:
+1. Implement the appropriate interface from `server/src/plugins/types.ts`:
 
 ```typescript
 import { ToolPlugin, PluginManifest, ToolDefinition, ToolContext, ToolResult } from '../../types';
@@ -241,7 +310,7 @@ export default class MyPlugin implements ToolPlugin {
 }
 ```
 
-4. The plugin loader automatically discovers and registers it on server startup. Enable/disable and configure via the Plugin Manager UI or the `plugin_configs` DB table.
+1. The plugin loader automatically discovers and registers it on server startup. Enable/disable and configure via the Plugin Manager UI or the `plugin_configs` DB table.
 
 ### Plugin Interfaces
 
@@ -290,90 +359,108 @@ The agent can search for relevant skills, execute workflows, test skills, propos
 
 ### Agent Tools
 
-| Tool | Description |
-|------|-------------|
-| `skill:search` | Find relevant skills/workflows by description |
-| `skill:execute` | Run a skill/workflow with given inputs |
-| `skill:test` | Test a skill with sample inputs (no persist) |
-| `skill:edit` | Propose edits to a skill (creates a draft for review) |
-| `skill:create` | Propose a new skill (creates a draft) |
-| `skill:validate` | Check a skill for errors (missing variables, bad config) |
-| `approval:request` | Ask the user for approval before proceeding |
+
+| Tool               | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| `skill:search`     | Find relevant skills/workflows by description            |
+| `skill:execute`    | Run a skill/workflow with given inputs                   |
+| `skill:test`       | Test a skill with sample inputs (no persist)             |
+| `skill:edit`       | Propose edits to a skill (creates a draft for review)    |
+| `skill:create`     | Propose a new skill (creates a draft)                    |
+| `skill:validate`   | Check a skill for errors (missing variables, bad config) |
+| `approval:request` | Ask the user for approval before proceeding              |
+
 
 ## API Endpoints
 
 ### Gateway & Sessions
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/sessions` | List active sessions |
-| `GET` | `/api/sessions/:id` | Get session detail with messages |
-| `POST` | `/api/sessions/:id/close` | Close a session |
+
+| Method | Path                      | Description                      |
+| ------ | ------------------------- | -------------------------------- |
+| `GET`  | `/api/sessions`           | List active sessions             |
+| `GET`  | `/api/sessions/:id`       | Get session detail with messages |
+| `POST` | `/api/sessions/:id/close` | Close a session                  |
+
 
 ### Agent Configuration
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/agents` | List agent configs |
-| `POST` | `/api/agents` | Create agent config |
-| `GET` | `/api/agents/:id` | Get agent config |
-| `PUT` | `/api/agents/:id` | Update agent config |
+
+| Method | Path              | Description         |
+| ------ | ----------------- | ------------------- |
+| `GET`  | `/api/agents`     | List agent configs  |
+| `POST` | `/api/agents`     | Create agent config |
+| `GET`  | `/api/agents/:id` | Get agent config    |
+| `PUT`  | `/api/agents/:id` | Update agent config |
+
 
 ### Plugins
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/plugins` | List all plugins with status |
-| `PUT` | `/api/plugins/:name` | Update plugin config (enable/disable) |
+
+| Method | Path                 | Description                           |
+| ------ | -------------------- | ------------------------------------- |
+| `GET`  | `/api/plugins`       | List all plugins with status          |
+| `PUT`  | `/api/plugins/:name` | Update plugin config (enable/disable) |
+
 
 ### Skills
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/skills` | List all skills |
-| `POST` | `/api/skills` | Create a skill |
-| `GET` | `/api/skills/:id` | Get skill with steps |
-| `PUT` | `/api/skills/:id` | Update a skill |
-| `DELETE` | `/api/skills/:id` | Delete a skill |
-| `POST` | `/api/skills/:id/clone` | Clone a skill |
+
+| Method   | Path                    | Description          |
+| -------- | ----------------------- | -------------------- |
+| `GET`    | `/api/skills`           | List all skills      |
+| `POST`   | `/api/skills`           | Create a skill       |
+| `GET`    | `/api/skills/:id`       | Get skill with steps |
+| `PUT`    | `/api/skills/:id`       | Update a skill       |
+| `DELETE` | `/api/skills/:id`       | Delete a skill       |
+| `POST`   | `/api/skills/:id/clone` | Clone a skill        |
+
 
 ### Workflows
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/workflows` | List all workflows |
-| `POST` | `/api/workflows` | Create a workflow |
-| `GET` | `/api/workflows/:id` | Get workflow with steps |
-| `PUT` | `/api/workflows/:id` | Update a workflow |
-| `DELETE` | `/api/workflows/:id` | Delete a workflow |
+
+| Method   | Path                 | Description             |
+| -------- | -------------------- | ----------------------- |
+| `GET`    | `/api/workflows`     | List all workflows      |
+| `POST`   | `/api/workflows`     | Create a workflow       |
+| `GET`    | `/api/workflows/:id` | Get workflow with steps |
+| `PUT`    | `/api/workflows/:id` | Update a workflow       |
+| `DELETE` | `/api/workflows/:id` | Delete a workflow       |
+
 
 ### Skill Drafts (Agent-Proposed Changes)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/skillDrafts` | List pending drafts |
-| `GET` | `/api/skillDrafts/:id` | Get draft detail |
-| `PUT` | `/api/skillDrafts/:id/approve` | Approve and apply draft |
-| `PUT` | `/api/skillDrafts/:id/reject` | Reject draft |
+
+| Method | Path                           | Description             |
+| ------ | ------------------------------ | ----------------------- |
+| `GET`  | `/api/skillDrafts`             | List pending drafts     |
+| `GET`  | `/api/skillDrafts/:id`         | Get draft detail        |
+| `PUT`  | `/api/skillDrafts/:id/approve` | Approve and apply draft |
+| `PUT`  | `/api/skillDrafts/:id/reject`  | Reject draft            |
+
 
 ### Channel Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/channels/channel-web/message` | Send message to agent (web) |
-| `GET` | `/channels/channel-web/stream` | SSE stream for responses (web) |
+
+| Method | Path                             | Description                                                |
+| ------ | -------------------------------- | ---------------------------------------------------------- |
+| `POST` | `/channels/channel-web/message`  | Send message to agent (web)                                |
+| `GET`  | `/channels/channel-web/stream`   | SSE stream for responses (web)                             |
 | `POST` | `/channels/channel-lark/webhook` | Lark event subscription webhook (optional in webhook mode) |
+
 
 ### Legacy Endpoints (preserved)
 
-| Group | Prefix | Key Endpoints |
-|-------|--------|---------------|
-| Recipes | `/api/recipes` | CRUD (backward compat) |
+
+| Group      | Prefix            | Key Endpoints                     |
+| ---------- | ----------------- | --------------------------------- |
+| Recipes    | `/api/recipes`    | CRUD (backward compat)            |
 | Executions | `/api/executions` | CRUD + approve/reject/retry steps |
-| Standards | `/api/standards` | CRUD |
-| AI | `/api/ai` | Models, providers, test |
-| Outputs | `/api/outputs` | Browse execution outputs |
-| Usage | `/api/usage` | API usage tracking |
+| Standards  | `/api/standards`  | CRUD                              |
+| AI         | `/api/ai`         | Models, providers, test           |
+| Outputs    | `/api/outputs`    | Browse execution outputs          |
+| Usage      | `/api/usage`      | API usage tracking                |
+
 
 ## Lark Integration
 
@@ -384,8 +471,8 @@ The `channel-lark` plugin enables bot interactions in Lark (group chats and DMs)
 1. Create a Lark app at [open.larksuite.com](https://open.larksuite.com)
 2. Enable bot capabilities
 3. Choose inbound mode:
-   - `websocket` (default): no public inbound webhook endpoint required
-   - `webhook`: set webhook URL to `https://<your-server>/channels/channel-lark/webhook`
+  - `websocket` (default): no public inbound webhook endpoint required
+  - `webhook`: set webhook URL to `https://<your-server>/channels/channel-lark/webhook`
 4. Subscribe to events: `im.message.receive_v1`
 5. Configure the plugin via the Plugin Manager UI or directly in the `plugin_configs` table:
 
@@ -410,6 +497,7 @@ User @mentions bot in Lark → Lark websocket/webhook event → channel-lark plu
 ```
 
 Features:
+
 - @mention detection in group chats
 - Thread support via Lark's `root_id`
 - Event deduplication (size-bounded + TTL cache)
@@ -444,18 +532,20 @@ Provider API keys can also be configured per-plugin via the Plugin Manager UI or
 
 ### Key Tables
 
-| Table | Purpose |
-|-------|---------|
-| `skills` | Reusable single-purpose AI capabilities |
-| `workflows` | Multi-step composed pipelines |
-| `skill_steps` | Steps within skills or workflows (`parent_type` discriminator) |
-| `sessions` | Agent conversation sessions across channels |
-| `session_messages` | Conversation history per session |
-| `agent_configs` | Per-agent settings (model, system prompt, allowed tools) |
-| `plugin_configs` | Plugin enable/disable and configuration |
-| `skill_drafts` | Agent-proposed edits awaiting human approval |
-| `workflow_executions` | Running/completed workflow executions |
-| `step_executions` | Individual step results within executions |
+
+| Table                 | Purpose                                                        |
+| --------------------- | -------------------------------------------------------------- |
+| `skills`              | Reusable single-purpose AI capabilities                        |
+| `workflows`           | Multi-step composed pipelines                                  |
+| `skill_steps`         | Steps within skills or workflows (`parent_type` discriminator) |
+| `sessions`            | Agent conversation sessions across channels                    |
+| `session_messages`    | Conversation history per session                               |
+| `agent_configs`       | Per-agent settings (model, system prompt, allowed tools)       |
+| `plugin_configs`      | Plugin enable/disable and configuration                        |
+| `skill_drafts`        | Agent-proposed edits awaiting human approval                   |
+| `workflow_executions` | Running/completed workflow executions                          |
+| `step_executions`     | Individual step results within executions                      |
+
 
 ## Authentication
 
