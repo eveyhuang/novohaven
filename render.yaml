@@ -19,7 +19,6 @@ services:
       - key: UPLOADS_DIR
         value: /var/data/uploads
       - key: CLIENT_URL
-        sync: false
         value: https://novohaven-client.onrender.com
 
   - type: web
