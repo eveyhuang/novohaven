@@ -61,6 +61,96 @@ const RESERVED_VARIABLES = new Set([
 
 const WORKFLOW_JSON_BLOCK_REGEX = /```workflow-json\s*\n?([\s\S]*?)\n?\s*```/i;
 const GENERIC_JSON_BLOCK_REGEX = /```json\s*\n?([\s\S]*?)\n?\s*```/i;
+const ASSISTANT_MODEL_PREFERENCE = [
+  'gemini-3-flash-preview',
+  'gemini-3-flash',
+  'gemini-2.5-flash',
+  'gemini-3-pro-preview',
+];
+
+function isStepOutputReference(value: string): boolean {
+  return /^step_\d+_output(?:\..+)?$/i.test(String(value || '').trim());
+}
+
+function isReservedVariable(value: string): boolean {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (RESERVED_VARIABLES.has(normalized)) return true;
+  return Array.from(RESERVED_VARIABLES).some((reserved) => {
+    const compactReserved = reserved.replace(/_/g, '');
+    const compactValue = normalized.replace(/_/g, '');
+    return compactValue === compactReserved || compactValue.includes(compactReserved);
+  });
+}
+
+function looksOptionalHint(text: string): boolean {
+  const raw = String(text || '').toLowerCase();
+  if (!raw) return false;
+  return /(optional|not required|can be omitted|可选|选填|非必填|可以不填|可不填|可不提供|不是必须)/i.test(raw);
+}
+
+function collectStepInputConfigInfo(workflow: GeneratedWorkflow): {
+  declaredByName: Map<string, GeneratedInputSpec>;
+  requiredNames: Set<string>;
+  optionalNames: Set<string>;
+  hasUserInputDeclaration: boolean;
+} {
+  const declaredByName = new Map<string, GeneratedInputSpec>();
+  const requiredNames = new Set<string>();
+  const optionalNames = new Set<string>();
+  let hasUserInputDeclaration = false;
+
+  for (const step of workflow.steps || []) {
+    const rawConfig = (step as any)?.input_config;
+    if (!rawConfig) continue;
+
+    let parsedConfig: any = null;
+    try {
+      parsedConfig = typeof rawConfig === 'string' ? JSON.parse(rawConfig) : rawConfig;
+    } catch {
+      parsedConfig = null;
+    }
+    const vars = parsedConfig?.variables;
+    if (!vars) continue;
+
+    const absorb = (nameRaw: any, rawVar: any) => {
+      const name = String(nameRaw || '').trim();
+      if (!name || isStepOutputReference(name) || isReservedVariable(name)) return;
+
+      const source = String(rawVar?.source || 'user_input').trim();
+      if (source && source !== 'user_input') return;
+      hasUserInputDeclaration = true;
+
+      const type = String(rawVar?.type || 'text').trim() || 'text';
+      const description = String(rawVar?.description || rawVar?.label || '').trim();
+      if (!declaredByName.has(name)) {
+        declaredByName.set(name, { name, type, description });
+      }
+
+      if (rawVar?.optional === true || rawVar?.required === false) {
+        optionalNames.add(name);
+        requiredNames.delete(name);
+      } else if (!optionalNames.has(name)) {
+        requiredNames.add(name);
+      }
+    };
+
+    if (Array.isArray(vars)) {
+      for (const variable of vars) {
+        absorb(variable?.name, variable);
+      }
+      continue;
+    }
+
+    if (vars && typeof vars === 'object') {
+      for (const [name, rawVar] of Object.entries(vars)) {
+        absorb(name, rawVar);
+      }
+    }
+  }
+
+  return { declaredByName, requiredNames, optionalNames, hasUserInputDeclaration };
+}
 
 function parseWorkflowFromAssistantText(content: string): GeneratedWorkflow | null {
   const tryParse = (raw: string): GeneratedWorkflow | null => {
@@ -137,15 +227,42 @@ function parseWorkflowFromAssistantText(content: string): GeneratedWorkflow | nu
 function inferRequiredInputsFromWorkflow(workflow: GeneratedWorkflow | null): GeneratedInputSpec[] {
   if (!workflow) return [];
 
+  const { declaredByName, requiredNames, optionalNames, hasUserInputDeclaration } = collectStepInputConfigInfo(workflow);
   const byName = new Map<string, GeneratedInputSpec>();
-  for (const spec of workflow.requiredInputs || []) {
+  const declaredRequiredInputs = workflow.requiredInputs || [];
+  for (const spec of declaredRequiredInputs) {
     const name = String(spec?.name || '').trim();
     if (!name) continue;
+    if (isStepOutputReference(name) || isReservedVariable(name)) continue;
+
+    const mergedDescription = String(spec.description || declaredByName.get(name)?.description || '').trim();
+    const isOptionalFromConfig = optionalNames.has(name);
+    const isOptionalFromText = looksOptionalHint(mergedDescription);
+    if (isOptionalFromConfig || isOptionalFromText) continue;
+
     byName.set(name, {
       name,
-      type: spec.type || 'text',
-      description: spec.description || '',
+      type: spec.type || declaredByName.get(name)?.type || 'text',
+      description: mergedDescription,
     });
+  }
+
+  // Step input_config is the strongest signal for required-vs-optional user inputs.
+  for (const name of requiredNames) {
+    if (optionalNames.has(name)) continue;
+    const existing = byName.get(name);
+    const declared = declaredByName.get(name);
+    byName.set(name, {
+      name,
+      type: existing?.type || declared?.type || 'text',
+      description: existing?.description || declared?.description || '',
+    });
+  }
+
+  // If the assistant returned explicit declarations (requiredInputs or input_config.variables),
+  // use those and avoid prompt-variable fallback that can incorrectly force optional fields.
+  if (declaredRequiredInputs.length > 0 || hasUserInputDeclaration) {
+    return Array.from(byName.values());
   }
 
   const considerText = (text: string) => {
@@ -155,8 +272,9 @@ function inferRequiredInputsFromWorkflow(workflow: GeneratedWorkflow | null): Ge
     while ((match = VARIABLE_REGEX.exec(text)) !== null) {
       const raw = String(match[1] || '').trim();
       if (!raw) continue;
-      if (/^step_\d+_output(?:\..+)?$/i.test(raw)) continue;
-      if (RESERVED_VARIABLES.has(raw.toLowerCase())) continue;
+      if (isStepOutputReference(raw)) continue;
+      if (isReservedVariable(raw)) continue;
+      if (optionalNames.has(raw)) continue;
       if (!byName.has(raw)) {
         byName.set(raw, {
           name: raw,
@@ -282,6 +400,7 @@ export function AIWorkflowBuilder() {
   const [isTesting, setIsTesting] = useState(false);
   const [testInputs, setTestInputs] = useState<Record<string, any>>({});
   const [aiModels, setAiModels] = useState<AIModel[]>([]);
+  const [assistantModel, setAssistantModel] = useState('');
   const [activeTestContext, setActiveTestContext] = useState<ActiveTestContext | null>(null);
   const [handledReviewActions, setHandledReviewActions] = useState<Record<string, 'approved' | 'rejected'>>({});
   const [pendingRejectAction, setPendingRejectAction] = useState<ReviewAction | null>(null);
@@ -322,10 +441,30 @@ export function AIWorkflowBuilder() {
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
 
-  const defaultAiModel = useMemo(
-    () => aiModels.find((m) => m.available)?.id || aiModels[0]?.id || 'gpt-4o',
-    [aiModels]
-  );
+  const defaultAiModel = useMemo(() => {
+    const available = aiModels.filter((m) => m.available);
+    for (const preferred of ASSISTANT_MODEL_PREFERENCE) {
+      const hit = available.find((m) => m.id === preferred);
+      if (hit) return hit.id;
+    }
+    return available[0]?.id || aiModels[0]?.id || 'gemini-3-flash-preview';
+  }, [aiModels]);
+
+  const assistantModelOptions = useMemo(() => {
+    const configured = aiModels.filter((m) => m.available !== false);
+    return configured.length > 0 ? configured : aiModels;
+  }, [aiModels]);
+
+  useEffect(() => {
+    if (assistantModelOptions.length === 0) {
+      if (assistantModel) setAssistantModel('');
+      return;
+    }
+    const isSelectedValid = assistantModelOptions.some((m) => m.id === assistantModel);
+    if (!isSelectedValid) {
+      setAssistantModel(defaultAiModel);
+    }
+  }, [assistantModelOptions, assistantModel, defaultAiModel]);
 
   const effectiveRequiredInputs = useMemo(
     () => inferRequiredInputsFromWorkflow(currentWorkflow),
@@ -763,7 +902,8 @@ export function AIWorkflowBuilder() {
             `Input data used:\n${JSON.stringify(inputData, null, 2)}`,
             `Failure summary:\n${failureSummary}`,
           ].join('\n\n')
-        )
+        ),
+        assistantModel || defaultAiModel
       );
 
       const resolvedWorkflow = response.workflow || parseWorkflowFromAssistantText(response.message);
@@ -806,7 +946,8 @@ export function AIWorkflowBuilder() {
 
     try {
       const response: AssistantResponse = await api.assistantGenerate(
-        buildAssistantMessages(updatedMessages, currentWorkflow || undefined)
+        buildAssistantMessages(updatedMessages, currentWorkflow || undefined),
+        assistantModel || defaultAiModel
       );
 
       const resolvedWorkflow = response.workflow || parseWorkflowFromAssistantText(response.message);
@@ -1020,9 +1161,26 @@ export function AIWorkflowBuilder() {
           <h1 className="text-2xl font-bold text-secondary-900">{t('aiWorkflowBuilder')}</h1>
           <p className="text-secondary-600 text-sm">{t('aiWorkflowBuilderDescription')}</p>
         </div>
-        <Button variant="ghost" onClick={() => navigate('/')}>
-          {t('backToDashboard')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-secondary-500">{t('aiModel')}</label>
+            <select
+              value={assistantModel || defaultAiModel}
+              onChange={(e) => setAssistantModel(e.target.value)}
+              className="text-sm border border-secondary-300 rounded px-2 py-1 bg-white"
+              disabled={assistantModelOptions.length === 0 || isLoading || isTesting}
+            >
+              {assistantModelOptions.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button variant="ghost" onClick={() => navigate('/')}>
+            {t('backToDashboard')}
+          </Button>
+        </div>
       </div>
 
       {error && (

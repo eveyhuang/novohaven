@@ -10,6 +10,7 @@ import os from 'os';
 import path from 'path';
 import { getDatabase, initializeDatabase } from '../../../models/database';
 import { approveStep, startExecution } from '../../../services/workflowEngine';
+import { inferInputsFromNaturalLanguage } from './inputAutofill';
 import {
   ToolPlugin, PluginManifest, ToolDefinition, ToolContext, ToolResult,
 } from '../../types';
@@ -285,6 +286,10 @@ class SkillManagerPlugin implements ToolPlugin {
         }
       }
     }
+
+    // Fill missing text inputs from the latest user utterance (natural language),
+    // so users can invoke skills conversationally without key:value syntax.
+    this.applyNaturalLanguageInputAutofill(context.sessionId, inputSpecs, resolvedInputs);
 
     // Reuse inputs from latest successful execution of the same asset in this task segment.
     // This enables continuation requests like "same for this one" without re-uploading all prior inputs.
@@ -1041,6 +1046,25 @@ class SkillManagerPlugin implements ToolPlugin {
        LIMIT 1`
     ).get(sessionId) as { content?: string } | undefined;
     return String(row?.content || '');
+  }
+
+  private applyNaturalLanguageInputAutofill(
+    sessionId: string,
+    inputSpecs: Map<string, { type: string; optional: boolean; label?: string }>,
+    resolvedInputs: Record<string, any>
+  ): void {
+    const latestUserText = this.getLatestUserMessageText(sessionId);
+    if (!latestUserText.trim()) return;
+
+    const inferred = inferInputsFromNaturalLanguage({
+      message: latestUserText,
+      inputSpecs: new Map(inputSpecs),
+      existingInputs: resolvedInputs,
+    });
+
+    for (const [name, value] of Object.entries(inferred)) {
+      resolvedInputs[name] = value;
+    }
   }
 
   private userWantsImageCombination(sessionId: string): boolean {

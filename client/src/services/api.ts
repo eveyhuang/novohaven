@@ -536,10 +536,10 @@ class ApiClient {
   }
 
   // Assistant endpoints
-  async assistantGenerate(messages: AssistantMessage[]): Promise<AssistantResponse> {
+  async assistantGenerate(messages: AssistantMessage[], modelId?: string): Promise<AssistantResponse> {
     return this.request<AssistantResponse>('/assistant/generate', {
       method: 'POST',
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages, modelId }),
     });
   }
 

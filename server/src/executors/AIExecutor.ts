@@ -33,10 +33,24 @@ export class AIExecutor implements StepExecutor {
       stepExecutions: context.completedStepExecutions,
     };
 
-    const { compiledPrompt, unresolvedVariables, images } = compilePrompt(
+    let { compiledPrompt, unresolvedVariables, images } = compilePrompt(
       step.prompt_template || '',
       compileContext
     );
+
+    const declaredRequiredUserInputs = this.getDeclaredRequiredUserInputs(step);
+    if (declaredRequiredUserInputs !== null && unresolvedVariables.length > 0) {
+      const optionalMissing = unresolvedVariables.filter((name) => !declaredRequiredUserInputs.has(name));
+      if (optionalMissing.length > 0) {
+        for (const name of optionalMissing) {
+          const placeholder = `[User input "${name}" required]`;
+          compiledPrompt = compiledPrompt.split(placeholder).join('');
+        }
+        // Normalize blank lines caused by optional placeholder removal.
+        compiledPrompt = compiledPrompt.replace(/\n{3,}/g, '\n\n').trim();
+      }
+      unresolvedVariables = unresolvedVariables.filter((name) => declaredRequiredUserInputs.has(name));
+    }
 
     if (unresolvedVariables.length > 0) {
       return {
@@ -135,5 +149,46 @@ export class AIExecutor implements StepExecutor {
         },
       ],
     };
+  }
+
+  private getDeclaredRequiredUserInputs(step: RecipeStep): Set<string> | null {
+    if (!step.input_config) return null;
+
+    try {
+      const parsed = JSON.parse(step.input_config);
+      if (!parsed || typeof parsed !== 'object' || !('variables' in parsed)) {
+        return null;
+      }
+
+      const required = new Set<string>();
+      const vars = (parsed as any).variables;
+
+      if (Array.isArray(vars)) {
+        for (const variable of vars) {
+          const name = String(variable?.name || '').trim();
+          const source = String(variable?.source || 'user_input').trim();
+          if (!name || source !== 'user_input') continue;
+          if (variable?.required === false || variable?.optional === true) continue;
+          required.add(name);
+        }
+        return required;
+      }
+
+      if (vars && typeof vars === 'object') {
+        for (const [varName, rawConfig] of Object.entries(vars)) {
+          const name = String(varName || '').trim();
+          const config = (rawConfig || {}) as any;
+          const source = String(config?.source || 'user_input').trim();
+          if (!name || source !== 'user_input') continue;
+          if (config?.required === false || config?.optional === true) continue;
+          required.add(name);
+        }
+        return required;
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
   }
 }
