@@ -1,4 +1,5 @@
 import { fork, ChildProcess } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import { ChannelMessage, AgentResponse } from '../plugins/types';
 import { SessionManager } from './sessionManager';
@@ -57,9 +58,10 @@ export class AgentSupervisor {
       this.evictOldest();
     }
 
-    const agentEntry = path.join(__dirname, '../agent/process.ts');
+    const agentEntry = this.resolveAgentEntry();
+    const execArgv = this.resolveAgentExecArgv(agentEntry);
     const child = fork(agentEntry, [], {
-      execArgv: ['-r', 'ts-node/register'],
+      execArgv,
       env: { ...process.env, SESSION_ID: sessionId },
     });
 
@@ -153,4 +155,20 @@ export class AgentSupervisor {
 
   getActiveCount(): number { return this.agents.size; }
   getMaxAgents(): number { return this.maxAgents; }
+
+  private resolveAgentEntry(): string {
+    const jsEntry = path.join(__dirname, '../agent/process.js');
+    const tsEntry = path.join(__dirname, '../agent/process.ts');
+
+    // Production (dist): prefer compiled JS and avoid ts-node runtime dependency.
+    if (fs.existsSync(jsEntry)) return jsEntry;
+    if (fs.existsSync(tsEntry)) return tsEntry;
+
+    throw new Error(`Agent entry not found. Checked: ${jsEntry}, ${tsEntry}`);
+  }
+
+  private resolveAgentExecArgv(agentEntry: string): string[] {
+    if (!agentEntry.endsWith('.ts')) return [];
+    return ['-r', 'ts-node/register'];
+  }
 }
