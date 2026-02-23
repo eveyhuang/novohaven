@@ -111,15 +111,19 @@ export class AgentRunner {
     try {
       const pluginDir = path.join(__dirname, '../plugins/builtin', providerName);
       const manifest = require(path.join(pluginDir, 'manifest.json'));
-      const PluginClass = require(path.join(pluginDir, 'index.ts')).default
-        || require(path.join(pluginDir, 'index.ts'));
+      const entryPath = this.resolvePluginEntryPath(pluginDir, manifest.entry || './index.ts');
+      if (!entryPath) {
+        throw new Error(`Provider entry not found for ${providerName}`);
+      }
+      const PluginModule = require(entryPath);
+      const PluginClass = PluginModule.default || PluginModule;
       const provider = new PluginClass(manifest);
 
       // Get config from DB
       const dbConfig = this.db.prepare(
         'SELECT config FROM plugin_configs WHERE plugin_name = ?'
       ).get(providerName) as any;
-      const config = dbConfig ? JSON.parse(dbConfig.config) : {};
+      const config = this.parsePluginConfig(dbConfig?.config);
 
       await provider.initialize(config);
       this.provider = provider;
@@ -152,10 +156,14 @@ export class AgentRunner {
 
         const pluginDir = path.join(__dirname, '../plugins/builtin', pluginName);
         const manifest = require(path.join(pluginDir, 'manifest.json'));
-        const PluginClass = require(path.join(pluginDir, 'index.ts')).default
-          || require(path.join(pluginDir, 'index.ts'));
+        const entryPath = this.resolvePluginEntryPath(pluginDir, manifest.entry || './index.ts');
+        if (!entryPath) {
+          throw new Error(`Tool entry not found for ${pluginName}`);
+        }
+        const PluginModule = require(entryPath);
+        const PluginClass = PluginModule.default || PluginModule;
         const plugin = new PluginClass(manifest);
-        const config = dbConfig?.config ? JSON.parse(dbConfig.config) : {};
+        const config = this.parsePluginConfig(dbConfig?.config);
         await plugin.initialize(config);
         this.tools.set(pluginName, plugin);
         console.log(`[AgentRunner] Tool plugin ${pluginName} loaded`);
@@ -176,6 +184,39 @@ export class AgentRunner {
       sessionId: this.sessionId,
       userId: session?.user_id || 1,
     });
+  }
+
+  private parsePluginConfig(raw: unknown): Record<string, any> {
+    if (!raw) return {};
+    if (typeof raw === 'object') return raw as Record<string, any>;
+    try {
+      const parsed = JSON.parse(String(raw));
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private resolvePluginEntryPath(pluginDir: string, manifestEntry: string): string | null {
+    const normalized = manifestEntry || './index.ts';
+    const direct = path.join(pluginDir, normalized);
+    if (fs.existsSync(direct)) return direct;
+
+    const ext = path.extname(normalized);
+    if (ext === '.ts') {
+      const jsVariant = path.join(pluginDir, normalized.replace(/\.ts$/i, '.js'));
+      if (fs.existsSync(jsVariant)) return jsVariant;
+    } else if (ext === '.js') {
+      const tsVariant = path.join(pluginDir, normalized.replace(/\.js$/i, '.ts'));
+      if (fs.existsSync(tsVariant)) return tsVariant;
+    } else {
+      const jsVariant = `${direct}.js`;
+      if (fs.existsSync(jsVariant)) return jsVariant;
+      const tsVariant = `${direct}.ts`;
+      if (fs.existsSync(tsVariant)) return tsVariant;
+    }
+
+    return null;
   }
 
   private resolveProviderName(model: string): string {
