@@ -145,37 +145,55 @@ function extractRequiredInputsFromSteps(steps: RecipeStep[]): string[] {
     });
   };
 
-  for (const step of steps) {
-    // Handle non-AI steps - get inputs from input_config
-    if (step.step_type && step.step_type !== 'ai' && step.input_config) {
-      try {
-        const inputConfig = JSON.parse(step.input_config);
-        if (inputConfig.variables) {
-          // Handle both array format (server types) and object format (templates)
-          if (Array.isArray(inputConfig.variables)) {
-            // Array format: [{ name: 'product_urls', source: 'user_input', ... }]
-            for (const variable of inputConfig.variables) {
-              if (variable.source === 'user_input' && variable.required !== false && !isStepOutputReference(variable.name)) {
-                if (isCompanyStandardVariable(variable.name)) continue;
-                inputs.add(variable.name);
-              }
-            }
-          } else {
-            // Object format: { product_urls: { type: 'url_list', ... } }
-            for (const [varName, varConfig] of Object.entries(inputConfig.variables)) {
-              const config = varConfig as any;
-              // Skip optional variables
-              if (config.optional !== true && !isStepOutputReference(varName) && !isCompanyStandardVariable(varName)) {
-                inputs.add(varName);
-              }
-            }
-          }
-        }
-      } catch {
-        // Ignore parse errors
+  const addRequiredInputsFromInputConfig = (inputConfigRaw?: string | null): boolean => {
+    if (!inputConfigRaw) return false;
+    try {
+      const inputConfig = JSON.parse(inputConfigRaw);
+      if (!inputConfig || typeof inputConfig !== 'object' || !('variables' in inputConfig)) {
+        return false;
       }
+      const vars = (inputConfig as any).variables;
+
+      if (Array.isArray(vars)) {
+        for (const variable of vars) {
+          const name = String(variable?.name || '').trim();
+          const source = String(variable?.source || 'user_input').trim();
+          if (!name || source !== 'user_input') continue;
+          if (variable?.required === false || variable?.optional === true) continue;
+          if (isStepOutputReference(name) || isCompanyStandardVariable(name)) continue;
+          inputs.add(name);
+        }
+        return true;
+      }
+
+      if (vars && typeof vars === 'object') {
+        for (const [varName, rawConfig] of Object.entries(vars)) {
+          const name = String(varName || '').trim();
+          const config = (rawConfig || {}) as any;
+          const source = String(config?.source || 'user_input').trim();
+          if (!name || source !== 'user_input') continue;
+          if (config?.required === false || config?.optional === true) continue;
+          if (isStepOutputReference(name) || isCompanyStandardVariable(name)) continue;
+          inputs.add(name);
+        }
+        return true;
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  for (const step of steps) {
+    // If input_config explicitly declares variables, treat that as source of truth.
+    const usedDeclaredInputs = addRequiredInputsFromInputConfig(step.input_config);
+    if (usedDeclaredInputs) {
       continue;
     }
+
+    // For non-AI steps without declared variables, do not infer from prompt.
+    if (step.step_type && step.step_type !== 'ai') continue;
 
     // Handle AI steps (and fallback) - get inputs from prompt_template
     let match;

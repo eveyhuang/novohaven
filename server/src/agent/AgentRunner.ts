@@ -314,7 +314,7 @@ export class AgentRunner {
       round++;
 
       const request: CompletionRequest = {
-        model: agentConfig?.default_model || 'gpt-5',
+        model: agentConfig?.default_model || 'gemini-3-flash-preview',
         systemPrompt,
         messages: currentMessages,
         tools: toolDefs.length > 0 ? toolDefs : undefined,
@@ -957,7 +957,7 @@ sys.stdout.write(text)`;
        WHERE s.id = ?
        LIMIT 1`
     ).get(this.sessionId) as { default_model?: string } | undefined;
-    return row?.default_model || 'gpt-5';
+    return row?.default_model || 'gemini-3-flash-preview';
   }
 
   private getAvailableAssets(

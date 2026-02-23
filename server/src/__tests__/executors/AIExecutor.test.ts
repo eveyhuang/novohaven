@@ -175,6 +175,50 @@ describe('AIExecutor', () => {
       expect(mockCallAI).not.toHaveBeenCalled();
     });
 
+    test('does not fail on unresolved optional variables declared in input_config', async () => {
+      mockStep.prompt_template = 'Translate {{cn_reply}} purpose={{purpose}} tone={{tone}} context={{context}}';
+      mockStep.input_config = JSON.stringify({
+        variables: {
+          cn_reply: { source: 'user_input', required: true },
+          purpose: { source: 'user_input', required: false },
+          tone: { source: 'user_input', optional: true },
+          context: { source: 'user_input', required: false },
+        },
+      });
+      mockContext.userInputs = { cn_reply: '不行，不能更便宜了。' };
+
+      mockCompilePrompt.mockReturnValue({
+        compiledPrompt: 'Translate 不行，不能更便宜了。 purpose=[User input "purpose" required] tone=[User input "tone" required] context=[User input "context" required]',
+        unresolvedVariables: ['purpose', 'tone', 'context'],
+        images: [],
+      });
+
+      mockCallAI.mockResolvedValue({
+        success: true,
+        content: 'Sorry, we can’t go any lower. This is already our best price.',
+        model: 'gpt-5',
+      });
+
+      const result = await executor.execute(mockStep, mockContext);
+
+      expect(result.success).toBe(true);
+      expect(mockCallAI).toHaveBeenCalledWith(
+        'gpt-4o',
+        expect.not.stringContaining('[User input "purpose" required]'),
+        expect.any(Object)
+      );
+      expect(mockCallAI).toHaveBeenCalledWith(
+        'gpt-4o',
+        expect.not.stringContaining('[User input "tone" required]'),
+        expect.any(Object)
+      );
+      expect(mockCallAI).toHaveBeenCalledWith(
+        'gpt-4o',
+        expect.not.stringContaining('[User input "context" required]'),
+        expect.any(Object)
+      );
+    });
+
     test('returns failure when AI call fails', async () => {
       mockCompilePrompt.mockReturnValue({
         compiledPrompt: 'compiled prompt',

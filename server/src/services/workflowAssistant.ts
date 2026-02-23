@@ -58,11 +58,13 @@ export interface AssistantResponse {
 
 // Preferred models for the assistant (in order of preference)
 const PREFERRED_MODELS = [
+  'gemini-3-flash-preview',
+  'gemini-3-flash',
+  'gemini-3-pro-preview',
+  'gemini-2.5-flash',
   'gpt-5',
   'gpt-5.2',
   'gpt-4o',
-  'gemini-3-flash-preview',
-  'gemini-3-pro-preview',
 ];
 
 type AssistantApiMessage = { role: 'user' | 'assistant'; content: string };
@@ -82,6 +84,17 @@ function selectAssistantModel(): string {
   if (textModel) return textModel.id;
 
   throw new Error('No AI models available. Please configure at least one AI provider.');
+}
+
+function resolveAssistantModel(requestedModelId?: string): string {
+  const requested = String(requestedModelId || '').trim();
+  if (!requested) return selectAssistantModel();
+
+  const availableIds = new Set(getAvailableModels().map((m) => m.id));
+  if (!availableIds.has(requested)) {
+    throw new Error(`Requested assistant model "${requested}" is not available`);
+  }
+  return requested;
 }
 
 async function buildSystemPrompt(userId: number): Promise<string> {
@@ -944,7 +957,8 @@ function parseAssistantResponse(content: string): AssistantResponse {
 
 export async function generateWorkflow(
   messages: ConversationMessage[],
-  userId: number
+  userId: number,
+  requestedModelId?: string
 ): Promise<AssistantResponse> {
   if (!messages.length) {
     return {
@@ -957,7 +971,7 @@ export async function generateWorkflow(
     };
   }
 
-  const modelId = selectAssistantModel();
+  const modelId = resolveAssistantModel(requestedModelId);
   const systemPrompt = await buildSystemPrompt(userId);
 
   // Build multi-turn messages, with a format reminder on the last user message
@@ -1089,20 +1103,77 @@ export async function saveWorkflowGraph(
     stepType: string,
     candidates: GeneratedInputSpec[]
   ): string => {
-    const stepVars = candidates.filter((input) => {
-      if (prompt.includes(`{{${input.name}}}`)) return true;
-      if (executorConfig.includes(`{{${input.name}}}`)) return true;
-      if (stepType === 'browser' && input.type === 'url_list') return true;
+    const SYSTEM_VARIABLES = new Set([
+      'company_voice', 'company_platform', 'company_image', 'voice_guidelines',
+      'brand_voice', 'amazon_requirements', 'social_media_guidelines',
+      'image_style_guidelines', 'platform_requirements', 'tone_guidelines', 'content_guidelines',
+    ]);
+    const VAR_REGEX = /\{\{([^}]+)\}\}/g;
+    const escapeRegExp = (value: string): string => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hasOptionalHint = (text: string): boolean => (
+      /(optional|not required|can be omitted|可选|选填|非必填|可以不填|可不填|可不提供|不是必须)/i.test(String(text || ''))
+    );
+    const isOptionalVar = (name: string): boolean => {
+      const tokenLine = new RegExp(`\\{\\{\\s*${escapeRegExp(name)}\\s*\\}\\}`, 'i');
+      const tokenGlobal = new RegExp(`\\{\\{\\s*${escapeRegExp(name)}\\s*\\}\\}`, 'gi');
+      for (const source of [prompt, executorConfig]) {
+        if (!source) continue;
+        const lines = source.split(/\r?\n/);
+        for (const line of lines) {
+          if (!tokenLine.test(line)) continue;
+          if (hasOptionalHint(line)) return true;
+        }
+        tokenGlobal.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = tokenGlobal.exec(source)) !== null) {
+          const idx = m.index;
+          const around = source.slice(Math.max(0, idx - 80), Math.min(source.length, idx + m[0].length + 80));
+          if (hasOptionalHint(around)) return true;
+        }
+      }
       return false;
-    });
+    };
+    const extractVars = (text: string): Set<string> => {
+      const out = new Set<string>();
+      if (!text) return out;
+      let m: RegExpExecArray | null;
+      VAR_REGEX.lastIndex = 0;
+      while ((m = VAR_REGEX.exec(text)) !== null) {
+        const name = String(m[1] || '').trim();
+        if (!name) continue;
+        if (/^step_\d+_output(?:\..+)?$/i.test(name)) continue;
+        if (SYSTEM_VARIABLES.has(name.toLowerCase())) continue;
+        out.add(name);
+      }
+      return out;
+    };
 
-    if (stepVars.length === 0) return '{}';
-    return JSON.stringify({
-      variables: stepVars.reduce((acc, v) => {
-        acc[v.name] = { type: v.type, description: v.description };
-        return acc;
-      }, {} as Record<string, any>),
-    });
+    const vars = new Set<string>([
+      ...extractVars(prompt),
+      ...extractVars(executorConfig),
+    ]);
+    if (stepType === 'browser') {
+      for (const input of candidates) {
+        if (input.type === 'url_list') vars.add(input.name);
+      }
+    }
+    if (vars.size === 0) return '{}';
+
+    const candidateByName = new Map(candidates.map((item) => [item.name, item]));
+    const variableMap: Record<string, any> = {};
+    for (const name of vars) {
+      const candidate = candidateByName.get(name);
+      const type = candidate?.type || (stepType === 'browser' && /url/i.test(name) ? 'url_list' : 'text');
+      const description = candidate?.description || '';
+      const optional = isOptionalVar(name);
+      variableMap[name] = {
+        type,
+        description,
+        ...(optional ? { optional: true } : {}),
+      };
+    }
+
+    return JSON.stringify({ variables: variableMap });
   };
 
   const persistSteps = (

@@ -315,23 +315,25 @@ export function initializeDatabase(): void {
     );
   }
 
+  const DEFAULT_AGENT_MODEL = 'gemini-3-flash-preview';
+
   // Seed default agent config
   const defaultAgent = getOne('SELECT id FROM agent_configs WHERE name = ?', ['Default Agent']);
   if (!defaultAgent) {
     run(`INSERT INTO agent_configs (name, description, default_model, system_prompt, allowed_tools, allowed_channels)
       VALUES (?, ?, ?, ?, ?, ?)`,
       ['Default Agent', 'Default agent configuration',
-       'gpt-5',
+       DEFAULT_AGENT_MODEL,
        'You are a helpful AI assistant with access to skills and workflows. When a user asks you to do something, search for relevant skills first. If a skill exists, use it. If not, help the user directly or propose creating a new skill.',
        '["tool-browser","tool-bash","tool-fileops","tool-skill-manager"]',
        '["channel-web","channel-lark"]']);
   }
 
-  // Update default agent config to use GPT-5
+  // Keep the default agent model aligned with the current preferred low-latency model.
   const currentDefault = getOne('SELECT default_model FROM agent_configs WHERE name = ?', ['Default Agent']);
-  if (currentDefault && currentDefault.default_model !== 'gpt-5') {
-    run('UPDATE agent_configs SET default_model = ? WHERE name = ?', ['gpt-5', 'Default Agent']);
-    console.log('[Database] Updated default agent model to gpt-5');
+  if (currentDefault && currentDefault.default_model !== DEFAULT_AGENT_MODEL) {
+    run('UPDATE agent_configs SET default_model = ? WHERE name = ?', [DEFAULT_AGENT_MODEL, 'Default Agent']);
+    console.log(`[Database] Updated default agent model to ${DEFAULT_AGENT_MODEL}`);
   }
 }
 

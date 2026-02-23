@@ -10,18 +10,20 @@ router.use(authMiddleware);
 // POST /api/assistant/generate - Generate workflow from conversation
 router.post('/generate', async (req: Request, res: Response) => {
   try {
-    const { messages } = req.body as { messages: ConversationMessage[] };
+    const { messages, modelId } = req.body as { messages: ConversationMessage[]; modelId?: string };
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'messages array is required' });
     }
 
     const userId = req.user!.id;
-    const result = await generateWorkflow(messages, userId);
+    const result = await generateWorkflow(messages, userId, modelId);
     res.json(result);
   } catch (error: any) {
     console.error('Assistant generate error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate workflow' });
+    const message = error?.message || 'Failed to generate workflow';
+    const status = /Requested assistant model/i.test(message) ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 });
 

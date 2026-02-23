@@ -323,6 +323,33 @@ describe('Workflow Engine - Executor Dispatch', () => {
       expect(result.error).not.toContain('company_platform');
     });
 
+    test('AI steps respect declared required inputs from input_config', async () => {
+      const customSteps: RecipeStep[] = [{
+        id: 13,
+        recipe_id: 1,
+        step_order: 1,
+        step_name: 'Optional Context Translator',
+        step_type: 'ai',
+        ai_model: 'gpt-5',
+        prompt_template: 'Reply: {{cn_reply}} purpose={{purpose}} tone={{tone}} context={{context}}',
+        output_format: 'text',
+        input_config: JSON.stringify({
+          variables: {
+            cn_reply: { source: 'user_input', required: true },
+            purpose: { source: 'user_input', required: false },
+            tone: { source: 'user_input', optional: true },
+            context: { source: 'user_input', required: false },
+          },
+        }),
+        created_at: '2024-01-01',
+      }];
+
+      const result = await startExecution(1, 1, { cn_reply: '不行，不能更便宜了。' }, customSteps);
+
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+    });
+
     test('does not require company standard variables declared in non-AI input_config', async () => {
       const customSteps: RecipeStep[] = [{
         id: 12,

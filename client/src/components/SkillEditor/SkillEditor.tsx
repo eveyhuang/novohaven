@@ -30,6 +30,41 @@ function extractInputsFromPrompt(promptTemplate: string): string[] {
   return variables;
 }
 
+function escapeRegExp(value: string): string {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasOptionalHint(text: string): boolean {
+  const raw = String(text || '').toLowerCase();
+  if (!raw) return false;
+  return /(optional|not required|can be omitted|可选|选填|非必填|可以不填|可不填|可不提供|不是必须)/i.test(raw);
+}
+
+function isPromptVariableMarkedOptional(promptTemplate: string, varName: string): boolean {
+  const prompt = String(promptTemplate || '');
+  const name = String(varName || '').trim();
+  if (!prompt || !name) return false;
+
+  const tokenRegex = new RegExp(`\\{\\{\\s*${escapeRegExp(name)}\\s*\\}\\}`, 'i');
+  const lines = prompt.split(/\r?\n/);
+  for (const line of lines) {
+    if (!tokenRegex.test(line)) continue;
+    if (hasOptionalHint(line)) return true;
+  }
+
+  const globalTokenRegex = new RegExp(`\\{\\{\\s*${escapeRegExp(name)}\\s*\\}\\}`, 'gi');
+  let match: RegExpExecArray | null;
+  while ((match = globalTokenRegex.exec(prompt)) !== null) {
+    const idx = match.index;
+    const windowStart = Math.max(0, idx - 80);
+    const windowEnd = Math.min(prompt.length, idx + match[0].length + 80);
+    const around = prompt.slice(windowStart, windowEnd);
+    if (hasOptionalHint(around)) return true;
+  }
+
+  return false;
+}
+
 const INPUT_TYPE_OPTIONS: { value: InputType; labelKey: TranslationKey; icon: string }[] = [
   { value: 'text', labelKey: 'inputTypeText', icon: '📝' },
   { value: 'textarea', labelKey: 'inputTypeTextarea', icon: '📄' },
@@ -323,6 +358,7 @@ export function SkillEditor() {
   const runTest = async () => {
     // Validate required inputs
     const missingInputs = allVariables.filter((varName) => {
+      if (!isVariableRequired(varName)) return false;
       const value = testInputValues[varName];
       const config = getInputConfig(varName);
       if (config.type === 'image' || config.type === 'file') {
@@ -442,9 +478,9 @@ export function SkillEditor() {
 
     // Validate required inputs
     const missingInputs = allVariables.filter((varName) => {
+      if (!isVariableRequired(varName)) return false;
       const value = runInputValues[varName];
       const config = getInputConfig(varName);
-      if ((config as any).optional) return false;
       if (config.type === 'image' || config.type === 'file') {
         return !value;
       } else if (config.type === 'url_list') {
@@ -576,6 +612,45 @@ export function SkillEditor() {
     const configured = getConfiguredVariables();
     return [...new Set([...promptVariables, ...configured])];
   }, [promptVariables, template.input_config]);
+
+  const inputRequirement = useMemo(() => {
+    const required = new Set<string>();
+    const optional = new Set<string>();
+
+    let configuredVariables: Record<string, any> = {};
+    try {
+      const parsed: TemplateInputConfig = JSON.parse(template.input_config || '{}');
+      configuredVariables = parsed.variables || {};
+    } catch {
+      configuredVariables = {};
+    }
+
+    for (const [nameRaw, rawCfg] of Object.entries(configuredVariables)) {
+      const name = String(nameRaw || '').trim();
+      if (!name) continue;
+      const cfg = (rawCfg || {}) as any;
+      const isOptional = cfg.optional === true || cfg.required === false || hasOptionalHint(String(cfg.description || ''));
+      if (isOptional) {
+        optional.add(name);
+        required.delete(name);
+      } else {
+        required.add(name);
+      }
+    }
+
+    for (const varName of allVariables) {
+      if (required.has(varName) || optional.has(varName)) continue;
+      if (isPromptVariableMarkedOptional(template.prompt_template, varName)) {
+        optional.add(varName);
+      } else {
+        required.add(varName);
+      }
+    }
+
+    return { required, optional };
+  }, [allVariables, template.input_config, template.prompt_template]);
+
+  const isVariableRequired = (varName: string): boolean => inputRequirement.required.has(varName);
 
   const orderedExecutors = useMemo(() => {
     return [...executors].sort((a, b) => {
@@ -1232,9 +1307,12 @@ export function SkillEditor() {
               <div className="space-y-4">
                 {allVariables.map((varName) => {
                   const config = getInputConfig(varName);
+                  const isOptional = !isVariableRequired(varName);
                   const displayConfig = {
                     ...config,
-                    label: config.label || varName,
+                    label: isOptional
+                      ? `${config.label || varName} (Optional)`
+                      : (config.label || varName),
                   };
 
                   return (
@@ -1413,9 +1491,12 @@ export function SkillEditor() {
               <div className="space-y-4">
                 {allVariables.map((varName) => {
                   const config = getInputConfig(varName);
+                  const isOptional = !isVariableRequired(varName);
                   const displayConfig = {
                     ...config,
-                    label: config.label || varName,
+                    label: isOptional
+                      ? `${config.label || varName} (Optional)`
+                      : (config.label || varName),
                   };
 
                   return (
