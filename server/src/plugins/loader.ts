@@ -31,8 +31,8 @@ export async function loadAllPlugins(): Promise<void> {
 }
 
 async function loadPlugin(pluginPath: string): Promise<void> {
-  const manifestPath = path.join(pluginPath, 'manifest.json');
-  if (!fs.existsSync(manifestPath)) {
+  const manifestPath = resolveManifestPath(pluginPath);
+  if (!manifestPath) {
     console.warn(`[PluginLoader] No manifest.json in ${pluginPath}, skipping`);
     return;
   }
@@ -62,7 +62,10 @@ async function loadPlugin(pluginPath: string): Promise<void> {
   const config = dbConfig ? JSON.parse(dbConfig.config) : {};
 
   // Load entry point
-  const entryPath = path.join(pluginPath, manifest.entry);
+  const entryPath = resolveEntryPath(pluginPath, manifest.entry);
+  if (!entryPath) {
+    throw new Error(`Entry not found for plugin ${manifest.name}: ${manifest.entry}`);
+  }
   const PluginModule = require(entryPath);
   const PluginClass = PluginModule.default || PluginModule;
 
@@ -70,4 +73,40 @@ async function loadPlugin(pluginPath: string): Promise<void> {
   await plugin.initialize(config);
 
   pluginRegistry.register(manifest.type, manifest.name, plugin);
+}
+
+function resolveManifestPath(pluginPath: string): string | null {
+  const direct = path.join(pluginPath, 'manifest.json');
+  if (fs.existsSync(direct)) return direct;
+
+  // Dist builds may not include JSON assets. Fall back to src for manifest only.
+  const srcPath = pluginPath.replace(`${path.sep}dist${path.sep}`, `${path.sep}src${path.sep}`);
+  if (srcPath !== pluginPath) {
+    const srcManifest = path.join(srcPath, 'manifest.json');
+    if (fs.existsSync(srcManifest)) return srcManifest;
+  }
+
+  return null;
+}
+
+function resolveEntryPath(pluginPath: string, manifestEntry: string): string | null {
+  const normalized = manifestEntry || './index.ts';
+  const direct = path.join(pluginPath, normalized);
+  if (fs.existsSync(direct)) return direct;
+
+  const ext = path.extname(normalized);
+  if (ext === '.ts') {
+    const jsVariant = path.join(pluginPath, normalized.replace(/\.ts$/i, '.js'));
+    if (fs.existsSync(jsVariant)) return jsVariant;
+  } else if (ext === '.js') {
+    const tsVariant = path.join(pluginPath, normalized.replace(/\.js$/i, '.ts'));
+    if (fs.existsSync(tsVariant)) return tsVariant;
+  } else {
+    const jsVariant = `${direct}.js`;
+    if (fs.existsSync(jsVariant)) return jsVariant;
+    const tsVariant = `${direct}.ts`;
+    if (fs.existsSync(tsVariant)) return tsVariant;
+  }
+
+  return null;
 }
