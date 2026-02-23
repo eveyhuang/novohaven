@@ -26,6 +26,28 @@ const INLINE_FILE_MAX_ATTACHMENTS = Math.max(1, Number(process.env.AGENT_INLINE_
 const INLINE_FILE_MAX_BYTES = Math.max(16 * 1024, Number(process.env.AGENT_INLINE_FILE_MAX_BYTES || 256 * 1024));
 const INLINE_FILE_MAX_CHARS = Math.max(2000, Number(process.env.AGENT_INLINE_FILE_MAX_CHARS || 12000));
 const INLINE_OFFICE_EXTRACT_TIMEOUT_MS = Math.max(500, Number(process.env.AGENT_INLINE_OFFICE_EXTRACT_TIMEOUT_MS || 5000));
+const ASSET_NAME_LOCALIZATION: Array<{ aliases: string[]; en: string; zh: string }> = [
+  {
+    aliases: ['Image Style Analyzer', '图像风格分析器'],
+    en: 'Image Style Analyzer',
+    zh: '图像风格分析器',
+  },
+  {
+    aliases: ['Modify Images', '修改图片'],
+    en: 'Modify Images',
+    zh: '修改图片',
+  },
+  {
+    aliases: ['生成产品图片', 'Product Image Generator'],
+    en: 'Product Image Generator',
+    zh: '生成产品图片',
+  },
+  {
+    aliases: ['电商评论动机分析', 'E-commerce Review Motivation Analysis'],
+    en: 'E-commerce Review Motivation Analysis',
+    zh: '电商评论动机分析',
+  },
+];
 
 interface PendingApproval {
   resolve: (result: { approved: boolean; data?: any }) => void;
@@ -841,10 +863,10 @@ sys.stdout.write(text)`;
 
     if (lang === 'zh') {
       const workflowLines = workflows.items.length > 0
-        ? workflows.items.map((w) => `- ${w.name}：${this.oneLineDescription(w.description, '用于自动化多步骤任务执行。')}`).join('\n')
+        ? workflows.items.map((w) => `- ${this.localizeAssetName(w.name, 'zh')}：${this.oneLineDescription(w.description, '用于自动化多步骤任务执行。')}`).join('\n')
         : '- 暂无可用工作流';
       const skillLines = skills.items.length > 0
-        ? skills.items.map((s) => `- ${s.name}：${this.oneLineDescription(s.description, '用于完成特定单项能力。')}`).join('\n')
+        ? skills.items.map((s) => `- ${this.localizeAssetName(s.name, 'zh')}：${this.oneLineDescription(s.description, '用于完成特定单项能力。')}`).join('\n')
         : '- 暂无可用技能';
 
       return [
@@ -873,10 +895,10 @@ sys.stdout.write(text)`;
     }
 
     const workflowLines = workflows.items.length > 0
-      ? workflows.items.map((w) => `- ${w.name}: ${this.oneLineDescription(w.description, 'Automates a multi-step task flow.')}`).join('\n')
+      ? workflows.items.map((w) => `- ${this.localizeAssetName(w.name, 'en')}: ${this.oneLineDescription(w.description, 'Automates a multi-step task flow.')}`).join('\n')
       : '- No active workflows';
     const skillLines = skills.items.length > 0
-      ? skills.items.map((s) => `- ${s.name}: ${this.oneLineDescription(s.description, 'Handles a focused capability.')}`).join('\n')
+      ? skills.items.map((s) => `- ${this.localizeAssetName(s.name, 'en')}: ${this.oneLineDescription(s.description, 'Handles a focused capability.')}`).join('\n')
       : '- No active skills';
 
     return [
@@ -947,6 +969,19 @@ sys.stdout.write(text)`;
     if (!text) return fallback;
     const sentence = text.split(/[。.!?]/).map((s) => s.trim()).find(Boolean) || text;
     return sentence.length > 90 ? `${sentence.slice(0, 90)}...` : sentence;
+  }
+
+  private localizeAssetName(name: string, lang: 'zh' | 'en'): string {
+    const normalized = this.normalizeAssetName(name);
+    const entry = ASSET_NAME_LOCALIZATION.find((candidate) =>
+      candidate.aliases.some((alias) => this.normalizeAssetName(alias) === normalized)
+    );
+    if (!entry) return name;
+    return lang === 'zh' ? entry.zh : entry.en;
+  }
+
+  private normalizeAssetName(name: string): string {
+    return String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
   }
 
   private getCurrentDefaultModelName(): string {
